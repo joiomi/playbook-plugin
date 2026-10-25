@@ -171,14 +171,14 @@ class InsideTheSandbox(t308._Home):
         self.assertEqual(r.stdout.split(), ["from-tmp", "REFUSED", "TMP-WRITABLE"], r.stderr)
         self.assertFalse((bindir / "w").exists())
 
-    def _plan(self, script, project, writable, env=None):
+    def _plan(self, script, project, writable, env=None, extra_rw=None):
         # the REAL launch plan (its git places, its pins) with a shell in the agent's place, wrapped even under a
         # `tasks red` row, which is a sandbox itself
         from provider import sandbox
         with mock.patch.object(sandbox, "_compose_agent_argv", lambda agent, args: list(args)), \
                 mock.patch.object(sandbox, "is_sandboxed", return_value=False):
             if env is None:
-                return sandbox._wrapped_argv("claude", ["sh", "-c", script], project, None, writable)
+                return sandbox._wrapped_argv("claude", ["sh", "-c", script], project, extra_rw, writable)
             return sandbox.run("claude", ["sh", "-c", script], project, env=env, project_writable=writable,
                                capture_output=True, text=True, timeout=60)
 
@@ -199,6 +199,34 @@ class InsideTheSandbox(t308._Home):
             r = self._run(argv)
             self.assertEqual(r.stdout.split(), ["UNSEEN", "WROTE"], (writable, r.stderr))
             self.assertFalse(new.exists(), writable)
+
+    def test_a_folder_inside_a_writable_path_of_a_read_only_project_under_tmp_stays_fixed(self):
+        # my mutant run on round 1's fix (00:08: a pin governed by an `--rw` path laid before that bind survived): a
+        # judge's project under /tmp, read-only, with `--rw work` and git's hooks in `work/x/hooks` — the folder above
+        # the hooks cannot be moved aside for one the host's git would then run
+        proj = _tmp_dir(self, "pb315-rwpin-") / "proj"
+        (proj / "work" / "x" / "hooks").mkdir(parents=True)
+        hook = proj / "work" / "x" / "hooks" / "pre-commit"
+        hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        hook.chmod(0o755)
+        g = ["git", "-C", str(proj), "-c", "user.name=t", "-c", "user.email=t@t"]
+        subprocess.run(["git", "init", "-q", str(proj)], check=True)
+        subprocess.run([*g[:3], "config", "core.hooksPath", "work/x/hooks"], check=True)
+        (proj / "a.txt").write_text("a\n", encoding="utf-8")
+        subprocess.run([*g, "add", "a.txt"], check=True)
+        subprocess.run([*g, "commit", "-qm", "a"], check=True)
+        marker = proj.parent / "ran"
+        argv = self._plan(f"cd {proj} && mv work/x work/y && mkdir -p work/x/hooks && "
+                          f"printf '#!/bin/sh\\ntouch {marker}\\n' > work/x/hooks/pre-commit && "
+                          "chmod +x work/x/hooks/pre-commit && echo REPLACED", proj, False, extra_rw=[str(proj / "work")])
+        if Path(argv[0]).name != "bwrap":
+            self.skipTest("the launch plan is not a bubblewrap one here")
+        r = self._run(argv)
+        self.assertNotIn("REPLACED", r.stdout, r.stderr)
+        self.assertTrue(hook.is_file() and not (proj / "work" / "y").exists())
+        (proj / "a.txt").write_text("changed\n", encoding="utf-8")
+        subprocess.run([*g, "commit", "-qam", "b"], check=True)
+        self.assertFalse(marker.exists())
 
     def test_a_child_environment_s_own_tmpdir_and_path_folder_are_there(self):
         # impl round 1 (codex): the TMPDIR and the PATH folders were read from the launcher's environment, while

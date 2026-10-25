@@ -7144,7 +7144,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is refused by the git-sources rule until its ~/.gitconfig and ~/.config/git/config exist; until task 315 it was also writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7154,7 +7154,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is refused by the git-sources rule until its ~/.gitconfig and ~/.config/git/config exist; until task 315 it was also writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7164,7 +7164,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is refused by the git-sources rule until its ~/.gitconfig and ~/.config/git/config exist; until task 315 it was also writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7174,7 +7174,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is refused by the git-sources rule until its ~/.gitconfig and ~/.config/git/config exist; until task 315 it was also writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7184,7 +7184,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is refused by the git-sources rule until its ~/.gitconfig and ~/.config/git/config exist; until task 315 it was also writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7194,7 +7194,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is refused by the git-sources rule until its ~/.gitconfig and ~/.config/git/config exist; until task 315 it was also writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7207,7 +7207,7 @@
             "reference": "InsideTheSandbox.test_control_an_agents_state_is_written"
           },
           "limitations": [
-            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is refused by the git-sources rule until its ~/.gitconfig and ~/.config/git/config exist; until task 315 it was also writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7220,7 +7220,7 @@
             "reference": "InsideTheSandbox.test_control_an_agents_state_is_written"
           },
           "limitations": [
-            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is refused by the git-sources rule until its ~/.gitconfig and ~/.config/git/config exist; until task 315 it was also writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7233,7 +7233,7 @@
             "reference": "InsideTheSandbox.test_control_an_agents_state_is_written"
           },
           "limitations": [
-            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is refused by the git-sources rule until its ~/.gitconfig and ~/.config/git/config exist; until task 315 it was also writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7246,7 +7246,7 @@
             "reference": "InsideTheSandbox.test_control_an_agents_state_is_written"
           },
           "limitations": [
-            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is refused by the git-sources rule until its ~/.gitconfig and ~/.config/git/config exist; until task 315 it was also writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7259,7 +7259,7 @@
             "reference": "InsideTheSandbox.test_control_an_agents_state_is_written"
           },
           "limitations": [
-            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is refused by the git-sources rule until its ~/.gitconfig and ~/.config/git/config exist; until task 315 it was also writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7272,7 +7272,7 @@
             "reference": "InsideTheSandbox.test_control_an_agents_state_is_written"
           },
           "limitations": [
-            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is refused by the git-sources rule until its ~/.gitconfig and ~/.config/git/config exist; until task 315 it was also writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7285,7 +7285,7 @@
             "reference": "InsideTheSandbox.test_control_an_agents_state_is_written"
           },
           "limitations": [
-            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is refused by the git-sources rule until its ~/.gitconfig and ~/.config/git/config exist; until task 315 it was also writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7295,7 +7295,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is refused by the git-sources rule until its ~/.gitconfig and ~/.config/git/config exist; until task 315 it was also writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7305,7 +7305,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7), or on the code of the round that had not fixed it yet (7945bb0 for impl round 1's rows, f1a362d for round 2's), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is refused by the git-sources rule until its ~/.gitconfig and ~/.config/git/config exist; until task 315 it was also writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -10592,7 +10592,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Task 181 round-two repair: a broad ancestor is pinned before the read-only project bind; the project restriction wins."
+            "Task 181 round-two repair pinned a broad ancestor before the read-only project bind. Since task 315 /tmp is the run's own tmpfs: the host's folder above a project there is never bound (pinned, it was bound writable from the host — task 315 impl round 1)."
           ]
         },
         {
@@ -10642,7 +10642,7 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "Real bubblewrap through the actual launch plan; an ancestor above the project inside /tmp cannot be renamed. Observed red on df8b392 with current tests at /tmp/pb181-r2-red-cqdbk3rc/red.log, then green on the repaired tree. Namespace detachment remains possible on builds without usable --disable-userns, as the owner chose."
+            "Real bubblewrap through the actual launch plan; an ancestor above the project inside /tmp is, since task 315, a folder of the run's own tmpfs: moving it moves nothing of the host's, and the host's git runs no hook the run wrote (until then it could not be renamed; the red below is from then). Observed red on df8b392 with current tests at /tmp/pb181-r2-red-cqdbk3rc/red.log, then green on the repaired tree. Namespace detachment remains possible on builds without usable --disable-userns, as the owner chose."
           ]
         },
         {

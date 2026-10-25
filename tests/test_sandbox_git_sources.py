@@ -414,9 +414,11 @@ class PanelRoundTwo(_Sandboxed):
                   f"mkdir -p {shlex.quote(str(self.p))} && cd {shlex.quote(str(self.p))} && "
                   "git init -q && git config user.name t && git config user.email t@t && "
                   "echo a > a.txt && git add a.txt && " + WRITE_HOOK.format(path=".git/hooks/pre-commit"))
-        r = self.inside(script)
-        self.assertNotEqual(r.returncode, 0, "the ancestor of the project was moved aside")
-        self.assertIn("Device or resource busy", r.stderr)
+        self.inside(script)
+        # task 315: the ancestor is a folder of the run's own /tmp — moving it there moves nothing of the host's, and
+        # the hook it then writes is in its own tmpfs: the host's folder stays, and the host's git runs no new hook
+        self.assertTrue(self.p.is_dir())
+        self.assertFalse(os.path.lexists(moved))
         self.assertFalse(self.commit_ran_it())
 
     def test_a_shadowed_hooks_path_is_still_read_only(self):
@@ -1090,7 +1092,11 @@ class WhereTheBindsGo(_Repo):
         hooks = base / "shared-hooks"
         hooks.mkdir()
         b = self.binds(self.argv(project_writable=False, mask_records=False, git_sources=[str(hooks)]))
-        self.assertLess(b.index(("--bind", str(base))), b.index(("--ro-bind", str(self.p))))
+        # task 315: /tmp is the run's own tmpfs — the folder above the project there is a folder of it, and the
+        # host's is never bound (pinned, it was bound WRITABLE from the host: impl round 1, opus, sonnet, codex)
+        self.assertNotIn(("--bind", str(base)), b)
+        self.assertNotIn(("--ro-bind", str(base)), b)
+        self.assertIn(("--ro-bind", str(hooks)), b)
         # the same source beside a WRITABLE project is simply kept
         self.assertIn(("--ro-bind", str(hooks)), self.binds(self.argv(git_sources=[str(hooks)])))
 

@@ -20,7 +20,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Mapping
 
 
 # Priority order for default_agent() — first available wins. New providers are
@@ -955,6 +955,7 @@ def build_bwrap_argv(
     bwrap_exe: str | None = None,
     project_view: "ProjectView | None" = None,
     agent: "str | None" = None,
+    launch_env: "Mapping[str, str] | None" = None,
 ) -> list[str]:
     """Generate the bwrap argv: read-only root, bind project + tmp + the running
     `agent`'s own state folders under home read-write (`_AGENT_HOME`; none for no
@@ -1061,9 +1062,12 @@ def build_bwrap_argv(
     # the host's PATH names there are the ones the run finds.
     argv += ["--tmpfs", "/tmp"]
     layers.append(("/tmp", True))
-    for d in _under_tmp(os.environ.get(v, "") for v in ("TMPDIR", "TMP", "TEMP")):
+    private_layers = {"/tmp"}           # the run's own tmpfs layers: no host folder is in them (impl round 1)
+    # (the child's own environment decides them, when the caller hands it one: impl round 1, codex)
+    seen_env = os.environ if launch_env is None else launch_env
+    for d in _under_tmp(seen_env.get(v, "") for v in ("TMPDIR", "TMP", "TEMP")):
         argv += ["--dir", d]
-    for d in _under_tmp(os.environ.get("PATH", "").split(os.pathsep)):
+    for d in _under_tmp(seen_env.get("PATH", "").split(os.pathsep)):
         argv += ["--ro-bind-try", d, d]
         layers.append((d, False))
 
@@ -1116,9 +1120,10 @@ def build_bwrap_argv(
     for path in snaps:
         argv += ["--tmpfs", path]
         layers.append((path, True))
+        private_layers.add(path)
 
     # Ancestor pins go here: later project binds and record masks must win over
-    # them. Pinning a /tmp ancestor after a judge's project would expose it again.
+    # them. Pinning an ancestor after a judge's project would expose it again.
     pin_index = len(argv)
 
     # Git metadata, part one. Every path that holds it, resolved and in order.
@@ -1152,6 +1157,7 @@ def build_bwrap_argv(
     else:
         argv += [project_bind, project, project]
         layers.append((project, project_writable))
+    bind_end = {project: len(argv)}     # where a pin a bind governs is laid: right after that bind (task 315)
 
     # Task 125: a read-only judge cannot read the conversation records — layers
     # after the project bind so they win the overlap (`_bwrap_record_masks`). A
@@ -1194,6 +1200,7 @@ def build_bwrap_argv(
         Path(rw).mkdir(parents=True, exist_ok=True)
         argv += ["--bind", rw, rw]
         layers.append((rw, True))
+        bind_end[rw] = len(argv)
 
     # Git metadata, part two: read-only even when the project is writable, and
     # laid after the project bind AND after every extra writable bind, so it wins
@@ -1335,9 +1342,13 @@ def build_bwrap_argv(
     # task 231 impl round 2 (codex, measured): with a copy the project's own git places are dropped, and with them the
     # pins they gave — a judge renamed the folder holding the live project under /tmp. The project pins its own way up.
     for place in protected + ([project] if view_root is not None else []):
-        # The governing bind is insufficient: /tmp (or a home bind) still lets
-        # an ancestor ABOVE the project be moved aside. Use the outermost layer.
-        covering = [w for w, writable in layers if writable and _covers(w, Path(place))]
+        # The governing bind is insufficient: a home bind still lets an ancestor
+        # ABOVE the project be moved aside. Use the outermost layer — of the host's
+        # own: a folder of the run's private tmpfs is no host folder, and pinning it
+        # bound the HOST's folder of that name writable (task 315 impl round 1:
+        # opus, sonnet, codex Critical; measured).
+        covering = [w for w, writable in layers
+                    if writable and w not in private_layers and _covers(w, Path(place))]
         if not covering:
             continue
         within = min(covering, key=lambda p: len(Path(p).parts))
@@ -1353,20 +1364,18 @@ def build_bwrap_argv(
             # the directory WRITABLE: a code root inside a judge's read-only project
             # (the single judge after round 2; measured).
             if writable_at(d) is not None and not any(w == d for w, _writable in layers):
-                pins.setdefault(d, place)
-    early_pins: list[str] = []
-    late_pins: list[str] = []
+                pins.setdefault(d, within)
+    # Each one right AFTER the bind of the writable place that governs it (`within`): its mount then sits on that
+    # place's own folder, which the kernel refuses to rename (measured: "Device or resource busy"), and every bind
+    # inside it laid later — an extra writable path, a git place, a kept one — stays over it. One governed by a bind
+    # laid before `pin_index` (an agent's folder, the write log) goes there. Laid before the project's bind, a pin sat
+    # on a folder of the run's private /tmp, and the host's folder under the project's bind could be moved aside (task
+    # 315 impl round 1: a worker moved the folder holding the hooks; measured). Outermost first.
+    groups: "dict[int, list[str]]" = {}
     for d in sorted(pins, key=lambda p: p.count(os.sep)):
-        # One that holds another bind goes BEFORE the project's bind and all that
-        # follows it: laid later it would hide those binds — hooks beside a READ-ONLY
-        # project in one directory of /tmp, and that directory bound onto itself last,
-        # would lay the writable /tmp over the project. A bind that a later one covers
-        # still fixes its directory: the kernel refuses to rename what any mount of the
-        # namespace sits on (measured: "Device or resource busy").
-        early = any(w != d and _covers(d, Path(w)) for w, _writable in layers)
-        (early_pins if early else late_pins).extend(["--bind", d, d])
-    argv[pin_index:pin_index] = early_pins
-    argv += late_pins
+        groups.setdefault(bind_end.get(pins[d], pin_index), []).extend(["--bind", d, d])
+    for at in sorted(groups, reverse=True):
+        argv[at:at] = groups[at]
     for place in protected:
         argv += ["--ro-bind", place, place]
         layers.append((place, False))
@@ -1895,6 +1904,7 @@ def _launch_plan(
     require_containment: bool = False,
     git_sources_writable: bool = False,
     project_view: "ProjectView | None" = None,
+    launch_env: "Mapping[str, str] | None" = None,
 ) -> "tuple[list[str], bool]":
     """Compose bypass-flag injection + bwrap wrapping into the final argv, and say
     whether the child will be in a cage (wrapped here, or we are nested). Shared
@@ -1942,7 +1952,7 @@ def _launch_plan(
                                 git_sources=sources, git_sources_missing=absent,
                                 git_source_links=links, git_sources_unanswered=unanswered,
                                 git_sources_writable=git_sources_writable, bwrap_exe=exe,
-                                project_view=project_view, agent=agent)
+                                project_view=project_view, agent=agent, launch_env=launch_env)
         return [exe, *argv[1:]], True     # by absolute path: the launch runs in the project
     if require_containment:
         raise RuntimeError(launch_refusal() or (
@@ -2173,7 +2183,7 @@ def run(
     project = Path(project_root).resolve()
     wrapped, contained = _launch_plan(agent, agent_args, project, extra_rw, project_writable,
                                       no_network, mask_records, require_containment,
-                                      git_sources_writable, project_view=project_view)
+                                      git_sources_writable, project_view=project_view, launch_env=env)
     child_env = _child_env(env, contained)
 
     if kwargs.get("text") or isinstance(kwargs.get("input"), str):
@@ -2287,7 +2297,7 @@ def popen(
     project = Path(project_root).resolve()
     wrapped, contained = _launch_plan(agent, agent_args, project, extra_rw, project_writable,
                                       no_network, mask_records, require_containment,
-                                      git_sources_writable, project_view=project_view)
+                                      git_sources_writable, project_view=project_view, launch_env=env)
     child_env = _child_env(env, contained)
 
     kwargs.setdefault("stdout", subprocess.PIPE)

@@ -694,7 +694,10 @@ class ImplRoundTwo(unittest.TestCase):
                                   project_view=view.sandbox_view(), bwrap_exe="/usr/bin/bwrap")
         parent = str(d.resolve().parent)
         pairs = [(argv[i + 1], argv[i + 2]) for i, a in enumerate(argv) if a == "--bind" and i + 2 < len(argv)]
-        self.assertIn((parent, parent), pairs, "the folder holding the live project can be renamed from inside")
+        # task 315: under the run's own /tmp the folder holding the project is a folder of that tmpfs, and the host's
+        # is never bound (pinned, it was bound WRITABLE from the host: impl round 1, opus, sonnet, codex); elsewhere
+        # the root is read-only and nothing there can be renamed
+        self.assertNotIn((parent, parent), pairs)
 
     def test_r2_10_each_attempt_has_its_own_name_and_the_lock_goes_before_its_fd(self):
         d = _project(self)
@@ -734,7 +737,11 @@ class ImplRoundTwoRealBubblewrap(unittest.TestCase):
         out = subprocess.run(argv, cwd=str(d), capture_output=True, text=True, timeout=60)
         if Path(str(parent) + ".moved").exists():
             os.rename(str(parent) + ".moved", parent)
-        self.assertIn("REFUSED", out.stdout + out.stderr)
+            self.fail("the host's folder holding the live project was moved")
+        if not (str(parent) == "/tmp" or str(parent).startswith("/tmp/")):
+            self.assertIn("REFUSED", out.stdout + out.stderr)
+        # task 315: under /tmp the run moves a folder of its own tmpfs at most; the host's stays where it is
+        self.assertTrue(d.is_dir())
 
 
 class ImplRoundThree(unittest.TestCase):

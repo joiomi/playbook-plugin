@@ -8,8 +8,8 @@ task), and wrote `~/.claude/settings.json` and `~/.local/bin` (his blind session
 `~/.local/bin` the commands on PATH. Impl round 1 (codex, grok, agy, opus, sonnet) found the holes a list of read-only
 paths left: a folder above one renamed and replaced, a missing one created, a link or a hard link beside one, a host
 shell snapshot made during the run. The tests build the argv with HOME set to a temporary home OUTSIDE /tmp for the
-live rows (a home under /tmp would be writable through the sandbox's own /tmp bind) and, where bubblewrap can start,
-try each write inside it, as the agent that owns the folder: the hardest case, its folder writable.
+live rows (a home under /tmp is refused by the git-sources rule without its ~/.gitconfig) and, where bubblewrap can
+start, try each write inside it, as the agent that owns the folder: the hardest case, its folder writable.
 """
 
 from __future__ import annotations
@@ -116,7 +116,8 @@ def _build(proj, cmd, agent):
 class _Home(unittest.TestCase):
     # where the temporary home is made: the argv rows read only the argv, so the default temporary folder serves (as
     # under `tasks red`, whose rows see a private /tmp and a read-only /var/tmp); the live rows need one OUTSIDE /tmp,
-    # which would be writable through the sandbox's own /tmp bind. Never the real HOME.
+    # where the git-sources rule refuses a HOME with no ~/.gitconfig (task 315: /tmp is no longer shared). Never the
+    # real HOME.
     HOME_BASE: "str | None" = None
 
     def setUp(self):
