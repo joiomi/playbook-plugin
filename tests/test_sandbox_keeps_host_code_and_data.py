@@ -76,6 +76,12 @@ CODE_AND_CONFIG = (
     ".claude/remote-settings.json",
     ".claude/chrome/chrome-native-host",
     ".claude/jobs/j/job.json",
+    # impl round 3: entries the measured list let through though they hold code or a hook source (sonnet, grok,
+    # codex): grok's shell completions (an rc file sources them), its config (hooks), codex's daemon settings
+    ".grok/completions/bash/grok.bash",
+    ".grok/config.toml",
+    ".codex/app-server-daemon/settings.json",
+    ".codex/.tmp/plugins/p/hooks.json",
     # a name no list has: read-only because it exists and is not state its agent writes
     ".grok/a-future-config.toml",
     ".claude/a-future-tool/run",
@@ -85,12 +91,13 @@ CODE_AND_CONFIG = (
 SNAPSHOTS = ((".claude/shell-snapshots", ".claude/shell-snapshots/snapshot-bash-1-x.sh"),
              (".codex/shell_snapshots", ".codex/shell_snapshots/s.sh"),
              (".claude/session-env", ".claude/session-env/sid/sessionstart-hook-0.sh"))
+CODEX_TMP = ".codex/tmp/arg0/codex-arg0x/apply_patch"
 # a person's data and the commands on PATH: no agent's state
 NOT_AN_AGENTS = (".local/bin/tool", ".local/share/keyrings/login.keyring", ".local/share/Trash/files/old.txt",
                  ".local/lib/python3.10/site-packages/m.py", ".cache/ms-playwright/chromium/chrome")
 # what an agent writes as it runs: its transcript, its sign-in's refresh, the write log
 STATE = (".claude/projects/-p/s.jsonl", ".claude/.credentials.json", ".codex/sessions/s.jsonl", ".codex/auth.json",
-         ".gemini/oauth_creds.json", ".grok/config.toml")
+         ".gemini/oauth_creds.json", ".grok/sessions/s.json", ".codex/app-server-daemon/daemon.pid")
 WRITE_LOG = ".local/share/playbook/log"
 
 
@@ -127,7 +134,7 @@ class _Home(unittest.TestCase):
             self.skipTest(f"no temporary folder in {bases}")
         self.addCleanup(shutil.rmtree, home, True)
         self.home = home
-        for rel in CODE_AND_CONFIG + tuple(f for _, f in SNAPSHOTS) + NOT_AN_AGENTS + STATE:
+        for rel in CODE_AND_CONFIG + tuple(f for _, f in SNAPSHOTS) + (CODEX_TMP,) + NOT_AN_AGENTS + STATE:
             p = home / rel
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text("original\n", encoding="utf-8")
@@ -214,6 +221,34 @@ class TheArgv(_Home):
             self.argv(["true"])
         self.assertIn("shell-snapshots", str(cm.exception))
 
+    def test_a_link_chain_through_a_writable_place_refuses_the_launch(self):
+        # impl round 3 (opus): a link whose END is read-only but whose chain passes through a place the run may write
+        # (the run can replace the middle link); and one into the write log (agy, codex, grok)
+        hook = self.home / CODE_AND_CONFIG[0]
+        middle = self.home / ".claude" / "projects" / "hop"
+        middle.symlink_to(self.home / ".claude" / "settings.json")
+        hook.unlink()
+        hook.symlink_to(middle)
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(["true"])
+        self.assertIn(str(hook), str(cm.exception))
+        hook.unlink()
+        hook.symlink_to(self.home / ".local" / "share" / "playbook" / "x")
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(["true"])
+        self.assertIn(str(hook), str(cm.exception))
+
+    def test_a_missing_hook_source_is_made_empty_and_held(self):
+        # impl round 3 (grok): grok loads Claude Code's settings files and its own managed config as hooks
+        for rel, agent, empty in ((".claude/settings.local.json", "claude", "{}\n"),
+                                  (".grok/managed_config.toml", "grok", "")):
+            p = self.home / rel
+            if p.exists():
+                p.unlink()
+            argv = self.argv(["true"], agent)
+            self.assertEqual(p.read_text(encoding="utf-8"), empty, rel)
+            self.assertIn(("--ro-bind", str(p)), [(a, argv[i + 1]) for i, a in enumerate(argv[:-2])], rel)
+
     def test_a_state_folder_that_is_a_link_refuses_the_launch(self):
         # bubblewrap cannot bind onto it either (measured); refused first, with what to do
         real = self.home / "dotfiles" / "claude"
@@ -280,6 +315,21 @@ class InsideTheSandbox(_Home):
                     ".codex/a-future-hooks/h.json"):
             self.assertEqual(self.attempt(rel, owner(rel)), "REFUSED", rel)
             self.assertEqual((self.home / rel).read_text(encoding="utf-8"), "original\n", rel)
+
+    def test_an_entry_holding_code_the_measured_list_let_through_is_read_only(self):
+        # impl round 3 (sonnet, grok, codex): a shell rc file sources grok's completions, grok's config holds hooks,
+        # codex's daemon settings switch features, codex's plugin copy holds hooks
+        for rel in (".grok/completions/bash/grok.bash", ".grok/config.toml", ".codex/app-server-daemon/settings.json",
+                    ".codex/.tmp/plugins/p/hooks.json"):
+            self.assertEqual(self.attempt(rel, owner(rel)), "REFUSED", rel)
+            self.assertEqual((self.home / rel).read_text(encoding="utf-8"), "original\n", rel)
+
+    def test_codex_tmp_is_private(self):
+        # impl round 3 (grok): codex execs helpers it keeps in ~/.codex/tmp; the run gets a private, empty one
+        rel = CODEX_TMP
+        seen = self.run_in('ls -A "$HOME/.codex/tmp"; printf pwned > "$HOME/' + rel + '" 2>/dev/null; true', "codex")
+        self.assertEqual(seen, "")
+        self.assertEqual((self.home / rel).read_text(encoding="utf-8"), "original\n")
 
     def test_another_agents_state_cannot_be_written(self):
         for rel, agent in ((".claude/projects/-p/s.jsonl", "codex"), (".codex/auth.json", "claude"),
