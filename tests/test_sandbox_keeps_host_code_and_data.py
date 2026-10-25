@@ -286,6 +286,17 @@ class TheArgv(_Home):
             self.assertEqual((self.home / rel).read_text(encoding="utf-8"), "{}\n", rel)
         self.assertEqual([q.name for q in (self.home / ".claude").iterdir() if ".playbook-" in q.name], [])
 
+    def test_a_hook_source_being_published_by_another_launch_is_not_a_hard_link(self):
+        # post-panel run 2 (codex, a barrier reproduced it twice): between linking the new file into place and removing
+        # its temporary name, another launch saw two links and refused — a seat lost for nothing
+        p = self.home / ".claude" / "settings.local.json"
+        os.link(p, p.with_name(".settings.local.json.playbook-123-abcdef"))
+        self.argv(["true"])                             # no RuntimeError: that other name is a launch's own
+        other = self.home / ".claude" / "projects" / "settings.local.json.copy"
+        os.link(p, other)
+        with self.assertRaises(RuntimeError):           # a third name, of anyone's, still refuses
+            self.argv(["true"])
+
     def test_a_missing_hook_source_is_made_empty_and_held(self):
         # impl round 3 (grok): grok loads Claude Code's settings files and its own managed config as hooks
         for rel, agent, empty in ((".claude/settings.local.json", "claude", "{}\n"),
@@ -347,6 +358,21 @@ class TheArgvOutsideTmp(_Home):
         with self.assertRaises(RuntimeError) as cm:
             self.argv(["true"])
         self.assertIn(str(hook), str(cm.exception))
+
+    def test_a_link_to_a_linked_folder_written_with_a_slash_refuses_the_launch(self):
+        # post-panel run 2 (codex, reproduced twice): a kept link to `~/.claude/cache/` — the trailing slash made the
+        # check resolve `cache` before judging where it sits
+        real = self.home / "dotfiles"
+        real.mkdir()
+        cache = self.home / ".claude" / "cache"
+        if cache.exists():
+            shutil.rmtree(cache)
+        cache.symlink_to(real)
+        hook_dir = self.home / ".claude" / "plugins" / "linked"
+        os.symlink(str(cache) + "/", hook_dir)
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(["true"])
+        self.assertIn(str(hook_dir), str(cm.exception))
 
     def test_a_link_into_the_write_log_refuses_the_launch(self):
         # impl round 3 (agy, codex, grok): the write log is bound writable too
