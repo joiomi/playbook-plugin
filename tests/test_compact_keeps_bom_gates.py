@@ -75,6 +75,15 @@ class ABomLedGateStays(unittest.TestCase):
             self.assertEqual(_gate_counts(self.task_md.read_text(encoding="utf-8")), before, line)
             self.assertFalse((self.task_md.parent / "task-archive.md").exists(), line)
 
+    def test_a_receipt_entry_after_a_byte_order_mark_is_refused(self):
+        # impl round 1 (opus, sonnet): the same strip covers the receipt-entry check; it only refuses more
+        line = "\ufeff### 2026-10-25T10:00:00+02:00 · risk assertive · commit abc1234"
+        code, err, text, _before = self.compact(line)
+        self.assertEqual(code, 1)
+        self.assertIn("verification-receipt entry", err)
+        self.assertEqual(self.task_md.read_text(encoding="utf-8"), text)                  # nothing moved
+        self.assertFalse((self.task_md.parent / "task-archive.md").exists())
+
     def test_control_the_counters_count_that_gate(self):
         self.assertEqual(_gate_counts(BODY.replace("GATE", "﻿- [ ] a gate")), (1, 2))
 
