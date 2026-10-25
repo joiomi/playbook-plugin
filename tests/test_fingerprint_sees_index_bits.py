@@ -287,6 +287,31 @@ class InASparseCheckout(_Repo):
             (self.d / rel).unlink()
             self.assertNotEqual(self.fp(), reviewed, f"a deletion of {rel}, inside the cone, read FRESH")
 
+    def test_a_project_folder_whose_name_starts_with_a_space_keeps_its_cone(self):
+        # post-panel run 2 (codex, reproduced twice): `--show-prefix` read with `.strip()` lost the leading space of
+        # ` project/`, so the cone check compared the wrong path
+        self.git("sparse-checkout", "disable")
+        proj = self.d / " project"
+        (proj / "inside").mkdir(parents=True)
+        (proj / ".agent").mkdir()
+        (proj / "inside" / "app.py").write_text("x = 1\n", encoding="utf-8")
+        self.git("add", " project/inside/app.py")
+        self.git("commit", "-qm", "a project whose folder starts with a space")
+        self.git("sparse-checkout", "set", "./ project/inside")   # `./`: git keeps the leading space so
+        rel = " project/inside/app.py"
+        self.assertTrue((self.d / rel).exists(), "the control: it is in the cone")
+        self.git("update-index", "--skip-worktree", rel)
+        (self.d / rel).unlink()
+        # what this code controls, whatever git then reports for an in-cone skip-worktree entry (git 2.54 reports
+        # some, codex's did not): the copy git reads clears the bit of a file the cone holds
+        import subprocess as sp
+        from tasks.core import _SeeingIndexBits
+        with _SeeingIndexBits(proj) as env:
+            self.assertIsNotNone(env)
+            tags = sp.run(["git", "ls-files", "-v", "--", "inside/app.py"], cwd=proj, env=env,
+                          capture_output=True, text=True).stdout
+        self.assertEqual(tags, "H inside/app.py\n", "the copy kept the bit of a file the cone holds")
+
     def test_the_post_panel_tree_keeps_an_absent_file_outside_the_cone(self):
         from tasks.core import _fingerprint_exclude_pathspecs
         from tasks.post_d6 import worktree_tree
