@@ -127,6 +127,7 @@ _HOME_RO_DIRS_MADE: tuple[str, ...] = (
     ".grok/personas", ".grok/roles",
     # impl round 2, from grok's own docs: its home rules ("always scanned; applies to all projects") and user workflows
     ".grok/rules", ".grok/workflows",
+    ".grok/bundles",                    # the post-panel judge, run 1: "anything placed there loads as a built-in"
 )
 # What a host session sources before its shell calls: the shell snapshots, and Claude
 # Code's per-session environment scripts (`session-env/<id>/sessionstart-hook-*.sh` —
@@ -158,6 +159,12 @@ _HOME_FILES_MADE: dict[str, str] = {
     ".codex/environments.toml": "",
     ".gemini/AGENTS.md": "",
     ".gemini/GEMINI.md": "",            # impl round 2 (opus): agy loads it as instructions too (measured)
+    # the post-panel judge, run 1 (opus), and grok's own docs: its global rules, its LSP servers (commands it starts),
+    # its Claude-style hooks, and the hooks it skips (a run could switch playbook's off)
+    ".grok/AGENTS.md": "",
+    ".grok/lsp.json": "{}\n",
+    ".grok/settings.json": "{}\n",
+    ".grok/disabled-hooks": "",
     ".gemini/hooks.json": "{}\n",
     ".gemini/antigravity-cli/hooks.json": "{}\n",
 }
