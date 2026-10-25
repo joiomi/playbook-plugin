@@ -133,6 +133,10 @@ _HOME_FILES_MADE: dict[str, str] = {
 }
 
 
+# The temporary name `_publish_new` gives a file it is making: transient, a launch's own (post-panel run 2, codex).
+_PUBLISH_TMP_RE = re.compile(r"\..+\.playbook-[0-9]+-[0-9a-f]{12}")
+
+
 def _publish_new(path: Path, text: str) -> None:
     """Make `path` with `text`, whole or not at all, and never over a file that is there (post-panel run 1, codex: made
     empty and written after, a crash between left an empty settings file for good). Written to a temporary name of its
@@ -200,8 +204,8 @@ def _home_layer(home: Path, folders: "Iterable[str]",
             return                                      # not measured: stays writable (pi, omlx)
         for p in entries(d):
             sub = f"{rel}/{p.name}"
-            if p in private:
-                continue
+            if p in private or _PUBLISH_TMP_RE.fullmatch(p.name):
+                continue                                # a launch's own temporary name: gone in a moment
             if sub in _HOME_WRITES:                     # a mixed folder: pinned, then judged inside
                 if p.is_symlink():
                     raise _home_refusal(p, _LINK_WHY)
@@ -258,6 +262,7 @@ def _home_layer(home: Path, folders: "Iterable[str]",
             except OSError:
                 return False                            # not a link (any more): the chain ends here
             nxt = t if os.path.isabs(t) else os.path.join(os.path.dirname(cur), t)
+            nxt = nxt.rstrip("/") or "/"                # `cache/` names `cache` itself (post-panel run 2, codex)
             if through_a_replaceable_link(nxt):
                 return True
             nxt = os.path.join(real(os.path.dirname(nxt)), os.path.basename(nxt))
@@ -280,8 +285,14 @@ def _home_layer(home: Path, folders: "Iterable[str]",
         except FileNotFoundError:
             continue                                    # gone between the listing and the look
         if _stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
-            raise _home_refusal(Path(path), "has another hard link: what a sandboxed run writes through that other "
-                                            "name changes this file. Make it a copy of its own")
+            try:                                        # another launch's temporary name for it is not another name
+                mid = sum(1 for e in os.scandir(os.path.dirname(path)) if _PUBLISH_TMP_RE.fullmatch(e.name)
+                          and e.inode() == st.st_ino and not e.is_symlink())
+            except OSError:
+                mid = 0
+            if st.st_nlink - mid > 1:
+                raise _home_refusal(Path(path), "has another hard link: what a sandboxed run writes through that "
+                                                "other name changes this file. Make it a copy of its own")
         if not _stat.S_ISDIR(st.st_mode):
             continue
         stack = [path]                                  # the entries' own types (scandir): no look per entry
