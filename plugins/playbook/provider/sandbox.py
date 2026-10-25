@@ -116,6 +116,8 @@ _HOME_RO_DIRS_MADE: tuple[str, ...] = (
     ".gemini/config", ".gemini/extensions",
     ".grok/hooks", ".grok/installed-plugins", ".grok/bundled", ".grok/skills", ".grok/plugins", ".grok/commands",
     ".grok/agents",
+    # codex's mixed folders, pinned only when they existed (post-panel run 4, opus): its plugin copy holds hooks
+    ".codex/.tmp", ".codex/.tmp/plugins", ".codex/app-server-daemon",
 )
 # What a host session sources before its shell calls: the shell snapshots, and Claude
 # Code's per-session environment scripts (`session-env/<id>/sessionstart-hook-*.sh` —
@@ -124,12 +126,19 @@ _HOME_RO_DIRS_MADE: tuple[str, ...] = (
 # neither seen nor written (impl round 1, opus).
 _HOME_PRIVATE: tuple[str, ...] = (".claude/shell-snapshots", ".claude/session-env", ".codex/shell_snapshots",
                                   ".codex/tmp")
-# A hook source a run could otherwise create where none is (impl round 3, grok): made with its empty content when
-# missing, read-only from there on — `{}` for JSON, nothing for TOML. Grok also loads Claude Code's two settings files.
+# A hook source a run could otherwise create where none is (impl round 3, grok; codex's and agy's, post-panel run 4,
+# opus): made with its empty content when missing and its folder is there, read-only from there on — `{}` for JSON,
+# nothing for TOML, an empty event map for codex's hooks file (the shape of playbook's own). Grok also loads Claude
+# Code's two settings files; codex's `config.toml` turns its hooks on, its daemon's settings switch features.
 _HOME_FILES_MADE: dict[str, str] = {
     ".claude/settings.json": "{}\n",
     ".claude/settings.local.json": "{}\n",
     ".grok/managed_config.toml": "",
+    ".codex/config.toml": "",
+    ".codex/hooks.json": '{"hooks": {}}\n',
+    ".codex/app-server-daemon/settings.json": "{}\n",
+    ".gemini/settings.json": "{}\n",
+    ".gemini/antigravity-cli/settings.json": "{}\n",
 }
 
 
@@ -201,7 +210,7 @@ def _home_layer(home: Path, folders: "Iterable[str]",
         d = home / rel
         allow = _HOME_WRITES.get(rel)
         if allow is None:
-            return                                      # not measured: stays writable (pi, omlx)
+            return                                      # a folder no list names stays writable (none today)
         for p in entries(d):
             sub = f"{rel}/{p.name}"
             if p in private:
@@ -244,15 +253,21 @@ def _home_layer(home: Path, folders: "Iterable[str]",
         are, outside the kept paths."""
         return inside(path, later) or (inside(path, writable) and not inside(path, kept))
 
+    roots = {*writable, *later, *(real(p) for p in pins)}   # mount points: a run cannot move them aside
+
     def through_a_replaceable_link(path: str, hops: "list[int]") -> bool:
         """Does `path`, unresolved, pass through a folder that is a link sitting in a place the run may write, or
         whose own chain does? The run could re-point that link (post-panel run 1, codex: `~/.claude/cache` →
-        elsewhere; run 3, opus: `a` → `~/.claude/cache`, `a` itself in a read-only place)."""
+        elsewhere; run 3, opus: `a` → `~/.claude/cache`, `a` itself in a read-only place). Or through a real folder
+        the run could turn into a link, left again by a later `..` (run 4, opus: `~/.claude/cache/../plugins/x`)?"""
         parts = Path(path).parts
+        last_up = max((i for i, x in enumerate(parts) if x == ".."), default=-1)
         for k in range(2, len(parts)):
             pre = os.path.join(*parts[:k])
-            if os.path.islink(pre) and (in_writable(os.path.join(real(os.path.dirname(pre)), os.path.basename(pre)))
-                                        or leads_out(pre, hops)):
+            placed = os.path.join(real(os.path.dirname(pre)), os.path.basename(pre))
+            if os.path.islink(pre) and (in_writable(placed) or leads_out(pre, hops)):
+                return True
+            if k <= last_up and parts[k - 1] != ".." and placed not in roots and in_writable(placed):
                 return True
         return False
 
@@ -1036,8 +1051,9 @@ def build_bwrap_argv(
         if sub.split("/")[0] in folders and not os.path.lexists(home / sub):
             (home / sub).mkdir(parents=True, exist_ok=True)       # a link or a file there: `_home_layer` judges it
     for sub, empty in _HOME_FILES_MADE.items():
-        if sub.split("/")[0] in folders and not os.path.lexists(home / sub):
-            _publish_new(home / sub, empty)
+        if (sub.split("/")[0] in folders and not os.path.lexists(home / sub)
+                and (home / sub).parent.is_dir() and not (home / sub).parent.is_symlink()):
+            _publish_new(home / sub, empty)     # agy's `antigravity-cli` missing: agy is not installed, none is made
     pins, kept, snaps = _home_layer(home, folders, [str(write_log_dir), *rw_paths,
                                                      *([project] if project_writable else [])])
     for path in pins:
