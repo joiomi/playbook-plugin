@@ -341,6 +341,26 @@ class TheArgv(_Home):
         self.argv(["true"], "agy")
         self.assertFalse(os.path.lexists(self.home / ".gemini" / "antigravity-cli"))
 
+    def test_codex_s_missing_env_file_is_made_empty_and_held(self):
+        # post-panel run 5 (opus): codex loads `~/.codex/.env` into its environment at every start; missing here, a
+        # codex run could write a `BASH_ENV` there that his later codex sessions run
+        p = self.home / ".codex" / ".env"
+        self.assertFalse(p.exists())
+        argv = self.argv(["true"], "codex")
+        self.assertEqual(p.read_text(encoding="utf-8") if p.exists() else None, "")
+        self.assertIn(("--ro-bind-try", str(p)), [(a, argv[i + 1]) for i, a in enumerate(argv[:-2])])
+
+    def test_no_folder_is_made_through_a_linked_folder_above_it(self):
+        # post-panel run 5 (opus): with `~/.codex/.tmp` a link, `.tmp/plugins` was made where it pointed, and only then
+        # was the launch refused
+        elsewhere = self.home / "elsewhere"
+        elsewhere.mkdir()
+        self.remove(".codex/.tmp")
+        (self.home / ".codex" / ".tmp").symlink_to(elsewhere)
+        with self.assertRaises(RuntimeError):
+            self.argv(["true"], "codex")
+        self.assertEqual(list(elsewhere.iterdir()), [])
+
     def test_a_state_folder_that_is_a_link_refuses_the_launch(self):
         # bubblewrap cannot bind onto it either (measured); refused first, with what to do
         real = self.home / "dotfiles" / "claude"
