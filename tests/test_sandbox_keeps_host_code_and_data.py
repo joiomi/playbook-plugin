@@ -208,6 +208,21 @@ class TheArgv(_Home):
 
 
 @unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
+class TheLauncher(_Home):
+
+    def test_the_launcher_gives_a_run_its_own_agents_folder(self):
+        # the argv a judge or `.claude/bin/sandbox` is launched with: the agent it runs names the folder
+        from provider import sandbox
+        for agent, mine, other in (("codex", ".codex", ".claude"), ("claude", ".claude", ".codex")):
+            with mock.patch.object(sandbox, "is_sandboxed", return_value=False):
+                argv = sandbox._wrapped_argv(agent, [], self.proj, None, project_writable=False)
+            self.assertTrue(argv[0].endswith("bwrap"), agent)
+            rw = [argv[i + 1] for i, a in enumerate(argv[:-2]) if a == "--bind"]
+            self.assertIn(str(self.home / mine), rw, agent)
+            self.assertNotIn(str(self.home / other), rw, agent)
+
+
+@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
 class InsideTheSandbox(_Home):
     HOME_BASE = "/var/tmp"
 
