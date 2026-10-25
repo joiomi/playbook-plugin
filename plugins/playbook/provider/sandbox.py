@@ -135,6 +135,7 @@ _HOME_FILES_MADE: dict[str, str] = {
     ".claude/settings.local.json": "{}\n",
     ".grok/managed_config.toml": "",
     ".codex/config.toml": "",
+    ".codex/.env": "",                  # loaded into codex's environment at every start (post-panel run 5, opus)
     ".codex/hooks.json": '{"hooks": {}}\n',
     ".codex/app-server-daemon/settings.json": "{}\n",
     ".gemini/settings.json": "{}\n",
@@ -1047,12 +1048,17 @@ def build_bwrap_argv(
     # read-only, each snapshot folder a private tmpfs. A listed folder that is missing is made first, empty; so is a
     # hook source of `_HOME_FILES_MADE`, whole or not at all (`_publish_new`). Any other missing file is not (a
     # missing instructions file is a stated bound, as memory is).
+    def _no_link_above(sub: str) -> bool:
+        """No folder between home and `sub` is a link: nothing is made where one points (post-panel run 5, opus)."""
+        parts = sub.split("/")
+        return not any((home / "/".join(parts[:k])).is_symlink() for k in range(1, len(parts)))
+
     for sub in _HOME_RO_DIRS_MADE:
-        if sub.split("/")[0] in folders and not os.path.lexists(home / sub):
+        if sub.split("/")[0] in folders and not os.path.lexists(home / sub) and _no_link_above(sub):
             (home / sub).mkdir(parents=True, exist_ok=True)       # a link or a file there: `_home_layer` judges it
     for sub, empty in _HOME_FILES_MADE.items():
         if (sub.split("/")[0] in folders and not os.path.lexists(home / sub)
-                and (home / sub).parent.is_dir() and not (home / sub).parent.is_symlink()):
+                and (home / sub).parent.is_dir() and _no_link_above(sub)):
             _publish_new(home / sub, empty)     # agy's `antigravity-cli` missing: agy is not installed, none is made
     pins, kept, snaps = _home_layer(home, folders, [str(write_log_dir), *rw_paths,
                                                      *([project] if project_writable else [])])
