@@ -11,6 +11,7 @@ plugin's managed wrapper with `create_wrapper`, point a temporary HOME's install
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -28,7 +29,7 @@ class TheWrapperRunsInItsProject(unittest.TestCase):
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
-        base = Path(self._tmp.name).resolve()
+        self.base = base = Path(self._tmp.name).resolve()
         self.home, self.root = base / "home", base / "root"
         self.proj = self.root / "proj"
         (self.home / ".claude" / "plugins").mkdir(parents=True)
@@ -69,6 +70,7 @@ class TheWrapperRunsInItsProject(unittest.TestCase):
         md.write_text(text.replace("- [ ] ", "- [x] "), encoding="utf-8")
         r = self.tasks("work", "done", cwd=self.root)
         self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)          # its verify is `false`
+        self.assertRegex(r.stdout + r.stderr, r"\[FAIL[^\]]*\] false\n")      # impl round 1 (opus): refused by it
         self.assertNotIn("NOTHING verified", r.stdout + r.stderr)
         self.assertIn("in_progress", md.read_text(encoding="utf-8"))
 
@@ -111,6 +113,44 @@ class TheWrapperRunsInItsProject(unittest.TestCase):
             r = subprocess.run([str(wrapper)], cwd=str(cwd), env={**self.env(), "PWD": str(cwd)}, capture_output=True,
                                text=True, timeout=60)
             self.assertEqual((r.returncode, r.stdout.strip()), (0, str(want)), (str(cwd), r.stderr))
+
+    def test_a_project_whose_claude_folder_is_a_link_keeps_its_tasks(self):
+        # impl round 1 (opus, codex reproduced it twice): with `proj/.claude` a link to a shared folder, the wrapper's
+        # resolved folder named the shared folder's parent, and callers inside the project were sent there
+        shared = self.base / "shared"
+        (shared / ".claude").mkdir(parents=True)
+        shutil.rmtree(self.proj / ".claude")
+        (self.proj / ".claude").symlink_to(shared / ".claude")
+        r = subprocess.run([bash_or_skip(), "-c", 'source "$1"; create_wrapper "$2" tasks', "-", str(LIB),
+                            str(self.proj)], env=self.env(), capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        for n, cwd in ((1, self.proj / "src"), (2, self.root)):
+            r = self.tasks("new", "quick", f"fix{n}", "fix f", cwd=cwd)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(sorted(p.name for p in (self.proj / ".agent" / "tasks").iterdir()), ["001-fix1", "002-fix2"])
+        self.assertFalse((shared / ".agent").exists())
+        self.assertFalse((self.root / ".agent").exists())
+
+    def test_a_sibling_whose_name_begins_with_the_projects_is_outside_it(self):
+        # impl round 1 (grok): the pattern's `/` keeps `proj-other` outside `proj`
+        other = self.root / "proj-other"
+        other.mkdir()
+        r = self.tasks("new", "quick", "fix", "fix f", cwd=other)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([p.name for p in (self.proj / ".agent" / "tasks").iterdir()], ["001-fix"])
+        self.assertFalse((other / ".agent").exists())
+
+    def test_a_wrapper_called_through_a_link_to_it_runs_where_it_is_called(self):
+        # impl round 1 (opus, sonnet): linked onto PATH (`~/.local/bin/tasks`), the wrapper took the folder two levels
+        # above the link for its project; it enters nothing then, and a caller inside the project gets the project
+        link = self.home / ".local" / "bin" / "tasks"
+        link.parent.mkdir(parents=True)
+        link.symlink_to(self.wrapper)
+        r = subprocess.run([str(link), "new", "quick", "fix", "fix f"], cwd=str(self.proj / "src"), env=self.env(),
+                           capture_output=True, text=True, timeout=300)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual([p.name for p in (self.proj / ".agent" / "tasks").iterdir()], ["001-fix"])
+        self.assertFalse((self.home / ".agent").exists())
 
     def test_control_a_subfolder_of_the_project_still_works(self):
         r = self.tasks("new", "quick", "fix", "fix f", cwd=self.proj / "src")
