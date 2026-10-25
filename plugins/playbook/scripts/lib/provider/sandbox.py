@@ -827,11 +827,6 @@ def build_bwrap_argv(
         layers.append((str(target), True))
     # ...and, laid over them, what the host runs or obeys later (task 308) — before the project bind, so a project
     # inside one of them still has its own
-    for sub in _HOME_RO_DIRS_MADE:
-        try:
-            (home / sub).mkdir(exist_ok=True)
-        except FileExistsError:                         # a link or a file there: `_home_read_only` judges it
-            pass
     for path in _home_read_only(home):
         argv += ["--ro-bind", path, path]
         layers.append((path, False))
