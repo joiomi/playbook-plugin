@@ -978,7 +978,14 @@ def build_bwrap_argv(
             (home / sub).mkdir(parents=True, exist_ok=True)       # a link or a file there: `_home_layer` judges it
     for sub, empty in _HOME_FILES_MADE.items():
         if sub.split("/")[0] in folders and not os.path.lexists(home / sub):
-            (home / sub).write_text(empty, encoding="utf-8")
+            try:                                        # made only where nothing is: never over a file of yours
+                fd = os.open(home / sub, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+            except FileExistsError:
+                continue
+            try:
+                os.write(fd, empty.encode("utf-8"))
+            finally:
+                os.close(fd)
     pins, kept, snaps = _home_layer(home, folders, [str(write_log_dir), *rw_paths,
                                                      *([project] if project_writable else [])])
     for path in pins:
