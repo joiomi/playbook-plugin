@@ -287,6 +287,13 @@ class InsideTheSandbox(t308._Home):
         # projects"; 05-configuration.md: user workflows from `~/.grok/workflows/`): missing, an agy-style new name
         self._made_and_held("grok", {}, [".grok/rules", ".grok/workflows"])
 
+    def test_grok_s_global_instructions_hooks_and_servers_are_made_and_held(self):
+        # the post-panel judge, run 1 (opus), and grok's own docs: `~/.grok/AGENTS.md` (global rules), `lsp.json` (LSP
+        # servers: commands grok starts), `settings.json` (Claude-style hooks), `disabled-hooks` (hooks it skips — a
+        # run could switch playbook's off) and `bundles/` ("anything placed there loads as a built-in skill")
+        self._made_and_held("grok", {".grok/AGENTS.md": "", ".grok/lsp.json": "{}\n", ".grok/settings.json": "{}\n",
+                                     ".grok/disabled-hooks": ""}, [".grok/bundles"])
+
 
 def _codex_ok():
     spec = importlib.util.spec_from_file_location("_t315_judge_usage", _HERE / "test_judge_usage.py")
@@ -342,6 +349,7 @@ class TheCodexSingleJudge(unittest.TestCase):
             self.review.cmd_single_review("plan-review", ["042", "--backend", "codex", "--model", "gpt-5.6-sol:medium"])
         self.assertTrue(given)
         self.assertEqual([p for p in given if p == str(self.project) or p.startswith(str(self.project) + "/")], [])
+        self.assertEqual({os.path.dirname(p) for p in given}, {"/tmp"})   # the post-panel judge, run 1: /tmp itself
 
     def test_the_message_folder_is_writable_for_the_run(self):
         from provider import sandbox
