@@ -243,22 +243,24 @@ class InsideTheSandbox(t308._Home):
         self.assertEqual(out[:1], ["from-child-path"], r.stdout + r.stderr)
         self.assertTrue(len(out) > 1 and out[1].startswith(f"{tmpdir}/"), r.stdout + r.stderr)
 
-    def _made_and_held(self, agent):
-        for rel in [*FILES[agent], *FOLDERS[agent]]:
+    def _made_and_held(self, agent, files=None, folders=None):
+        files = FILES[agent] if files is None else files
+        folders = FOLDERS[agent] if folders is None else folders
+        for rel in [*files, *folders]:
             if os.path.lexists(self.home / rel):
                 self.remove(rel)
         # each attempt is its own launch: the names are made at it, and the run then tries to make or write one
-        for rel in FILES[agent]:
+        for rel in files:
             self.assertEqual(self.attempt(rel, agent), "REFUSED", rel)
-        for rel in FOLDERS[agent]:
+        for rel in folders:
             out = self.run_in(f'printf x > "$HOME/{rel}" 2>/dev/null && echo WROTE || echo REFUSED; '
                               f'mkdir -p "$HOME/{rel}" 2>/dev/null; printf x > "$HOME/{rel}/x" 2>/dev/null && '
                               f'echo WROTE || echo REFUSED', agent)
             self.assertEqual(out.split(), ["REFUSED", "REFUSED"], rel)
-        for rel, text in FILES[agent].items():
+        for rel, text in files.items():
             p = self.home / rel
             self.assertEqual(p.read_text(encoding="utf-8") if p.is_file() else None, text, rel)
-        for rel in FOLDERS[agent]:
+        for rel in folders:
             p = self.home / rel
             self.assertEqual(sorted(os.listdir(p)) if p.is_dir() else None, [], rel)
 
@@ -274,6 +276,16 @@ class InsideTheSandbox(t308._Home):
 
     def test_grok_s_names_are_made_and_held(self):
         self._made_and_held("grok")
+
+    def test_agy_s_global_gemini_md_is_made_and_held(self):
+        # impl round 2 (opus): agy loads a global ~/.gemini/GEMINI.md as instructions (measured 2026-10-26 00:37: it
+        # answered its word), and a missing one was a new name an agy run could make
+        self._made_and_held("agy", {".gemini/GEMINI.md": ""}, [])
+
+    def test_grok_s_home_rules_and_workflows_are_made_and_held(self):
+        # impl round 2, from grok's own docs (12-project-rules.md: "`~/.grok/rules/` Always scanned; applies to all
+        # projects"; 05-configuration.md: user workflows from `~/.grok/workflows/`): missing, an agy-style new name
+        self._made_and_held("grok", {}, [".grok/rules", ".grok/workflows"])
 
 
 def _codex_ok():
@@ -307,6 +319,29 @@ class TheCodexSingleJudge(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, {"HOME": str(home)})
         patcher.start()
         self.addCleanup(patcher.stop)
+
+    def test_the_message_folder_is_outside_the_project_when_tmpdir_is_inside_it(self):
+        # impl round 2 (codex's own probe before its seat was stopped): a TMPDIR inside the project put the `-o` folder
+        # there, and a review's read-only copy of the project refuses a writable path inside it (ValueError)
+        from provider import sandbox
+        inside = self.project / "tmp"
+        inside.mkdir()
+        given = []
+
+        def _run(agent, args, **kw):
+            given.extend(os.path.realpath(p) for p in (kw.get("extra_rw") or []))
+            return types.SimpleNamespace(returncode=0, stdout=_codex_ok(), stderr="", args=list(args))
+        prev = Path.cwd()
+        os.chdir(self.project)
+        self.addCleanup(os.chdir, prev)
+        with mock.patch.dict(os.environ, {"TMPDIR": str(inside)}), mock.patch.object(tempfile, "tempdir", None), \
+                mock.patch.object(sandbox, "run", _run), \
+                mock.patch.object(shutil, "which", lambda name: "/usr/bin/" + name), \
+                contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), \
+                contextlib.suppress(SystemExit):
+            self.review.cmd_single_review("plan-review", ["042", "--backend", "codex", "--model", "gpt-5.6-sol:medium"])
+        self.assertTrue(given)
+        self.assertEqual([p for p in given if p == str(self.project) or p.startswith(str(self.project) + "/")], [])
 
     def test_the_message_folder_is_writable_for_the_run(self):
         from provider import sandbox
