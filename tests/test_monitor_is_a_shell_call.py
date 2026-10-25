@@ -206,6 +206,30 @@ class AMonitorIsAShellCall(unittest.TestCase):
         self.assertEqual([(j.get("tool"), j.get("decision")) for j in gate], [("Monitor", "allow")], gate)
         self.assertIn("ws", gate[0].get("detail", ""))
 
+    def test_a_monitor_with_no_command_to_read_is_refused(self):
+        # a blank command, and neither `command` nor `ws`: a shell call with no command, as a blank Bash call is
+        bash = self.ran(self.pre("Bash", _bash("   ")), "task-gate-hook")
+        self.assertEqual([rc for _, rc, _, _ in bash], [2], bash)              # the control: as Bash
+        for i, ti in enumerate(({"command": "   ", "description": "t", "timeout_ms": 60000},
+                                {"description": "t", "timeout_ms": 60000},
+                                {"command": ["ls"], "ws": {"url": "wss://x.invalid/"}, "description": "t",
+                                 "timeout_ms": 60000})):
+            got = self.ran(self.pre("Monitor", ti, tuid=f"toolu_N{i}"), "task-gate-hook")
+            self.assertEqual([rc for _, rc, _, _ in got], [2], (ti, got))
+            self.assertIn("could not read a complete tool payload", got[0][3])
+
+    def test_a_held_session_has_the_same_way_out_through_monitor(self):
+        def made():
+            d = self.proj / ".agent" / "tasks" / "009-by-hand"
+            d.mkdir()
+            (d / "task.md").write_text("# 009\n\n## Status\npending\n", encoding="utf-8")
+        self.call("Bash", _bash("mkdir .agent/tasks/009-by-hand"), made)
+        held = self.ran(self.pre("Monitor", _monitor("ls"), tuid="toolu_M2"), "task-dir-watch-hook")
+        self.assertEqual([rc for _, rc, _, _ in held], [2], held)              # held, as a Bash `ls` is
+        out = self.ran(self.pre("Monitor", _monitor("rm -r .agent/tasks/009-by-hand"), tuid="toolu_M3"),
+                       "task-dir-watch-hook")
+        self.assertEqual([rc for _, rc, _, _ in out], [0], out)               # the way out, as for Bash
+
     def test_the_journal_names_the_monitor(self):
         self.pre("Monitor", _monitor("git status"))
         got = {(j.get("hook"), j.get("tool")) for j in self.hook_journal() if j.get("event") == "PreToolUse"}
