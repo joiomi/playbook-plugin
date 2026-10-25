@@ -312,6 +312,28 @@ class InASparseCheckout(_Repo):
                           capture_output=True, text=True).stdout
         self.assertEqual(tags, "H inside/app.py\n", "the copy kept the bit of a file the cone holds")
 
+    def test_with_ignore_case_a_folder_differing_in_case_is_in_the_cone(self):
+        # post-panel run 3 (codex, reproduced twice): with `core.ignoreCase=true` git holds `Inside/app.py` in the cone
+        # `inside`; the cone check compared case-sensitively and kept its skip-worktree bit
+        self.git("sparse-checkout", "disable")
+        (self.d / "Inside").mkdir()
+        (self.d / "Inside" / "app.py").write_text("x = 1\n", encoding="utf-8")
+        self.git("add", "Inside/app.py")
+        self.git("commit", "-qm", "a folder in another case")
+        self.git("config", "core.ignoreCase", "true")
+        self.git("sparse-checkout", "set", "inside")
+        rel = "Inside/app.py"
+        self.assertTrue((self.d / rel).exists(), "the control: git holds it in the cone")
+        self.git("update-index", "--skip-worktree", rel)
+        (self.d / rel).unlink()
+        import subprocess as sp
+        from tasks.core import _SeeingIndexBits
+        with _SeeingIndexBits(self.d) as env:
+            self.assertIsNotNone(env)
+            tags = sp.run(["git", "ls-files", "-v", "--", rel], cwd=self.d, env=env, capture_output=True,
+                          text=True).stdout
+        self.assertEqual(tags, "H Inside/app.py\n", "the copy kept the bit of a file the cone holds")
+
     def test_the_post_panel_tree_keeps_an_absent_file_outside_the_cone(self):
         from tasks.core import _fingerprint_exclude_pathspecs
         from tasks.post_d6 import worktree_tree
