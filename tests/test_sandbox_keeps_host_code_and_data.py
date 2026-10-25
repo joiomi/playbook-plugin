@@ -232,11 +232,6 @@ class TheArgv(_Home):
         with self.assertRaises(RuntimeError) as cm:
             self.argv(["true"])
         self.assertIn(str(hook), str(cm.exception))
-        hook.unlink()
-        hook.symlink_to(self.home / ".local" / "share" / "playbook" / "x")
-        with self.assertRaises(RuntimeError) as cm:
-            self.argv(["true"])
-        self.assertIn(str(hook), str(cm.exception))
 
     def test_a_missing_hook_source_is_made_empty_and_held(self):
         # impl round 3 (grok): grok loads Claude Code's settings files and its own managed config as hooks
@@ -277,6 +272,20 @@ class TheArgv(_Home):
             self.argv(["true"])
         self.assertIn(str(settings), str(cm.exception))
         self.assertIn("Nothing was launched", str(cm.exception))
+
+
+class TheArgvOutsideTmp(_Home):
+    # a home outside /tmp, so a place is writable only by its own bind, not by /tmp's
+    HOME_BASE = "/var/tmp"
+
+    def test_a_link_into_the_write_log_refuses_the_launch(self):
+        # impl round 3 (agy, codex, grok): the write log is bound writable too
+        hook = self.home / CODE_AND_CONFIG[0]
+        hook.unlink()
+        hook.symlink_to(self.home / ".local" / "share" / "playbook" / "x")
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(["true"])
+        self.assertIn(str(hook), str(cm.exception))
 
 
 @unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
