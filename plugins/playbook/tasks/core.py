@@ -2284,14 +2284,17 @@ def _owner_exclude_specs(cfg: dict) -> "list[str]":
 
 def _index_bits_cleared(repo_path: Path, env: dict) -> bool:
     """In the index `env["GIT_INDEX_FILE"]` names, clear the bits that make git skip a working file (task 314, audit
-    4's G5): assume-unchanged on every entry, skip-worktree where its working file is there — a sparse checkout's
-    absent files stay as they are. Paths are listed and cleared from `repo_path`, as `-- .` scopes the readers. False
-    when git cannot list or clear them."""
+    4's G5): assume-unchanged on every entry; skip-worktree on every entry too, except in a sparse checkout, where a
+    file outside the cone is absent by design and keeps its bit (a `git diff` would print each one whole) — there
+    only an entry whose file is there is cleared. Outside a sparse checkout an absent file is a deletion. Paths are
+    listed and cleared from `repo_path`, as `-- .` scopes the readers. False when git cannot list or clear them."""
     try:
         listed = subprocess.run(["git", "ls-files", "-v", "-z", "--", "."], cwd=repo_path, env=env,
                                 capture_output=True)
         if listed.returncode != 0:
             return False
+        sparse = subprocess.run(["git", "config", "--bool", "core.sparseCheckout"], cwd=repo_path, env=env,
+                                capture_output=True, text=True).stdout.strip() == "true"
         assume: "list[bytes]" = []
         skip: "list[bytes]" = []
         base = os.fsencode(str(repo_path))
@@ -2301,7 +2304,7 @@ def _index_bits_cleared(repo_path: Path, env: dict) -> bool:
             tag, rel = entry[:1], entry[2:]
             if tag.islower():
                 assume.append(rel)
-            if tag.upper() == b"S" and os.path.lexists(os.path.join(base, rel)):
+            if tag.upper() == b"S" and (not sparse or os.path.lexists(os.path.join(base, rel))):
                 skip.append(rel)
         for flag, rels in (("--no-assume-unchanged", assume), ("--no-skip-worktree", skip)):
             if rels:

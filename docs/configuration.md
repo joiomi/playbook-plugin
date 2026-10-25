@@ -190,10 +190,11 @@ during the review window is caught rather than silently baked into the stamp.
 Each entry is a **project-relative path** to a nested git repository. When set,
 the fingerprint additionally folds in each root's `HEAD`, porcelain status, and
 working diff (including untracked-file content; since task 314 these git reads go
-through a copy of the index with the assume-unchanged and skip-worktree bits
-cleared — skip-worktree only where the file is there — so a change under either
-bit is seen, as are the dirty map tail certification is built from and the
-post-panel tree) — the same material the outer tree already hashes — plus, since task 060, the root's **resolved identity**
+through a copy of the index with the assume-unchanged and skip-worktree bits cleared
+— in a sparse checkout, skip-worktree only where the file is there — so a change (or
+a deletion) under either bit is seen, as are the dirty map tail certification is
+built from and the post-panel tree) — the same material the outer tree already
+hashes — plus, since task 060, the root's **resolved identity**
 (its real path relative to the project), so repointing a symlinked root at a
 different checkout with the same `HEAD` also moves the fingerprint and is
 refused by tail certification. A code-only edit inside a listed root moves the
