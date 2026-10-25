@@ -185,10 +185,10 @@ class TheArgv(_Home):
         # over its folder's writable bind (never only the read-only root under it)
         for rel in CODE_AND_CONFIG:
             argv = self.argv(["true"], owner(rel))
-            binds = [(a, argv[i + 1]) for i, a in enumerate(argv[:-2]) if a in ("--bind", "--ro-bind")]
+            binds = [(a, argv[i + 1]) for i, a in enumerate(argv[:-2]) if a in ("--bind", "--ro-bind", "--ro-bind-try")]
             path = str(self.home / rel)
             governing = [(a, p) for a, p in binds if (path + "/").startswith(p.rstrip("/") + "/")][-1]
-            self.assertEqual(governing[0], "--ro-bind", (rel, governing))
+            self.assertIn(governing[0], ("--ro-bind", "--ro-bind-try"), (rel, governing))
             self.assertNotEqual(governing[1], "/", rel)
 
     def test_a_protected_path_that_is_a_link_refuses_the_launch(self):
@@ -263,6 +263,29 @@ class TheArgv(_Home):
         self.argv(["true"])
         self.assertEqual(p.read_text(encoding="utf-8"), "{}\n")
 
+    def test_launches_at_once_each_make_or_find_the_hook_source(self):
+        # verify, 2026-10-25 06:35: a panel launches its seats side by side in one process, and a temporary name
+        # made of the pid alone collided ("File exists") — two of three seats failed
+        import threading
+        for rel in (".claude/settings.json", ".claude/settings.local.json"):
+            (self.home / rel).unlink()
+        errors: "list[BaseException]" = []
+
+        def launch():
+            try:
+                self.argv(["true"])
+            except BaseException as exc:                # noqa: BLE001 — every failure is the test's finding
+                errors.append(exc)
+        threads = [threading.Thread(target=launch) for _ in range(8)]
+        for th in threads:
+            th.start()
+        for th in threads:
+            th.join()
+        self.assertEqual(errors, [])
+        for rel in (".claude/settings.json", ".claude/settings.local.json"):
+            self.assertEqual((self.home / rel).read_text(encoding="utf-8"), "{}\n", rel)
+        self.assertEqual([q.name for q in (self.home / ".claude").iterdir() if ".playbook-" in q.name], [])
+
     def test_a_missing_hook_source_is_made_empty_and_held(self):
         # impl round 3 (grok): grok loads Claude Code's settings files and its own managed config as hooks
         for rel, agent, empty in ((".claude/settings.local.json", "claude", "{}\n"),
@@ -272,7 +295,7 @@ class TheArgv(_Home):
                 p.unlink()
             argv = self.argv(["true"], agent)
             self.assertEqual(p.read_text(encoding="utf-8"), empty, rel)
-            self.assertIn(("--ro-bind", str(p)), [(a, argv[i + 1]) for i, a in enumerate(argv[:-2])], rel)
+            self.assertIn(("--ro-bind-try", str(p)), [(a, argv[i + 1]) for i, a in enumerate(argv[:-2])], rel)
 
     def test_a_state_folder_that_is_a_link_refuses_the_launch(self):
         # bubblewrap cannot bind onto it either (measured); refused first, with what to do
