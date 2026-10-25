@@ -224,8 +224,8 @@ class NoUnapprovedDirectWriters(unittest.TestCase):
             "the judge LOG is a fresh per-review artifact, not a record other "
             "writers read-modify-write",
         ("review.py", "atomic_write("):
-            "the hard-timeout partial log — a fresh file written once, and only "
-            "on a clean tree (the tamper hard-stop exits before it)",
+            "the hard-timeout partial log — under the task folder's lock since task 312, every run kept, the "
+            "newest first, and only on a clean tree (the tamper hard-stop exits before it)",
         ("merge_prep.py", "atomic_write(chat_log"):
             "offline merge preparation — single-process by construction",
         ("merge_prep.py", "atomic_write(state_file"):
