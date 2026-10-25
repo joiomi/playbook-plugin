@@ -361,6 +361,20 @@ class TheArgv(_Home):
             self.argv(["true"], "codex")
         self.assertEqual(list(elsewhere.iterdir()), [])
 
+    def test_nothing_is_made_through_a_state_folder_that_is_a_link(self):
+        # my mutant run on post-panel run 5's fix: a folder or a hook source deeper down was made where a linked state
+        # folder points, before the launch was refused
+        elsewhere = self.home / "elsewhere"
+        shutil.copytree(self.home / ".codex", elsewhere, symlinks=True)
+        shutil.rmtree(elsewhere / ".tmp")
+        shutil.rmtree(elsewhere / "app-server-daemon")
+        self.remove(".codex")
+        (self.home / ".codex").symlink_to(elsewhere)
+        before = sorted(str(q.relative_to(elsewhere)) for q in elsewhere.rglob("*"))
+        with self.assertRaises(RuntimeError):
+            self.argv(["true"], "codex")
+        self.assertEqual(sorted(str(q.relative_to(elsewhere)) for q in elsewhere.rglob("*")), before)
+
     def test_a_state_folder_that_is_a_link_refuses_the_launch(self):
         # bubblewrap cannot bind onto it either (measured); refused first, with what to do
         real = self.home / "dotfiles" / "claude"
