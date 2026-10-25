@@ -465,12 +465,16 @@ def merge_gitignore(existing: "str | None") -> "str | None":
         missing = [e for e in GITIGNORE_ENTRIES if e not in present]
         if not missing:
             return None
+        if not lines[at].endswith("\n"):               # the marker on the last line, no newline (task 313, impl r1)
+            lines[at] += nl
         lines[at + 1:at + 1] = [e + nl for e in missing]
         return "".join(lines)
     block = GITIGNORE_MARKER + nl + nl.join(GITIGNORE_ENTRIES) + nl
-    if existing is None or not existing.strip():
+    if not existing:
         return block
-    return existing.rstrip("\r\n") + nl + nl + block
+    # kept whole, the result's exact prefix (task 313, impl round 1, codex): `rstrip("\r\n")` took a carriage
+    # return a pattern means (git strips only the one before LF) and the blank lines after it
+    return existing + ("" if existing.endswith("\n") else nl) + nl + block
 
 
 def main(argv: "list[str]") -> int:
