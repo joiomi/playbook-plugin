@@ -49,6 +49,9 @@ APPROVED = {
     ("tasks/review_view.py", "shutil.copyfile(s, d, follow_symlinks=False)"):
         "task 231: each listed file copied into the review copy's new folder (never over an existing file — the "
         "folder is made for this run) — ephemeral, removed on every exit",
+    ("tasks/core.py", "shutil.copy2(real, idx)"):
+        "task 314: the live index copied into a fresh private temporary folder, so the index bits can be cleared in "
+        "the copy for a freshness read; never a record, and the real index is never written",
     ("tasks/post_d6.py", "shutil.copy2(real, idx)"):
         "task 108: a copy of the git index into a private mkdtemp dir (the temporary GIT_INDEX_FILE "
         "for the post-D6 base tree), removed in `finally` — ephemeral, never state",
