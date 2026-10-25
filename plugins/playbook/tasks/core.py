@@ -2282,6 +2282,82 @@ def _owner_exclude_specs(cfg: dict) -> "list[str]":
     return [p.strip() for p in raw if isinstance(p, str) and p.strip() and "\x00" not in p]
 
 
+def _index_bits_cleared(repo_path: Path, env: dict) -> bool:
+    """In the index `env["GIT_INDEX_FILE"]` names, clear the bits that make git skip a working file (task 314, audit
+    4's G5): assume-unchanged on every entry, skip-worktree where its working file is there — a sparse checkout's
+    absent files stay as they are. Paths are listed and cleared from `repo_path`, as `-- .` scopes the readers. False
+    when git cannot list or clear them."""
+    try:
+        listed = subprocess.run(["git", "ls-files", "-v", "-z", "--", "."], cwd=repo_path, env=env,
+                                capture_output=True)
+        if listed.returncode != 0:
+            return False
+        assume: "list[bytes]" = []
+        skip: "list[bytes]" = []
+        base = os.fsencode(str(repo_path))
+        for entry in listed.stdout.split(b"\0"):
+            if len(entry) < 3 or entry[1:2] != b" ":
+                continue
+            tag, rel = entry[:1], entry[2:]
+            if tag.islower():
+                assume.append(rel)
+            if tag.upper() == b"S" and os.path.lexists(os.path.join(base, rel)):
+                skip.append(rel)
+        for flag, rels in (("--no-assume-unchanged", assume), ("--no-skip-worktree", skip)):
+            if rels:
+                done = subprocess.run(["git", "update-index", flag, "-z", "--stdin"], cwd=repo_path, env=env,
+                                      input=b"\0".join(rels) + b"\0", capture_output=True)
+                if done.returncode != 0:
+                    return False
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+class _SeeingIndexBits:
+    """`with _SeeingIndexBits(repo) as env:` — the environment a git read of the working tree takes to see every
+    file (task 314, audit 4's G5: `git status` and `git diff` skip a file whose index entry is marked assume-unchanged
+    or skip-worktree, so a change to it after a review read FRESH). None when no entry carries either bit: git's own
+    index, the reads as before 314, byte for byte. Else GIT_INDEX_FILE names a copy of the index with the bits
+    cleared (`_index_bits_cleared`); the real index is never touched. Raises OSError when git cannot tell or clear."""
+
+    def __init__(self, repo_path: Path):
+        self.repo = Path(repo_path)
+        self.tmpd: "str | None" = None
+
+    def __enter__(self) -> "dict | None":
+        import shutil
+        import tempfile
+        listed = subprocess.run(["git", "ls-files", "-v", "-z", "--", "."], cwd=self.repo, capture_output=True)
+        if listed.returncode != 0:
+            raise OSError("git cannot list the index")
+        if not any(len(e) > 2 and e[1:2] == b" " and (e[:1].islower() or e[:1] == b"S")
+                   for e in listed.stdout.split(b"\0")):
+            return None
+        where = subprocess.run(["git", "rev-parse", "--git-path", "index"], cwd=self.repo, capture_output=True,
+                               text=True, errors="surrogateescape")
+        if where.returncode != 0 or not where.stdout.strip():
+            raise OSError("git cannot name its index")
+        real = Path(where.stdout.strip())
+        if not real.is_absolute():
+            real = self.repo / real
+        self.tmpd = tempfile.mkdtemp(prefix="pb-index-")
+        idx = Path(self.tmpd) / "index"
+        # copy2: the stat cache and the index's own mtime kept (git's racy-clean rule, post_d6.worktree_tree)
+        shutil.copy2(real, idx)
+        env = dict(os.environ, GIT_INDEX_FILE=str(idx))
+        env.pop("GIT_WORK_TREE", None)
+        if not _index_bits_cleared(self.repo, env):
+            raise OSError("git cannot clear the index bits")
+        return env
+
+    def __exit__(self, *exc) -> bool:
+        if self.tmpd:
+            import shutil
+            shutil.rmtree(self.tmpd, ignore_errors=True)
+        return False
+
+
 def _repo_fingerprint_material(repo_path: Path, exclude: "list[str]", *,
                                strict: bool = False,
                                head_override: "str | None" = None) -> "str | None":
@@ -2340,45 +2416,38 @@ def _repo_fingerprint_material(repo_path: Path, exclude: "list[str]", *,
                 return None
         # -uall enumerates untracked files INDIVIDUALLY (a bare `?? dir/`
         # hides everything inside the directory from the hash below).
-        porcelain_r = subprocess.run(
-            ["git", "status", "--porcelain", "-uall", "--ignore-submodules=none", "--", ".", *exclude],
-            cwd=repo_path, capture_output=True, text=True,
-            errors="surrogateescape")
-        # R2/1.5.39: a SECOND, NUL-delimited status supplies the raw (un-quoted)
-        # untracked paths for the content digest below — kept ADJACENT to the
-        # first porcelain call (before `diff`) to MINIMIZE the window between the
-        # two snapshots (impl-panel sonnet #1). Captured as BYTES (NO text=True):
-        # `-z` emits raw path bytes, and universal-newline translation would
-        # mangle a CR byte in a filename to LF (impl-panel codex:sol #1).
-        # A `-z` FAILURE (nonzero rc or exception) used to degrade to the legacy
-        # quote-blind parse because an empty fingerprint was fail-OPEN at the
-        # gate (impl-panel r4 of 023). Task 060 (plan panel codex-high #3): the
-        # empty fingerprint now BLOCKS a high-consequence close (UNREADABLE), so
-        # unavailable material is the honest answer, not a weaker parse.
-        z_r = subprocess.run(
-            ["git", "status", "--porcelain", "-uall", "-z", "--ignore-submodules=none", "--", ".", *exclude],
-            cwd=repo_path, capture_output=True)
-        if z_r.returncode != 0:
-            return None
-        z_out = z_r.stdout
-        diff_r = subprocess.run(
-            ["git", "diff", "--ignore-submodules=none", "HEAD", "--", ".", *exclude],
-            cwd=repo_path, capture_output=True, text=True,
-            errors="surrogateescape")
-        if porcelain_r.returncode != 0 or diff_r.returncode != 0:
-            return None                  # a failed status/diff is NOT a clean tree
-        porcelain = porcelain_r.stdout
-        diff = diff_r.stdout
-        # Task 314 (audit 4, G5): status and diff skip an entry marked assume-unchanged (a lower-case tag) or
-        # skip-worktree (`S`), so a change to its file after a review moved nothing. `--full-name`: toplevel-relative,
-        # as the porcelain names above are.
-        bits_r = subprocess.run(
-            ["git", "ls-files", "-v", "-z", "--full-name", "--", ".", *exclude],
-            cwd=repo_path, capture_output=True)
-        if bits_r.returncode != 0:
-            return None
-        marked_rels = sorted(os.fsdecode(e[2:]) for e in bits_r.stdout.split(b"\0")
-                             if len(e) > 2 and e[1:2] == b" " and (e[:1].islower() or e[:1] == b"S"))
+        # task 314 (audit 4, G5): status and diff skip a file whose index entry is marked assume-unchanged or
+        # skip-worktree; they read through an index copy with the bits cleared (no bit: git's own index)
+        with _SeeingIndexBits(repo_path) as bits_env:
+            porcelain_r = subprocess.run(
+                ["git", "status", "--porcelain", "-uall", "--ignore-submodules=none", "--", ".", *exclude],
+                cwd=repo_path, capture_output=True, text=True,
+                errors="surrogateescape", env=bits_env)
+            # R2/1.5.39: a SECOND, NUL-delimited status supplies the raw (un-quoted)
+            # untracked paths for the content digest below — kept ADJACENT to the
+            # first porcelain call (before `diff`) to MINIMIZE the window between the
+            # two snapshots (impl-panel sonnet #1). Captured as BYTES (NO text=True):
+            # `-z` emits raw path bytes, and universal-newline translation would
+            # mangle a CR byte in a filename to LF (impl-panel codex:sol #1).
+            # A `-z` FAILURE (nonzero rc or exception) used to degrade to the legacy
+            # quote-blind parse because an empty fingerprint was fail-OPEN at the
+            # gate (impl-panel r4 of 023). Task 060 (plan panel codex-high #3): the
+            # empty fingerprint now BLOCKS a high-consequence close (UNREADABLE), so
+            # unavailable material is the honest answer, not a weaker parse.
+            z_r = subprocess.run(
+                ["git", "status", "--porcelain", "-uall", "-z", "--ignore-submodules=none", "--", ".", *exclude],
+                cwd=repo_path, capture_output=True, env=bits_env)
+            if z_r.returncode != 0:
+                return None
+            z_out = z_r.stdout
+            diff_r = subprocess.run(
+                ["git", "diff", "--ignore-submodules=none", "HEAD", "--", ".", *exclude],
+                cwd=repo_path, capture_output=True, text=True,
+                errors="surrogateescape", env=bits_env)
+            if porcelain_r.returncode != 0 or diff_r.returncode != 0:
+                return None                  # a failed status/diff is NOT a clean tree
+            porcelain = porcelain_r.stdout
+            diff = diff_r.stdout
     except (OSError, subprocess.SubprocessError):
         return None
     # Untracked CONTENT is hashed explicitly (F18 judge C1, verified
@@ -2457,29 +2526,7 @@ def _repo_fingerprint_material(repo_path: Path, exclude: "list[str]", *,
         # for every ASCII/valid-UTF-8 name (no surrogates present).
         untracked_digest.update(
             f"{rel}\0{fhash}\n".encode("utf-8", "surrogateescape"))
-    material = head + porcelain + diff + untracked_digest.hexdigest()
-    if not marked_rels:
-        return material                  # no index bit: the material of before task 314, byte for byte
-    # each marked entry by its working file: a link by its text (never read through), a file by its bytes
-    marked_digest = hashlib.sha256()
-    for rel in marked_rels:
-        _mpath = toplevel / rel
-        try:
-            _is_link = _mpath.is_symlink()
-        except OSError:
-            _is_link = False
-        if _is_link:
-            try:
-                fhash = "symlink:" + os.readlink(_mpath)
-            except OSError:
-                fhash = "unreadable"
-        elif not os.path.lexists(_mpath):
-            fhash = "absent"
-        else:
-            kind, detail, _n = _safe_hash_regular(_mpath, _FINGERPRINT_HASH_CAP)
-            fhash = detail if kind == "hash" else (f"toolarge:{detail}" if kind == "toolarge" else "unreadable")
-        marked_digest.update(f"{rel}\0{fhash}\n".encode("utf-8", "surrogateescape"))
-    return material + "\0index-bits:" + marked_digest.hexdigest()
+    return head + porcelain + diff + untracked_digest.hexdigest()
 
 
 def _code_roots(cfg: dict) -> "list[str]":
@@ -2868,9 +2915,12 @@ def _dirty_path_content_map(repo_path: Path,
     special-character filename is byte-decoded, never mis-parsed."""
     paths: "list[str]" = []
     try:
-        z = subprocess.run(
-            ["git", "status", "--porcelain", "-uall", "-z", "--ignore-submodules=none", "--", ".", *exclude],
-            cwd=repo_path, capture_output=True)
+        # task 314 (impl round 1, opus Critical): a file under an index bit is a dirty path too, or a code change
+        # beside a doc change read as a docs-only tail
+        with _SeeingIndexBits(repo_path) as bits_env:
+            z = subprocess.run(
+                ["git", "status", "--porcelain", "-uall", "-z", "--ignore-submodules=none", "--", ".", *exclude],
+                cwd=repo_path, capture_output=True, env=bits_env)
         if z.returncode != 0:
             return None
         entries = z.stdout.split(b"\0")

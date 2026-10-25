@@ -511,6 +511,11 @@ def worktree_tree_why(repo: Path, exclude: "list[str]") -> "tuple[str | None, st
             seed = ["read-tree", "HEAD"] if head.returncode == 0 else ["read-tree", "--empty"]
             if _git(repo, seed, env=env).returncode != 0:
                 return None, "git read-tree failed"
+        # task 314 (impl round 1, opus, codex): `git add -A` skips a file whose entry is marked assume-unchanged or
+        # skip-worktree, so the tree left out its working bytes — the bits are cleared in this copy first
+        from tasks.core import _index_bits_cleared
+        if not _index_bits_cleared(repo, env):
+            return None, "git could not clear the index bits in the temporary index"
         a = _git(repo, ["add", "-A", "--", ".", *exclude], env=env)
         if a.returncode != 0:
             return None, "git add failed: " + ((a.stderr or "").strip().splitlines() or ["?"])[0][:200]
