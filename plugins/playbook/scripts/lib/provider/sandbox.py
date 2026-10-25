@@ -137,7 +137,9 @@ def _publish_new(path: Path, text: str) -> None:
     """Make `path` with `text`, whole or not at all, and never over a file that is there (post-panel run 1, codex: made
     empty and written after, a crash between left an empty settings file for good). Written to a temporary name of its
     own beside it, then linked to `path` — link(2) fails where anything is — and the temporary name removed."""
-    tmp = path.with_name(f".{path.name}.playbook-{os.getpid()}")
+    # a name of this call's own: a panel launches its seats side by side in one process (verify, 2026-10-25 06:35 —
+    # the pid alone collided)
+    tmp = path.with_name(f".{path.name}.playbook-{os.getpid()}-{os.urandom(6).hex()}")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
     try:
         try:
@@ -1022,7 +1024,10 @@ def build_bwrap_argv(
         argv += ["--bind", path, path]
         layers.append((path, True))
     for path in kept:
-        argv += ["--ro-bind", path, path]
+        # `-try`: a file the host rewrites by renaming a new one over it (Claude Code's daemon.status.json, many
+        # times a minute) can be gone at the instant bubblewrap mounts it, and a plain bind then failed the whole
+        # launch (verify, 2026-10-25 06:30). The path then holds what replaced it, read-only too
+        argv += ["--ro-bind-try", path, path]
         layers.append((path, False))
     for path in snaps:
         argv += ["--tmpfs", path]
