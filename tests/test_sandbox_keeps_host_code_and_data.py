@@ -129,17 +129,15 @@ class TheArgv(_Home):
         self.assertIn(str(self.home / ".local" / "share" / "playbook"), rw)       # the write log stays
 
     def test_code_and_config_are_bound_read_only_after_their_folder(self):
+        # what a path IS in the sandbox is what the LAST bind covering it says: here a read-only one of its own, laid
+        # over its folder's writable bind (never only the read-only root under it)
         argv = self.argv(["true"])
-        last = {}
-        for i, a in enumerate(argv[:-2]):
-            if a in ("--bind", "--ro-bind"):
-                last[argv[i + 1]] = (i, a)
+        binds = [(a, argv[i + 1]) for i, a in enumerate(argv[:-2]) if a in ("--bind", "--ro-bind")]
         for rel in CODE_AND_CONFIG:
-            top = str(self.home / rel.split("/")[0])
-            covering = [p for p, (_, a) in last.items() if a == "--ro-bind"
-                        and (str(self.home / rel) + "/").startswith(p.rstrip("/") + "/")]
-            self.assertTrue(covering, rel)
-            self.assertTrue(all(last[p][0] > last[top][0] for p in covering), rel)
+            path = str(self.home / rel)
+            governing = [(a, p) for a, p in binds if (path + "/").startswith(p.rstrip("/") + "/")][-1]
+            self.assertEqual(governing[0], "--ro-bind", (rel, governing))
+            self.assertNotEqual(governing[1], "/", rel)
 
 
 @unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
