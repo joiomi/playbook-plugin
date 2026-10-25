@@ -99,6 +99,7 @@ class TheWrapperRunsInItsProject(unittest.TestCase):
                                                          "version": "9.9.9"}]}}), encoding="utf-8")
         odd = self.root / "pro j[1]"
         (odd / "sub").mkdir(parents=True)
+        (odd / ".agent").mkdir()                       # a project, as init makes one
         r = subprocess.run([bash_or_skip(), "-c", 'source "$1"; create_wrapper "$2" tasks', "-", str(LIB), str(odd)],
                            env=self.env(), capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
@@ -146,11 +147,26 @@ class TheWrapperRunsInItsProject(unittest.TestCase):
         link = self.home / ".local" / "bin" / "tasks"
         link.parent.mkdir(parents=True)
         link.symlink_to(self.wrapper)
+        (self.home / ".agent" / "tasks").mkdir(parents=True)  # a home with an `.agent` of its own (his has one)
         r = subprocess.run([str(link), "new", "quick", "fix", "fix f"], cwd=str(self.proj / "src"), env=self.env(),
                            capture_output=True, text=True, timeout=300)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertEqual([p.name for p in (self.proj / ".agent" / "tasks").iterdir()], ["001-fix"])
-        self.assertFalse((self.home / ".agent").exists())
+        self.assertEqual(list((self.home / ".agent" / "tasks").iterdir()), [])
+
+    def test_a_wrapper_in_a_folder_without_agent_enters_nothing(self):
+        # my mutant run on impl round 1's fix: a folder holding the wrapper but no `.agent` is not a project to enter
+        stand = self.home / "stand"
+        (stand / "scripts").mkdir(parents=True)
+        (stand / "scripts" / "tasks").write_text("#!/bin/bash\npwd -P\n", encoding="utf-8")
+        (stand / "scripts" / "tasks").chmod(0o755)
+        (self.home / ".claude" / "plugins" / "installed_plugins.json").write_text(json.dumps(
+            {"version": 2, "plugins": {"playbook@mk": [{"scope": "user", "installPath": str(stand),
+                                                         "version": "9.9.9"}]}}), encoding="utf-8")
+        shutil.rmtree(self.proj / ".agent")
+        r = subprocess.run([str(self.wrapper)], cwd=str(self.root), env={**self.env(), "PWD": str(self.root)},
+                           capture_output=True, text=True, timeout=60)
+        self.assertEqual((r.returncode, r.stdout.strip()), (0, str(self.root)), r.stderr)
 
     def test_control_a_subfolder_of_the_project_still_works(self):
         r = self.tasks("new", "quick", "fix", "fix f", cwd=self.proj / "src")
