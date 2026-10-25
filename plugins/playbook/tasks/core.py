@@ -2302,11 +2302,23 @@ def _index_bits_cleared(repo_path: Path, env: dict) -> bool:
         if sparse:
             if subprocess.run(["git", "config", "--bool", "core.sparseCheckoutCone"], cwd=repo_path, env=env,
                               capture_output=True, text=True).stdout.strip() == "true":
-                got = subprocess.run(["git", "sparse-checkout", "list"], cwd=repo_path, env=env,
-                                     capture_output=True, text=True, errors="surrogateescape")
+                got = subprocess.run(["git", "-c", "core.quotePath=true", "sparse-checkout", "list"],
+                                     cwd=repo_path, env=env, capture_output=True, text=True,
+                                     errors="surrogateescape")
                 if got.returncode != 0:
                     return False
-                cone = [d.strip("/") for d in got.stdout.splitlines() if d.strip("/")]
+                cone = []
+                for line in got.stdout.splitlines():
+                    if len(line) >= 2 and line[0] == line[-1] == '"':
+                        # C-quoted, as git prints a name with a byte outside ASCII or a quote (post-panel run 1,
+                        # codex: `"caf\303\251"` was taken for the name); git's escapes are a bytes literal's
+                        import ast
+                        try:
+                            line = os.fsdecode(ast.literal_eval("b" + line))
+                        except (ValueError, SyntaxError):
+                            return False                # a name it cannot read: no fingerprint, not a guess
+                    if line.strip("/"):
+                        cone.append(line.strip("/"))
                 at = subprocess.run(["git", "rev-parse", "--show-prefix"], cwd=repo_path, env=env,
                                     capture_output=True, text=True, errors="surrogateescape")
                 if at.returncode != 0:
