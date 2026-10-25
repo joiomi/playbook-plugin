@@ -169,6 +169,7 @@ def _publish_new(path: Path, text: str) -> None:
         os.unlink(tmp)
 
 
+# task 315 step: the base its late rows 5-7 are proved on (code changed, behavior not)
 def _home_refusal(path: Path, why: str) -> RuntimeError:
     return RuntimeError(f"{path} {why}. Nothing was launched.")
 
