@@ -1155,10 +1155,18 @@ def _earlier_runs(log: Path) -> bytes:
 
 def _save_partial_log(task_file: Path, partial_log: Path, this_run: str) -> None:
     """A cut run's text saved first in its partial log, then every earlier run (task 312, audit 4's G8: each cut run
-    replaced the file, and a second one lost the first's paid text)."""
-    earlier = _earlier_runs(partial_log)
-    atomic_write(partial_log, this_run.encode("utf-8")
-                 + ((b"\n\n" + _EARLIER_RUNS.encode("utf-8") + b"\n\n" + earlier) if earlier.strip() else b""))
+    replaced the file, and a second one lost the first's paid text) — under the task folder's lock, as the main log
+    since 304, so two saves at once cannot both read the old file (impl round 1, codex). Earlier runs that cannot be
+    read leave the new run saved on its own, as before 312 (impl round 1, opus: it was lost with them). Raises what
+    the lock or the write raise; the caller says the save failed."""
+    from tasks.filelock import task_lock
+    with task_lock(task_file):                          # the folder's lock: a linked log moves no lock (304)
+        try:
+            earlier = _earlier_runs(partial_log)
+        except OSError:
+            earlier = b""
+        atomic_write(partial_log, this_run.encode("utf-8")
+                     + ((b"\n\n" + _EARLIER_RUNS.encode("utf-8") + b"\n\n" + earlier) if earlier.strip() else b""))
 
 
 def _judge_log_name(backend: str) -> str:
