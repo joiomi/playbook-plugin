@@ -19,6 +19,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -28,6 +29,8 @@ if str(_HERE.parent) not in sys.path:
 
 from tests._bwrap_standin import bwrap_usable  # noqa: E402
 from tests._judge_stub import TASKS, clean_env  # noqa: E402
+
+sys.path.insert(0, str(_HERE.parent / "plugins" / "playbook"))
 
 # answers the dead-pin probe; otherwise prints its run's mark and sleeps past the review's timeout
 _STUB = r'''#!/bin/bash
@@ -112,6 +115,68 @@ class TwoCutRuns(unittest.TestCase):
         self.assertIn("PARTIAL-TWO", text)
         self.assertNotIn("OUTSIDE-TEXT", text, "the earlier runs were read through a link")
         self.assertEqual(outside.read_text(encoding="utf-8"), "OUTSIDE-TEXT not this judge's\n")
+
+
+
+def _save_in_a_process(task_file, log, text, a_read, b_go, slow):
+    """One save of a cut run's text, in a process of its own; `slow` holds it between its read and its write."""
+    sys.path.insert(0, str(_HERE.parent / "plugins" / "playbook"))
+    from tasks import review
+    if slow:
+        real = review._earlier_runs
+
+        def held(path):
+            got = real(path)
+            a_read.set()
+            b_go.wait(5)
+            time.sleep(0.5)                              # the other save would read the same old text now
+            return got
+        review._earlier_runs = held
+    else:
+        a_read.wait(5)
+        b_go.set()
+    review._save_partial_log(Path(task_file), Path(log), text)
+
+
+class TheSave(unittest.TestCase):
+    """Impl round 1: the save is one helper, `review._save_partial_log`, so it can be held at its read."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        d = Path(tmp.name).resolve() / ".agent" / "tasks" / "001-x"
+        d.mkdir(parents=True)
+        self.task_file = d / "task.md"
+        self.task_file.write_text("# 001 - x\n", encoding="utf-8")
+        self.log = d / "judge.partial.log"
+        self.log.write_text("RUN-ZERO the first cut\n", encoding="utf-8")
+
+    def test_two_saves_at_once_keep_both_runs(self):
+        # codex Important: two cut runs of one task read, read, replace, replace — without the lock one paid run is lost
+        import multiprocessing
+        ctx = multiprocessing.get_context("fork")
+        a_read, b_go = ctx.Event(), ctx.Event()
+        a = ctx.Process(target=_save_in_a_process, args=(self.task_file, self.log, "RUN-A\n", a_read, b_go, True))
+        b = ctx.Process(target=_save_in_a_process, args=(self.task_file, self.log, "RUN-B\n", a_read, b_go, False))
+        a.start()
+        b.start()
+        a.join(30)
+        b.join(30)
+        self.assertEqual((a.exitcode, b.exitcode), (0, 0))
+        text = self.log.read_text(encoding="utf-8")
+        for mark in ("RUN-A", "RUN-B", "RUN-ZERO"):
+            self.assertIn(mark, text, "a run was lost between two saves at once")
+
+    def test_an_earlier_log_that_cannot_be_read_still_saves_the_new_run(self):
+        # opus: an unreadable old partial log raised inside the lock, and the new run's text was not saved at all
+        if os.geteuid() == 0:
+            self.skipTest("root reads a file of mode 000")
+        from tasks import review
+        self.log.chmod(0)
+        self.addCleanup(lambda: self.log.chmod(0o644) if self.log.exists() else None)
+        review._save_partial_log(self.task_file, self.log, "RUN-NEW the newest cut\n")
+        self.log.chmod(0o644)
+        self.assertTrue(self.log.read_text(encoding="utf-8").startswith("RUN-NEW the newest cut"))
 
 
 if __name__ == "__main__":
