@@ -374,6 +374,25 @@ class TheArgvOutsideTmp(_Home):
             self.argv(["true"])
         self.assertIn(str(hook_dir), str(cm.exception))
 
+    def test_a_link_through_a_linked_folder_leading_into_writable_state_refuses_the_launch(self):
+        # post-panel run 3 (opus): `a` sits in a read-only place and leads to `cache`, a link in the writable state;
+        # resolved, the way ends in `dotfiles`, but the run can re-point `cache` and the host then follows the kept link
+        real = self.home / "dotfiles"
+        real.mkdir()
+        (real / "hook.sh").write_text("echo hi\n", encoding="utf-8")
+        cache = self.home / ".claude" / "cache"
+        if cache.exists():
+            shutil.rmtree(cache)
+        cache.symlink_to(real)
+        (self.home / "somewhere").mkdir()
+        (self.home / "somewhere" / "a").symlink_to(cache)
+        hook = self.home / CODE_AND_CONFIG[0]
+        hook.unlink()
+        hook.symlink_to(self.home / "somewhere" / "a" / "hook.sh")
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(["true"])
+        self.assertIn(str(hook), str(cm.exception))
+
     def test_a_link_into_the_write_log_refuses_the_launch(self):
         # impl round 3 (agy, codex, grok): the write log is bound writable too
         hook = self.home / CODE_AND_CONFIG[0]
@@ -476,6 +495,15 @@ class InsideTheSandbox(_Home):
                               f' && echo WROTE || echo REFUSED', agent)
             self.assertEqual(out, "REFUSED", rel)
             self.assertEqual(list((self.home / top).iterdir()), [], top)
+
+    def test_a_leftover_temporary_name_cannot_be_written_through(self):
+        # post-panel run 3 (opus): a launch killed between its link and its unlink leaves its temporary name, a second
+        # name of the hook source; skipped as transient, it stayed writable, and the link count took it off
+        hook = self.home / ".claude" / "settings.local.json"
+        leftover = ".claude/.settings.local.json.playbook-123-abcdef012345"
+        os.link(hook, self.home / leftover)
+        self.assertEqual(self.attempt(leftover, "claude"), "REFUSED")
+        self.assertEqual(hook.read_text(encoding="utf-8"), "original\n")
 
     def test_a_read_only_file_cannot_be_replaced_or_removed(self):
         for verb in ('mv "$HOME/.claude/x" "$HOME/.claude/settings.json"', 'rm -f "$HOME/.claude/settings.json"',
