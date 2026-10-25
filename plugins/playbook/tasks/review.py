@@ -1153,6 +1153,14 @@ def _earlier_runs(log: Path) -> bytes:
         os.close(fd)
 
 
+def _save_partial_log(task_file: Path, partial_log: Path, this_run: str) -> None:
+    """A cut run's text saved first in its partial log, then every earlier run (task 312, audit 4's G8: each cut run
+    replaced the file, and a second one lost the first's paid text)."""
+    earlier = _earlier_runs(partial_log)
+    atomic_write(partial_log, this_run.encode("utf-8")
+                 + ((b"\n\n" + _EARLIER_RUNS.encode("utf-8") + b"\n\n" + earlier) if earlier.strip() else b""))
+
+
 def _judge_log_name(backend: str) -> str:
     """Review-log filename for a backend. Shared by the save path and the hard
     timeout path, which writes `<stem>.partial.log` beside it — they must agree
@@ -3554,12 +3562,7 @@ def _cmd_single_review(cmd, cmd_args):
                          f"# The previous complete review, if any, is untouched in "
                          f"{_judge_log_name(backend)}.\n{_trail}\n{partial}\n")
             try:
-                from tasks.filelock import task_lock as _log_lock
-                with _log_lock(task_file):              # the folder's lock: a linked log moves no lock (304)
-                    _earlier = _earlier_runs(partial_log)
-                    atomic_write(partial_log, _this_run.encode("utf-8")
-                                 + ((b"\n\n" + _EARLIER_RUNS.encode("utf-8") + b"\n\n" + _earlier)
-                                    if _earlier.strip() else b""))
+                _save_partial_log(task_file, partial_log, _this_run)
                 saved_note = ((f" Partial output ({len(partial)} chars) saved to " if partial else
                                f" The judge produced no output before {'it stopped' if _soft_stop else 'the kill'}; "
                                "its conversation is named in ")
