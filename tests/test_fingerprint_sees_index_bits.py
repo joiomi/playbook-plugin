@@ -3,9 +3,10 @@
 
 `tree_state_fingerprint` names what a panel reviewed and what a close certified. It read `git status --porcelain`
 and `git diff`, and both skip a file whose index entry carries assume-unchanged or skip-worktree: a code change to
-such a file after a review left the fingerprint as it was, so a stale review read as fresh. The material now also
-folds in every entry `git ls-files -v` tags with either bit — its path and its working file's bytes (a link by its
-text, never read through) — and a repo with no such entry keeps the fingerprint it had, byte for byte.
+such a file after a review left the fingerprint as it was, so a stale review read as fresh. Since impl round 1 every
+freshness read of the working tree — the fingerprint, the dirty map tail certification is built from, the post-panel
+tree — goes through a copy of the index with both bits cleared (in a sparse checkout, skip-worktree only where the
+cone holds the file), so git itself reports the change; a repo with no bit keeps the fingerprint it had, byte for byte.
 
 Run:
     python3 -m unittest tests.test_fingerprint_sees_index_bits
@@ -219,6 +220,65 @@ class TheSkipWorktreeRule(_Repo):
         self.assertIsNotNone(material)
         self.assertNotIn("outside/b.py", material, "a file outside the cone was read as deleted")
         self.assertEqual(self.fp(), self.fp())
+
+
+class InASparseCheckout(_Repo):
+    """Impl round 2 (codex, each reproduced twice): in a sparse checkout, only the files the cone leaves out keep their
+    skip-worktree bit — a file inside the cone deleted under the bit, and a file outside it put back and changed, are
+    seen — and the post-panel tree stages with `--sparse`."""
+
+    def setUp(self):
+        super().setUp()
+        for rel, text in (("inside/a.py", "a = 1\n"), ("inside/deep/d.py", "d = 1\n"), ("outside/b.py", "b = 1\n")):
+            (self.d / rel).parent.mkdir(parents=True, exist_ok=True)
+            (self.d / rel).write_text(text, encoding="utf-8")
+        self.git("add", "inside", "outside")
+        self.git("commit", "-qm", "two folders")
+        self.git("sparse-checkout", "set", "inside")
+        self.assertFalse((self.d / "outside" / "b.py").exists(), "the control: outside the cone, not checked out")
+
+    def test_a_file_inside_the_cone_deleted_under_skip_worktree_moves_the_fingerprint(self):
+        from tasks.core import _dirty_path_content_map, _fingerprint_exclude_pathspecs
+        self.git("update-index", "--skip-worktree", "inside/a.py")
+        reviewed = self.fp()
+        (self.d / "inside" / "a.py").unlink()
+        self.assertNotEqual(self.fp(), reviewed, "a deletion inside the cone read FRESH")
+        self.assertIn("inside/a.py", _dirty_path_content_map(self.d, _fingerprint_exclude_pathspecs({})) or {})
+
+    def test_a_file_outside_the_cone_put_back_and_changed_is_seen(self):
+        from tasks.core import _fingerprint_exclude_pathspecs
+        from tasks.post_d6 import worktree_tree
+        exclude = _fingerprint_exclude_pathspecs({})
+        reviewed, before = self.fp(), worktree_tree(self.d, exclude)
+        (self.d / "outside").mkdir()
+        (self.d / "outside" / "b.py").write_text("b = 2  # put back and changed\n", encoding="utf-8")
+        self.assertNotEqual(self.fp(), reviewed, "the changed file outside the cone read FRESH")
+        after = worktree_tree(self.d, exclude)
+        self.assertNotEqual(after, before)
+        blob = self.git("rev-parse", f"{after}:outside/b.py").strip()
+        self.assertEqual(self.git("cat-file", "-p", blob), "b = 2  # put back and changed\n")
+
+    def test_the_post_panel_tree_keeps_an_absent_file_outside_the_cone(self):
+        from tasks.core import _fingerprint_exclude_pathspecs
+        from tasks.post_d6 import worktree_tree
+        tree = worktree_tree(self.d, _fingerprint_exclude_pathspecs({}))
+        blob = self.git("rev-parse", f"{tree}:outside/b.py").strip()
+        self.assertEqual(self.git("cat-file", "-p", blob), "b = 1\n", "an absent file outside the cone read as deleted")
+
+
+class TheIndexCopy(_Repo):
+    def test_a_failed_clearing_leaves_no_index_copy_behind(self):
+        # impl round 2 (agy, opus, sonnet): `__exit__` does not run when `__enter__` raises
+        import tempfile
+        import unittest.mock as mock
+        import tasks.core as core
+        spare = self.base / "spare-tmp"
+        spare.mkdir()
+        self.git("update-index", "--assume-unchanged", "app.py")
+        with mock.patch.object(tempfile, "tempdir", str(spare)), \
+                mock.patch.object(core, "_index_bits_cleared", lambda repo, env: False):
+            self.assertEqual(tree_state_fingerprint(self.d), "")
+        self.assertEqual(list(spare.iterdir()), [], "an index copy was left behind")
 
 
 if __name__ == "__main__":
