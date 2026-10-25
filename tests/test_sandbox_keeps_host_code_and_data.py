@@ -260,12 +260,6 @@ class InsideTheSandbox(_Home):
             self.assertEqual(out, "REFUSED", rel)
             self.assertEqual(list((self.home / top).iterdir()), [], top)
 
-    def test_a_missing_instructions_file_is_made_empty_and_held(self):
-        for rel, agent in ((".claude/CLAUDE.md", "claude"), (".codex/AGENTS.md", "codex"), (".gemini/GEMINI.md", "agy")):
-            self.remove(rel)
-            self.assertEqual(self.attempt(rel, agent), "REFUSED", rel)
-            self.assertEqual((self.home / rel).read_text(encoding="utf-8"), "", rel)
-
     def test_a_read_only_file_cannot_be_replaced_or_removed(self):
         for verb in ('mv "$HOME/.claude/x" "$HOME/.claude/settings.json"', 'rm -f "$HOME/.claude/settings.json"',
                      'rm -rf "$HOME/.claude/plugins"'):

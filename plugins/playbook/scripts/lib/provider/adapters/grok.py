@@ -7,7 +7,7 @@ AGENTS.md from the project cwd, reads `.claude/settings.json` hooks, and loads
 installed Claude Code plugins (the playbook plugin's hooks.json shows up in
 `grok inspect` as `file  plugin: playbook`). State lives under ~/.grok/
 (auth.json, sessions/, models_cache.json) — that path must be RW inside the
-judge sandbox (sandbox._HOME_RW_SUBPATHS), or grok dies at startup with
+judge sandbox (sandbox._AGENT_HOME["grok"]), or grok dies at startup with
 FS_PERMISSION_DENIED before reading the prompt.
 
 Headless invocation: `grok -p "<prompt>"` (aliases: --single); prompt is the

@@ -1470,10 +1470,10 @@ class FailureShapeMatrix(unittest.TestCase):
 # ── (j) the sandbox uses agy's real state, in place ──────────────────────────
 class SandboxUsesTheRealCredentials(unittest.TestCase):
     def test_gemini_state_dir_is_bound_read_write_at_its_real_path(self):
-        self.assertIn(".gemini", sandbox._HOME_RW_SUBPATHS)
+        self.assertIn(".gemini", sandbox._AGENT_HOME["agy"])          # agy's run has it (task 308: its own only)
         with tempfile.TemporaryDirectory() as d, \
                 mock.patch.object(Path, "home", return_value=Path(d) / "home"):
-            argv = sandbox.build_bwrap_argv(Path(d) / "proj", None, ["agy"], project_writable=False)
+            argv = sandbox.build_bwrap_argv(Path(d) / "proj", None, ["agy"], project_writable=False, agent="agy")
             real = str(Path(d) / "home" / ".gemini")
         pairs = [(argv[i], argv[i + 1], argv[i + 2]) for i in range(len(argv) - 2)
                  if argv[i] in ("--bind", "--ro-bind")]

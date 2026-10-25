@@ -7056,7 +7056,7 @@
     {
       "id": "PB-JUDGE-READONLY",
       "category": "judges-and-reviews",
-      "statement": "Single and panel judges request a read-only project, and supported OS containment prevents repository writes when available. A claude judge — the panel's seat and, since 1.6.2, the single judge — runs with Read, Glob and Grep only (one constant, `ClaudeAdapter.JUDGE_TOOLS`; task 200, #43), so it has no shell: a `judge_verify` command is not run by it, and its prompt says so. Under the home folder the sandbox leaves writable only each agent's own state folder (`~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok`, `~/.pi`, `~/.omlx`) and playbook's write log; inside them what a later session on the host runs or obeys is bound read-only — the plugins and their install records, the settings files, the user's instructions, the agents' binaries and bundled skills, each shell snapshot that exists at launch, each executable or script at a state folder's top level — Claude Code's folders of that list made empty when missing, and a path of the list that is a link refusing the launch (task 308, audit 4's G3: `~/.local` and `~/.cache` were writable, and a sandboxed agent rewrote the installed plugin's task gate).",
+      "statement": "Single and panel judges request a read-only project, and supported OS containment prevents repository writes when available. A claude judge — the panel's seat and, since 1.6.2, the single judge — runs with Read, Glob and Grep only (one constant, `ClaudeAdapter.JUDGE_TOOLS`; task 200, #43), so it has no shell: a `judge_verify` command is not run by it, and its prompt says so. Under the home folder the sandbox leaves writable only the running agent's own state folder (claude `~/.claude`, codex `~/.codex`, agy `~/.gemini`, grok `~/.grok`, pi `~/.pi` and `~/.omlx`; none with no agent) and playbook's write log; inside it what a later session on the host runs or obeys is bound read-only — the plugins and their install records, the settings files, the user's instructions, the agent's install and bundled skills or extensions, each executable or script at the folder's top level — each folder between them and the state folder bound onto itself first, each shell-snapshot folder a private tmpfs, a missing listed folder made empty, and a listed path or top-level script that is a link, a snapshot folder that is a link, or a listed file with another hard link refusing the launch (task 308, audit 4's G3, and its impl round 1: every agent's folder, `~/.local` and `~/.cache` were writable, and a sandboxed agent rewrote the installed plugin's task gate).",
       "owner": [
         {
           "path": "plugins/playbook/provider/subagent.py",
@@ -7144,7 +7144,17 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Red on nested 912ee0e/e83efd7 (the old binds), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7, or the round-1 code 7945bb0 for the rows impl round 1 added), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_keeps_host_code_and_data.py",
+          "reference": "TheArgv.test_a_run_has_only_its_own_agents_folder_writable",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Red on the old binds (nested e83efd7, or the round-1 code 7945bb0 for the rows impl round 1 added), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7154,7 +7164,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Red on nested 912ee0e/e83efd7 (the old binds), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7, or the round-1 code 7945bb0 for the rows impl round 1 added), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7164,7 +7174,27 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Red on nested 912ee0e/e83efd7 (the old binds), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7, or the round-1 code 7945bb0 for the rows impl round 1 added), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_keeps_host_code_and_data.py",
+          "reference": "TheArgv.test_a_script_or_a_snapshot_folder_that_is_a_link_refuses_the_launch",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Red on the old binds (nested e83efd7, or the round-1 code 7945bb0 for the rows impl round 1 added), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+          ]
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_sandbox_keeps_host_code_and_data.py",
+          "reference": "TheArgv.test_a_protected_file_with_another_hard_link_refuses_the_launch",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": [
+            "Red on the old binds (nested e83efd7, or the round-1 code 7945bb0 for the rows impl round 1 added), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7177,7 +7207,59 @@
             "reference": "InsideTheSandbox.test_control_an_agents_state_is_written"
           },
           "limitations": [
-            "Red on nested 912ee0e/e83efd7 (the old binds), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7, or the round-1 code 7945bb0 for the rows impl round 1 added), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_keeps_host_code_and_data.py",
+          "reference": "InsideTheSandbox.test_another_agents_state_cannot_be_written",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_keeps_host_code_and_data.py",
+            "reference": "InsideTheSandbox.test_control_an_agents_state_is_written"
+          },
+          "limitations": [
+            "Red on the old binds (nested e83efd7, or the round-1 code 7945bb0 for the rows impl round 1 added), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_keeps_host_code_and_data.py",
+          "reference": "InsideTheSandbox.test_a_folder_above_a_read_only_path_cannot_be_moved_aside",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_keeps_host_code_and_data.py",
+            "reference": "InsideTheSandbox.test_control_an_agents_state_is_written"
+          },
+          "limitations": [
+            "Red on the old binds (nested e83efd7, or the round-1 code 7945bb0 for the rows impl round 1 added), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_keeps_host_code_and_data.py",
+          "reference": "InsideTheSandbox.test_a_host_shell_snapshot_is_neither_seen_nor_written",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_keeps_host_code_and_data.py",
+            "reference": "InsideTheSandbox.test_control_an_agents_state_is_written"
+          },
+          "limitations": [
+            "Red on the old binds (nested e83efd7, or the round-1 code 7945bb0 for the rows impl round 1 added), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_sandbox_keeps_host_code_and_data.py",
+          "reference": "InsideTheSandbox.test_a_missing_folder_of_the_list_is_made_empty_and_held",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_sandbox_keeps_host_code_and_data.py",
+            "reference": "InsideTheSandbox.test_control_an_agents_state_is_written"
+          },
+          "limitations": [
+            "Red on the old binds (nested e83efd7, or the round-1 code 7945bb0 for the rows impl round 1 added), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         },
         {
@@ -7190,20 +7272,7 @@
             "reference": "InsideTheSandbox.test_control_an_agents_state_is_written"
           },
           "limitations": [
-            "Red on nested 912ee0e/e83efd7 (the old binds), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_sandbox_keeps_host_code_and_data.py",
-          "reference": "InsideTheSandbox.test_a_missing_claude_folder_is_made_empty_and_held",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_sandbox_keeps_host_code_and_data.py",
-            "reference": "InsideTheSandbox.test_control_an_agents_state_is_written"
-          },
-          "limitations": [
-            "Red on nested 912ee0e/e83efd7 (the old binds), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
+            "Red on the old binds (nested e83efd7, or the round-1 code 7945bb0 for the rows impl round 1 added), green on the fix; the live rows run real bubblewrap with HOME under /var/tmp (a home under /tmp is writable through the sandbox's own /tmp bind), or a `tasks red` row's throwaway HOME."
           ]
         }
       ],
@@ -7224,7 +7293,7 @@
         "2026-10-08: live-platform evidence for macOS/Windows dropped (owner decision, Linux-only); the last version supported there is 1.5.47 (tag `last-multiplatform`, branch `multiplatform`).",
         "2026-10-08 (task 155, Linux-only): the macOS seatbelt backend (build_seatbelt_profile) was deleted; bubblewrap is the only backend.",
         "2026-10-12 (task 184, PLAN S11): claude and codex halves ran live (scenario PB-JUDGE-READONLY). Seen on the way, parked on task 184 after the 1.6.1 release: the SINGLE claude judge runs with every tool (`--dangerously-skip-permissions`, no `--tools` limit; review.py:3097) while the panel's claude seat asks for Read, Glob and Grep only — with bubblewrap the read-only mount refuses the write either way, which is all this row claims; without it (UNCONTAINED, announced) the single claude judge could write. grok's half waits for its tokens: its seat answers out of credit (HTTP 402) until the subscription's tokens return (owner, 2026-10-12: it stays in the panel and comes back by itself); this row flips when it has run, which first needs a grok seat in the live harness — `tests/live/lib/rows_judge.py` has none yet (parked on task 184). — CLOSED by task 200 (#43): the single claude judge's argv carries `--tools Read,Glob,Grep --allowedTools Read,Glob,Grep`, seen by the stand-in `claude` (`tests/test_judge_paths_integration.py`).",
-        "2026-10-25 (task 308): bounds of the home read-only layer — a listed FILE that does not exist at launch is not held (an empty file in its place would change the host; a playbook user always has `~/.claude/settings.json`, which enabling the plugin writes); memory folders under `~/.claude/projects` and new files in a state folder are not judged; a CLI that moves its code or config to a new name needs the name added; on a host where nested user/mount namespaces cannot be prevented (bubblewrap < 0.8.0, compatibility mode) a nested namespace can detach the layer, as for git's sources. Measured 2026-10-25 04:34 EET through the changed launcher: claude, codex, agy and grok each answer (evidence/seats-on-the-fix.txt of task 308)."
+        "2026-10-25 (task 308): bounds of the home read-only layer — a listed FILE missing at launch is not held (an empty one in its place would change the host; a playbook user always has `~/.claude/settings.json`, and a judge seat's CLI has its own settings once signed in); a missing instructions file and the memory folders under `~/.claude/projects` (instructions, not a guard), a name the list does not have, and a listed file the host replaces while the run is under way (its read-only bind goes with the old file) are not covered; on a host where nested user/mount namespaces cannot be prevented (bubblewrap < 0.8.0, compatibility mode) a nested namespace can detach the layer, as for git's sources. A claude judge has no write tools (JUDGE_TOOLS); the layer matters for the shell-holding seats and for `.claude/bin/sandbox`'s worker."
       ],
       "follow_up_phases": [
         2,

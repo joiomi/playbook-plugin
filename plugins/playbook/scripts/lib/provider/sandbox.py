@@ -51,81 +51,118 @@ _BYPASS_FLAGS: dict[str, list[str]] = {
     "grok": ["--always-approve"],
 }
 
-# Home-relative directories that must be writable across all agents.
-# Union of: claude state, codex state, agy's state dir (~/.gemini — bound in place,
-# never copied; its sign-in itself is in the OS keyring, which a sandboxed agy
-# reaches over the D-Bus socket under the read-only root: task 111), omlx server data,
-# pi config, grok state (auth/sessions/leader socket — grok dies at startup
-# with FS_PERMISSION_DENIED if ~/.grok is read-only). Task 308 (audit 4 G3): the
-# generic `.cache` and `.local` are gone — they hold a person's data (keyrings, the
+# Home-relative state folders, by the agent whose run has them writable: claude's,
+# codex's, agy's (~/.gemini — bound in place, never copied; its sign-in itself is in
+# the OS keyring, which a sandboxed agy reaches over the D-Bus socket under the
+# read-only root: task 111), grok's (auth/sessions/leader socket — grok dies at
+# startup with FS_PERMISSION_DENIED if ~/.grok is read-only), pi's config and omlx's
+# server data. Task 308 (audit 4 G3): a run has only ITS agent's folders writable — a
+# codex judge no longer reaches ~/.claude (impl round 1: agy, codex, grok, opus) — and
+# the generic `.cache` and `.local` are gone: they hold a person's data (keyrings, the
 # Trash, mail under ~/.local/share), the commands on PATH (~/.local/bin), the user's
-# Python packages and other programs' code; the write log keeps its own bind.
-_HOME_RW_SUBPATHS: tuple[str, ...] = (
-    ".codex",
-    ".gemini",
-    ".omlx",
-    ".pi",
-    ".grok",
-)
+# Python packages and other programs' code. The write log keeps its own bind.
+_AGENT_HOME: dict[str, tuple[str, ...]] = {
+    "claude": (".claude",),
+    "codex": (".codex",),
+    "agy": (".gemini",),
+    "grok": (".grok",),
+    "pi": (".pi", ".omlx"),
+}
 
-# Task 308 (audit 4 G3): inside those writable state folders (and `~/.claude`), what a
-# later session on the HOST runs or obeys stays read-only — the plugins and their
-# install records, the settings files (hooks, a status line, MCP servers, trusted
-# folders), the user's instructions, the agents' own binaries and bundled skills. A
-# sandboxed agent rewrote the installed plugin's task gate (his blind session,
-# 2026-10-25). Measured 2026-10-25 04:10-04:12 EET: claude, codex and agy each answer
-# with these read-only and no writable ~/.local or ~/.cache. Grok's `config.toml` is
-# not here: grok rewrites it as it runs.
-_HOME_RO_SUBPATHS: tuple[str, ...] = (
-    ".claude/plugins", ".claude/settings.json", ".claude/settings.local.json", ".claude/CLAUDE.md",
-    ".claude/hooks", ".claude/commands", ".claude/agents", ".claude/skills", ".claude/output-styles",
-    ".codex/packages", ".codex/config.toml", ".codex/AGENTS.md", ".codex/rules", ".codex/skills",
-    ".codex/plugins", ".codex/hooks.json",
-    ".gemini/settings.json", ".gemini/GEMINI.md", ".gemini/config", ".gemini/trustedFolders.json",
-    ".gemini/antigravity-cli/bin", ".gemini/antigravity-cli/builtin",
-    ".grok/bin", ".grok/downloads", ".grok/hooks", ".grok/installed-plugins", ".grok/bundled",
+# Task 308: inside those state folders, what a later session on the HOST runs or obeys
+# stays read-only — the plugins and their install records, the settings files (hooks, a
+# status line, MCP servers, trusted folders), the user's instructions, the agents' own
+# binaries, bundled skills and extensions. A sandboxed agent rewrote the installed
+# plugin's task gate (his blind session, 2026-10-25). Measured 2026-10-25: claude, codex,
+# agy and grok each answer with these read-only and no writable ~/.local or ~/.cache.
+# Grok's `config.toml` is not here: grok rewrites it as it runs.
+_HOME_RO_FILES: tuple[str, ...] = (
+    ".claude/settings.json", ".claude/settings.local.json", ".claude/CLAUDE.md",
+    ".codex/config.toml", ".codex/AGENTS.md", ".codex/hooks.json",
+    ".gemini/settings.json", ".gemini/GEMINI.md", ".gemini/trustedFolders.json",
 )
-# Claude Code's folders of the list are made (empty) when missing, so a run cannot
-# create one with a skill, an agent or a command in it. A missing FILE is not held:
-# an empty file in its place would change the host (an empty settings.json is not
-# valid JSON) — and a playbook user always has `~/.claude/settings.json` (enabling
-# the plugin writes it).
+# Folders of the list made, empty, when missing, so a run cannot make one with a skill,
+# an agent, a rule, a hook or a plugin in it (impl round 1: agy, codex, grok).
 _HOME_RO_DIRS_MADE: tuple[str, ...] = (
     ".claude/plugins", ".claude/hooks", ".claude/commands", ".claude/agents", ".claude/skills",
     ".claude/output-styles",
+    ".codex/rules", ".codex/skills", ".codex/plugins",
+    ".gemini/config", ".gemini/extensions",
+    ".grok/hooks", ".grok/installed-plugins", ".grok/bundled",
 )
-# A host session sources its own shell snapshot before every shell call: each one
-# that exists at launch stays read-only (the run still writes new ones).
+# An agent's own install, held only where it is: an empty one made in its place could
+# make the agent's own updater or launcher take it for an install.
+_HOME_RO_DIRS_KEPT: tuple[str, ...] = (
+    ".claude/local", ".codex/packages", ".gemini/antigravity-cli/bin", ".gemini/antigravity-cli/builtin",
+    ".grok/bin", ".grok/downloads",
+)
+# A host session sources its own shell snapshot before every shell call. Each snapshot
+# folder is a private, empty tmpfs in the sandbox: the run writes its own snapshots
+# there, and the host's — those of a session started during the run too — are neither
+# seen nor written (impl round 1, opus).
 _HOME_SNAPSHOT_DIRS: tuple[str, ...] = (".claude/shell-snapshots", ".codex/shell_snapshots")
 _SCRIPT_SUFFIXES = (".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl")
 
 
-def _home_read_only(home: Path) -> "list[str]":
-    """The paths under the agents' writable state folders a run must not change, each that exists at launch:
-    `_HOME_RO_SUBPATHS`, every entry of a shell-snapshot folder, and every regular file at a state folder's top level
-    that is executable or a script (a status line a settings file names). One that is a link cannot be held:
-    bubblewrap cannot bind onto it (measured: the launch fails), and the link itself sits in a folder the run may
-    write, so the run could replace it — the launch is refused, as for git's sources (task 181)."""
-    cands = [home / rel for rel in _HOME_RO_SUBPATHS]
-    for rel in _HOME_SNAPSHOT_DIRS:
-        d = home / rel
-        if d.is_dir() and not d.is_symlink():
-            cands += sorted(d.iterdir())
-    for top in [home / ".claude", *(home / s for s in _HOME_RW_SUBPATHS)]:
-        if top.is_dir() and not top.is_symlink():
-            for p in sorted(top.iterdir()):
-                if not p.is_symlink() and p.is_file() and (p.suffix in _SCRIPT_SUFFIXES or os.access(p, os.X_OK)):
+def _home_refusal(path: Path, why: str) -> RuntimeError:
+    return RuntimeError(f"{path} {why}. Nothing was launched.")
+
+
+def _home_layer(home: Path, folders: "Iterable[str]") -> "tuple[list[str], list[str], list[str]]":
+    """What a run with `folders` (its agent's state folders) writable must not change there: (pins, read-only paths,
+    private snapshot folders), each an absolute path. Read-only: the listed files and folders that exist, and every
+    regular file at a state folder's top level that is executable or a script (a status line a settings file names).
+    Pins: each folder between a state folder and a read-only path or a snapshot folder, bound onto itself first so it
+    cannot be moved aside and replaced (impl round 1: codex, grok, sonnet — as task 181 pins git's places). The launch
+    is refused (RuntimeError) for a listed path or a top-level script that is a link (bubblewrap cannot bind onto it,
+    and the link itself could be replaced), a snapshot folder that is a link, a read-only file with another hard link
+    (writable through that name), and a state folder that cannot be read."""
+    tops = [home / f for f in folders]
+    mine = [t for t in tops if t.is_dir() and not t.is_symlink()]
+
+    def under(rel: str) -> bool:
+        return any(rel == t.name or rel.startswith(t.name + "/") for t in mine)
+
+    cands = [home / rel for rel in (*_HOME_RO_FILES, *_HOME_RO_DIRS_MADE, *_HOME_RO_DIRS_KEPT) if under(rel)]
+    for top in mine:
+        try:
+            entries = sorted(top.iterdir())
+        except OSError as exc:
+            raise _home_refusal(top, f"cannot be read ({exc.strerror or exc})") from None
+        for p in entries:
+            if p.suffix in _SCRIPT_SUFFIXES or (p.is_file() and os.access(p, os.X_OK)):
+                if p.is_symlink() or p.is_file():
                     cands.append(p)
-    out: "list[str]" = []
+    snaps = []
+    for rel in _HOME_SNAPSHOT_DIRS:
+        if under(rel):
+            d = home / rel
+            if d.is_symlink():
+                raise _home_refusal(d, "is a link inside a folder a sandboxed run may write: the run could replace "
+                                       "it, and a session on this machine would source what it names. Replace the "
+                                       "link with a folder")
+            snaps.append(str(d))
+    ro: "list[str]" = []
     for p in cands:
         if p.is_symlink():
-            raise RuntimeError(
-                f"{p} is a link inside a folder a sandboxed run may write: the run could replace the link, and a "
-                "later session on this machine would follow it. Replace the link with the file or folder it names. "
-                "Nothing was launched.")
-        if p.exists() and str(p) not in out:
-            out.append(str(p))
-    return out
+            raise _home_refusal(p, "is a link inside a folder a sandboxed run may write: the run could replace the "
+                                   "link, and a later session on this machine would follow it. Replace the link with "
+                                   "the file or folder it names")
+        if not p.exists() or str(p) in ro:
+            continue
+        if p.is_file() and os.lstat(p).st_nlink > 1:
+            raise _home_refusal(p, "has another hard link: what a sandboxed run writes through that other name "
+                                   "changes this file. Make it a copy of its own")
+        ro.append(str(p))
+    pins: "list[str]" = []
+    for path in [*ro, *snaps]:
+        top = next(t for t in mine if path.startswith(str(t) + "/"))
+        rel = Path(path).relative_to(top).parts[:-1]
+        for i in range(1, len(rel) + 1):
+            d = str(top.joinpath(*rel[:i]))
+            if d not in pins:
+                pins.append(d)
+    return pins, ro, snaps
 
 # Friendly model aliases — collapse "agent + canonical model" into one knob.
 # Loaded from JSON so agents can edit the table without a code release. Model
@@ -711,12 +748,13 @@ def build_bwrap_argv(
     git_sources_writable: bool = False,
     bwrap_exe: str | None = None,
     project_view: "ProjectView | None" = None,
+    agent: "str | None" = None,
 ) -> list[str]:
-    """Generate the bwrap argv: read-only root, bind project + tmp + per-agent
-    home subpaths read-write (each agent's own state folder; what the host runs or
-    obeys inside them read-only again, `_home_read_only` — task 308), bind git_dir —
-    and every other path of git metadata the caller names in `git_readonly`
-    (`_git_paths_to_protect`) — read-only.
+    """Generate the bwrap argv: read-only root, bind project + tmp + the running
+    `agent`'s own state folders under home read-write (`_AGENT_HOME`; none for no
+    agent — what the host runs or obeys inside them read-only again, `_home_layer`,
+    task 308), bind git_dir — and every other path of git metadata the caller names
+    in `git_readonly` (`_git_paths_to_protect`) — read-only.
 
     `git_sources_unanswered` (roots where git could not be asked, or sources that
     could not be resolved: the launch is
@@ -819,22 +857,30 @@ def build_bwrap_argv(
     argv += ["--bind", str(write_log_dir), str(write_log_dir)]
     layers.append((str(write_log_dir), True))
 
-    # Pre-create + bind per-agent home subpaths.
-    for sub in (".claude", *_HOME_RW_SUBPATHS):
+    # Pre-create + bind the running agent's home state folders (task 308: its own only).
+    folders = _AGENT_HOME.get(agent or "", ())
+    for sub in folders:
         target = home / sub
         target.mkdir(parents=True, exist_ok=True)
         argv += ["--bind", str(target), str(target)]
         layers.append((str(target), True))
     # ...and, laid over them, what the host runs or obeys later (task 308) — before the project bind, so a project
-    # inside one of them still has its own
+    # inside one of them still has its own: the folders above each kept path pinned onto themselves, the kept paths
+    # read-only, each snapshot folder a private tmpfs. A listed folder that is missing is made first, empty; a missing
+    # FILE is not (an empty settings file is not valid; a missing instructions file is a stated bound, as memory is).
     for sub in _HOME_RO_DIRS_MADE:
-        try:
-            (home / sub).mkdir(exist_ok=True)
-        except FileExistsError:                         # a link or a file there: `_home_read_only` judges it
-            pass
-    for path in _home_read_only(home):
+        if sub.split("/")[0] in folders and not os.path.lexists(home / sub):
+            (home / sub).mkdir(parents=True, exist_ok=True)       # a link or a file there: `_home_layer` judges it
+    pins, kept, snaps = _home_layer(home, folders)
+    for path in pins:
+        argv += ["--bind", path, path]
+        layers.append((path, True))
+    for path in kept:
         argv += ["--ro-bind", path, path]
         layers.append((path, False))
+    for path in snaps:
+        argv += ["--tmpfs", path]
+        layers.append((path, True))
 
     # Ancestor pins go here: later project binds and record masks must win over
     # them. Pinning a /tmp ancestor after a judge's project would expose it again.
@@ -1661,7 +1707,7 @@ def _launch_plan(
                                 git_sources=sources, git_sources_missing=absent,
                                 git_source_links=links, git_sources_unanswered=unanswered,
                                 git_sources_writable=git_sources_writable, bwrap_exe=exe,
-                                project_view=project_view)
+                                project_view=project_view, agent=agent)
         return [exe, *argv[1:]], True     # by absolute path: the launch runs in the project
     if require_containment:
         raise RuntimeError(launch_refusal() or (

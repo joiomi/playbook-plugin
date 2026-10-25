@@ -20,12 +20,14 @@ Invariants:
 
 Run: python3 tests/test_sandbox_bind_order.py
 """
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "plugins/playbook"))
@@ -72,13 +74,19 @@ class BindOrder(unittest.TestCase):
         # `Library` entry survived the macOS backend's removal, so every Linux launch
         # created ~/Library and mounted it writable. The writable home subpaths
         # are an allowlist: the agents' state dirs, no more. Task 308 (audit 4 G3): the generic `.cache` and `.local`
-        # left it — they hold a person's data and other programs' code; the write log keeps its own bind.
-        home = str(Path.home())
-        argv = self._argv(str(Path(tempfile.mkdtemp()).resolve()))
-        binds = {argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--bind"}
-        under_home = sorted(b[len(home) + 1:] for b in binds if b.startswith(home + "/"))
-        self.assertEqual(under_home, sorted([".claude", ".codex", ".gemini", ".grok",
-                                             ".local/share/playbook", ".omlx", ".pi"]))
+        # left it — they hold a person's data and other programs' code; the write log keeps its own bind — and a run
+        # has only ITS agent's folders (impl round 1). Built with a temporary HOME: the launcher makes what it binds.
+        with tempfile.TemporaryDirectory() as h, mock.patch.dict(os.environ, {"HOME": h}):
+            home = str(Path(h))
+            proj = str(Path(tempfile.mkdtemp(dir=h)).resolve())
+            for agent, want in (("claude", [".claude"]), ("codex", [".codex"]), ("agy", [".gemini"]),
+                                ("grok", [".grok"]), ("pi", [".omlx", ".pi"]), (None, [])):
+                argv = build_bwrap_argv(proj, None, ["true"], None, project_writable=False, agent=agent)
+                binds = {argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--bind"}
+                under_home = sorted(b[len(home) + 1:] for b in binds if b.startswith(home + "/"))
+                self.assertIn(".local/share/playbook", under_home, agent)
+                tops = sorted({b.split("/")[0] for b in under_home if not b.startswith(".local/")})
+                self.assertEqual(tops, want, agent)
 
     def test_extra_rw_after_project(self):
         proj = Path(tempfile.mkdtemp()).resolve()
