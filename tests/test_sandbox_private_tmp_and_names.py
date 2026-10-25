@@ -171,6 +171,50 @@ class InsideTheSandbox(t308._Home):
         self.assertEqual(r.stdout.split(), ["from-tmp", "REFUSED", "TMP-WRITABLE"], r.stderr)
         self.assertFalse((bindir / "w").exists())
 
+    def _plan(self, script, project, writable, env=None):
+        # the REAL launch plan (its git places, its pins) with a shell in the agent's place, wrapped even under a
+        # `tasks red` row, which is a sandbox itself
+        from provider import sandbox
+        with mock.patch.object(sandbox, "_compose_agent_argv", lambda agent, args: list(args)), \
+                mock.patch.object(sandbox, "is_sandboxed", return_value=False):
+            if env is None:
+                return sandbox._wrapped_argv("claude", ["sh", "-c", script], project, None, writable)
+            return sandbox.run("claude", ["sh", "-c", script], project, env=env, project_writable=writable,
+                               capture_output=True, text=True, timeout=60)
+
+    def test_the_folders_above_a_git_project_under_tmp_are_not_the_hosts(self):
+        # impl round 1 (opus, sonnet; codex Critical): /tmp still counted as a writable layer, so the folders between
+        # it and the project's .git were bound onto themselves — the HOST's folders, writable, their files seen
+        deep = _tmp_dir(self, "pb315-deep-")
+        proj = deep / "a" / "proj"
+        proj.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(proj)], check=True)
+        (deep / "a" / "host-file").write_text("host\n", encoding="utf-8")
+        for writable in (False, True):
+            new = deep / "a" / f"new-{int(writable)}"
+            argv = self._plan(f'cat "{deep}/a/host-file" 2>/dev/null || echo UNSEEN; printf x > "{new}" && echo WROTE',
+                              proj, writable)
+            if Path(argv[0]).name != "bwrap":
+                self.skipTest("the launch plan is not a bubblewrap one here")
+            r = self._run(argv)
+            self.assertEqual(r.stdout.split(), ["UNSEEN", "WROTE"], (writable, r.stderr))
+            self.assertFalse(new.exists(), writable)
+
+    def test_a_child_environment_s_own_tmpdir_and_path_folder_are_there(self):
+        # impl round 1 (codex): the TMPDIR and the PATH folders were read from the launcher's environment, while
+        # run() hands the child its own — a stand-in on the child's PATH vanished and the next one on PATH ran
+        bindir = _tmp_dir(self, "pb315-cbin-")
+        (bindir / "pb315child").write_text("#!/bin/sh\necho from-child-path\n", encoding="utf-8")
+        (bindir / "pb315child").chmod(0o755)
+        tmpdir = _tmp_dir(self, "pb315-ctmp-") / "t"
+        tmpdir.mkdir()
+        env = dict(os.environ, HOME=str(self.home), PATH=f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
+                   TMPDIR=str(tmpdir))
+        r = self._plan('pb315child; f=$(mktemp) && echo "$f"', self.proj, True, env=env)
+        out = r.stdout.split()
+        self.assertEqual(out[:1], ["from-child-path"], r.stdout + r.stderr)
+        self.assertTrue(len(out) > 1 and out[1].startswith(f"{tmpdir}/"), r.stdout + r.stderr)
+
     def _made_and_held(self, agent):
         for rel in [*FILES[agent], *FOLDERS[agent]]:
             if os.path.lexists(self.home / rel):
