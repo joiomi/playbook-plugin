@@ -26,7 +26,7 @@ sys.path.insert(0, str(ROOT / "plugins" / "playbook"))
 from tasks.core import tree_state_fingerprint  # noqa: E402
 
 
-class TheFingerprint(unittest.TestCase):
+class _Repo(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -49,6 +49,8 @@ class TheFingerprint(unittest.TestCase):
         self.assertTrue(got, "no fingerprint")
         return got
 
+
+class TheFingerprint(_Repo):
     def change_under(self, bit: str):
         self.git("update-index", bit, "app.py")
         reviewed = self.fp()
@@ -65,7 +67,8 @@ class TheFingerprint(unittest.TestCase):
     def test_control_no_bit_is_as_before(self):
         # the formula of before this task, written out independently (as test_panel_freshness_gate's oracle is)
         def oracle():
-            exclude = [":(exclude).agent"]
+            from tasks.core import _fingerprint_exclude_pathspecs
+            exclude = _fingerprint_exclude_pathspecs({})          # impl round 1 (sonnet): not by hand
             head = self.git("rev-parse", "HEAD").strip()
             porcelain = self.git("status", "--porcelain", "-uall", "--ignore-submodules=none", "--", ".", *exclude)
             diff = self.git("diff", "--ignore-submodules=none", "HEAD", "--", ".", *exclude)
@@ -133,6 +136,63 @@ class TheFingerprint(unittest.TestCase):
         self.git("update-index", "--assume-unchanged", "app.py")
         with mock.patch.object(core.subprocess, "run", run):
             self.assertEqual(tree_state_fingerprint(self.d), "", "a failed index listing read as no index bit")
+
+
+class TheStaleCloseReadersToo(_Repo):
+    """Impl round 1 (opus Critical; codex, reproduced twice): the close's other readers of the working tree — the dirty
+    map tail certification is built from, and the tree the post-panel judge and the review copy read — saw no
+    change under a bit either; and the fingerprint missed a chmod and a same-size edit over 5 MiB."""
+
+    def test_the_dirty_map_names_a_changed_file_under_a_bit(self):
+        from tasks.core import _dirty_path_content_map, _fingerprint_exclude_pathspecs
+        exclude = _fingerprint_exclude_pathspecs({})
+        for bit in ("--assume-unchanged", "--skip-worktree"):
+            self.git("update-index", bit, "app.py")
+            self.app.write_text("def f():\n    return 5\n", encoding="utf-8")
+            (self.d / "README.md").write_text("docs\n", encoding="utf-8")
+            dirty = _dirty_path_content_map(self.d, exclude)
+            self.assertIn("app.py", dirty or {}, f"{bit}: the delta would read docs-only")
+            self.git("update-index", bit.replace("--", "--no-"), "app.py")
+            self.git("checkout", "--", "app.py")
+            (self.d / "README.md").unlink()
+
+    def test_the_working_tree_object_holds_a_changed_file_under_a_bit(self):
+        from tasks.core import _fingerprint_exclude_pathspecs
+        from tasks.post_d6 import worktree_tree
+        exclude = _fingerprint_exclude_pathspecs({})
+        for bit in ("--assume-unchanged", "--skip-worktree"):
+            self.git("update-index", bit, "app.py")
+            before = worktree_tree(self.d, exclude)
+            self.app.write_text("def f():\n    return 6\n", encoding="utf-8")
+            after = worktree_tree(self.d, exclude)
+            self.assertTrue(before and after)
+            self.assertNotEqual(after, before, f"{bit}: the post-panel tree left the change out")
+            blob = self.git("rev-parse", f"{after}:app.py").strip()
+            self.assertEqual(self.git("cat-file", "-p", blob), "def f():\n    return 6\n")
+            self.git("update-index", bit.replace("--", "--no-"), "app.py")
+            self.git("checkout", "--", "app.py")
+
+    def test_a_mode_change_under_a_bit_moves_the_fingerprint(self):
+        self.git("update-index", "--assume-unchanged", "app.py")
+        reviewed = self.fp()
+        self.app.chmod(0o755)
+        self.assertNotEqual(self.fp(), reviewed, "a chmod under the bit read FRESH")
+
+    def test_a_same_size_edit_of_a_large_marked_file_moves_the_fingerprint(self):
+        big = self.d / "big.py"
+        big.write_bytes(b"x = 1\n" + b"#" * (5 * 1024 * 1024 + 100) + b"\n")
+        self.git("add", "big.py")
+        self.git("commit", "-qm", "big")
+        self.git("update-index", "--assume-unchanged", "big.py")
+        reviewed = self.fp()
+        data = big.read_bytes()
+        big.write_bytes(b"x = 2" + data[5:])                     # the same size
+        self.assertNotEqual(self.fp(), reviewed, "a same-size edit over 5 MiB read FRESH")
+
+    def test_marking_an_unchanged_file_leaves_the_fingerprint_as_it_was(self):
+        clean = self.fp()
+        self.git("update-index", "--assume-unchanged", "app.py")
+        self.assertEqual(self.fp(), clean, "the bit alone made a spurious STALE")
 
 
 if __name__ == "__main__":
