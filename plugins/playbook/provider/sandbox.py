@@ -204,16 +204,19 @@ def _home_layer(home: Path, folders: "Iterable[str]",
             return                                      # not measured: stays writable (pi, omlx)
         for p in entries(d):
             sub = f"{rel}/{p.name}"
-            if p in private or _PUBLISH_TMP_RE.fullmatch(p.name):
-                continue                                # a launch's own temporary name: gone in a moment
-            if sub in _HOME_WRITES:                     # a mixed folder: pinned, then judged inside
+            if p in private:
+                continue
+            # a temporary name of `_publish_new` there now: read-only like any kept entry, whatever the allow-list says —
+            # a launch killed between its link and its unlink leaves one for good (post-panel run 3, opus)
+            tmp_name = _PUBLISH_TMP_RE.fullmatch(p.name) is not None
+            if sub in _HOME_WRITES and not tmp_name:    # a mixed folder: pinned, then judged inside
                 if p.is_symlink():
                     raise _home_refusal(p, _LINK_WHY)
                 if p.is_dir():
                     pins.append(str(p))
                     judge(sub)
                     continue                            # not a folder (impl round 3, agy): held as it is
-            if any(fnmatch.fnmatchcase(p.name, pat) for pat in allow):
+            if not tmp_name and any(fnmatch.fnmatchcase(p.name, pat) for pat in allow):
                 continue
             if p.is_symlink():
                 raise _home_refusal(p, _LINK_WHY)
@@ -241,29 +244,33 @@ def _home_layer(home: Path, folders: "Iterable[str]",
         are, outside the kept paths."""
         return inside(path, later) or (inside(path, writable) and not inside(path, kept))
 
-    def through_a_replaceable_link(path: str) -> bool:
-        """Does `path`, unresolved, pass through a folder that is a link sitting in a place the run may write?
-        The run could re-point that link (post-panel run 1, codex: `~/.claude/cache` → elsewhere)."""
+    def through_a_replaceable_link(path: str, hops: "list[int]") -> bool:
+        """Does `path`, unresolved, pass through a folder that is a link sitting in a place the run may write, or
+        whose own chain does? The run could re-point that link (post-panel run 1, codex: `~/.claude/cache` →
+        elsewhere; run 3, opus: `a` → `~/.claude/cache`, `a` itself in a read-only place)."""
         parts = Path(path).parts
         for k in range(2, len(parts)):
             pre = os.path.join(*parts[:k])
-            if os.path.islink(pre) and in_writable(os.path.join(real(os.path.dirname(pre)), os.path.basename(pre))):
+            if os.path.islink(pre) and (in_writable(os.path.join(real(os.path.dirname(pre)), os.path.basename(pre)))
+                                        or leads_out(pre, hops)):
                 return True
         return False
 
-    def leads_out(link: str) -> bool:
+    def leads_out(link: str, hops: "list[int] | None" = None) -> bool:
         """Does the chain of links from `link` pass through, or end in, a place the run may write? Each hop's own
         place is judged, not only the end (impl round 3, opus: a link in a writable place on the way can be
-        replaced)."""
+        replaced), and so is each folder on the way that is a link; `hops` is the budget they share."""
+        hops = [40] if hops is None else hops
         cur = link
-        for _ in range(40):
+        while hops[0] > 0:
+            hops[0] -= 1
             try:
                 t = os.readlink(cur)
             except OSError:
                 return False                            # not a link (any more): the chain ends here
             nxt = t if os.path.isabs(t) else os.path.join(os.path.dirname(cur), t)
             nxt = nxt.rstrip("/") or "/"                # `cache/` names `cache` itself (post-panel run 2, codex)
-            if through_a_replaceable_link(nxt):
+            if through_a_replaceable_link(nxt, hops):
                 return True
             nxt = os.path.join(real(os.path.dirname(nxt)), os.path.basename(nxt))
             if in_writable(nxt):
@@ -279,14 +286,15 @@ def _home_layer(home: Path, folders: "Iterable[str]",
     # ~/.claude/jobs here). Links there are: one that leads into a writable place of the run would let it write
     # what the host then reads (impl round 2, codex).
     import stat as _stat
+    kept_tmp = {r for r in ro if _PUBLISH_TMP_RE.fullmatch(os.path.basename(r))}
     for path in ro:
         try:
             st = os.lstat(path)
         except FileNotFoundError:
             continue                                    # gone between the listing and the look
         if _stat.S_ISREG(st.st_mode) and st.st_nlink > 1:
-            try:                                        # another launch's temporary name for it is not another name
-                mid = sum(1 for e in os.scandir(os.path.dirname(path)) if _PUBLISH_TMP_RE.fullmatch(e.name)
+            try:                                        # another launch's temporary name for it is not another name:
+                mid = sum(1 for e in os.scandir(os.path.dirname(path)) if e.path in kept_tmp   # read-only too
                           and e.inode() == st.st_ino and not e.is_symlink())
             except OSError:
                 mid = 0
@@ -1021,8 +1029,9 @@ def build_bwrap_argv(
         layers.append((str(target), True))
     # ...and, laid over them, what the host runs or obeys later (task 308) — before the project bind, so a project
     # inside one of them still has its own: the folders above each kept path pinned onto themselves, the kept paths
-    # read-only, each snapshot folder a private tmpfs. A listed folder that is missing is made first, empty; a missing
-    # FILE is not (an empty settings file is not valid; a missing instructions file is a stated bound, as memory is).
+    # read-only, each snapshot folder a private tmpfs. A listed folder that is missing is made first, empty; so is a
+    # hook source of `_HOME_FILES_MADE`, whole or not at all (`_publish_new`). Any other missing file is not (a
+    # missing instructions file is a stated bound, as memory is).
     for sub in _HOME_RO_DIRS_MADE:
         if sub.split("/")[0] in folders and not os.path.lexists(home / sub):
             (home / sub).mkdir(parents=True, exist_ok=True)       # a link or a file there: `_home_layer` judges it
@@ -1037,7 +1046,8 @@ def build_bwrap_argv(
     for path in kept:
         # `-try`: a file the host rewrites by renaming a new one over it (Claude Code's daemon.status.json, many
         # times a minute) can be gone at the instant bubblewrap mounts it, and a plain bind then failed the whole
-        # launch (verify, 2026-10-25 06:30). The path then holds what replaced it, read-only too
+        # launch (verify, 2026-10-25 06:30). A path that is there at the mount is held read-only, whatever replaced
+        # it; one that is missing at that instant is not held (docs/architecture.md: a stated bound)
         argv += ["--ro-bind-try", path, path]
         layers.append((path, False))
     for path in snaps:
