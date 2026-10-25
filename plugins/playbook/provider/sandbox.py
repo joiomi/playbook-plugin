@@ -118,6 +118,13 @@ _HOME_RO_DIRS_MADE: tuple[str, ...] = (
     ".grok/agents",
     # codex's mixed folders, pinned only when they existed (post-panel run 4, opus): its plugin copy holds hooks
     ".codex/.tmp", ".codex/.tmp/plugins", ".codex/app-server-daemon",
+    # task 315: what each agent looked up at the top of its folder and did not find (strace, 308's evidence) — Claude
+    # Code's user rules, saved workflows (scripts) and UI mods (a hooks module); codex's manifests that make a folder a
+    # plugin, and its instructions override, a FOLDER: an empty override file hides `AGENTS.md` (measured), a folder is
+    # passed over; grok's personas and roles (prompts)
+    ".claude/rules", ".claude/workflows", ".claude/dev-mods",
+    ".codex/AGENTS.override.md", ".codex/.codex-plugin", ".codex/.claude-plugin", ".codex/.cursor-plugin",
+    ".grok/personas", ".grok/roles",
 )
 # What a host session sources before its shell calls: the shell snapshots, and Claude
 # Code's per-session environment scripts (`session-env/<id>/sessionstart-hook-*.sh` —
@@ -140,21 +147,34 @@ _HOME_FILES_MADE: dict[str, str] = {
     ".codex/app-server-daemon/settings.json": "{}\n",
     ".gemini/settings.json": "{}\n",
     ".gemini/antigravity-cli/settings.json": "{}\n",
+    # task 315: the instructions files and configs an agent looked up and did not find (strace, 308's evidence). Empty
+    # instructions add nothing beside the others (measured: claude, agy); an empty TOML names no environment.
+    ".claude/CLAUDE.md": "",
+    ".claude/AGENTS.md": "",
+    ".claude/.config.json": "",         # Claude Code's global config when it has content (its `mcpServers` run)
+    ".codex/AGENTS.md": "",
+    ".codex/environments.toml": "",
+    ".gemini/AGENTS.md": "",
+    ".gemini/hooks.json": "{}\n",
+    ".gemini/antigravity-cli/hooks.json": "{}\n",
 }
+# Made with no write bit: Claude Code takes `.config.json` as its global config when it has content, or has a write bit
+# while `~/.claude.json` is missing (task 315, read in its program): an empty one with no write bit never is.
+_HOME_FILES_UNWRITABLE: frozenset[str] = frozenset({".claude/.config.json"})
 
 
 # The temporary name `_publish_new` gives a file it is making: transient, a launch's own (post-panel run 2, codex).
 _PUBLISH_TMP_RE = re.compile(r"\..+\.playbook-[0-9]+-[0-9a-f]{12}")
 
 
-def _publish_new(path: Path, text: str) -> None:
+def _publish_new(path: Path, text: str, mode: int = 0o644) -> None:
     """Make `path` with `text`, whole or not at all, and never over a file that is there (post-panel run 1, codex: made
     empty and written after, a crash between left an empty settings file for good). Written to a temporary name of its
     own beside it, then linked to `path` — link(2) fails where anything is — and the temporary name removed."""
     # a name of this call's own: a panel launches its seats side by side in one process (verify, 2026-10-25 06:35 —
     # the pid alone collided)
     tmp = path.with_name(f".{path.name}.playbook-{os.getpid()}-{os.urandom(6).hex()}")
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, mode)
     try:
         try:
             os.write(fd, text.encode("utf-8"))
@@ -169,7 +189,17 @@ def _publish_new(path: Path, text: str) -> None:
         os.unlink(tmp)
 
 
-# task 315 step: the base its late rows 5-7 are proved on (code changed, behavior not)
+def _under_tmp(paths: "Iterable[str]") -> "list[str]":
+    """The absolute paths below /tmp (not /tmp itself) among `paths`, normalized, each once, in order."""
+    out: "list[str]" = []
+    for p in paths:
+        if os.path.isabs(p):
+            n = os.path.normpath(p)
+            if n.startswith("/tmp/") and n not in out:
+                out.append(n)
+    return out
+
+
 def _home_refusal(path: Path, why: str) -> RuntimeError:
     return RuntimeError(f"{path} {why}. Nothing was launched.")
 
@@ -187,7 +217,7 @@ def _home_layer(home: Path, folders: "Iterable[str]",
     one level down. Private: `_HOME_PRIVATE`. The launch is refused (RuntimeError) for a state folder, a read-only
     entry, a pin or a private folder that is a link (bubblewrap cannot bind onto it, and the link itself could be
     replaced), a private path that is not a folder, a read-only file with another hard link, a link inside a
-    read-only folder whose chain passes through or ends in a writable place of the run (`/tmp`, a state folder,
+    read-only folder whose chain passes through or ends in a writable place of the run (a state folder,
     `also_writable`: the write log, the extra writable paths, a writable project — impl round 3: agy, codex, grok,
     opus), and a folder that cannot be read (impl round 2: codex). Places are compared resolved (impl round 3, agy:
     a `/home` that is itself a link)."""
@@ -241,7 +271,7 @@ def _home_layer(home: Path, folders: "Iterable[str]",
         if os.path.lexists(d) and not d.is_dir():
             raise _home_refusal(d, "is not a folder, where a sandboxed run keeps a private one")
     real = os.path.realpath
-    writable = [real(w) for w in ("/tmp", *(str(t) for t in mine), *also_writable)]
+    writable = [real(w) for w in (*(str(t) for t in mine), *also_writable)]     # /tmp is the run's own (task 315)
     kept = [real(r) for r in ro]
 
     def inside(path: str, places: "list[str]") -> bool:
@@ -251,8 +281,8 @@ def _home_layer(home: Path, folders: "Iterable[str]",
 
     def in_writable(path: str) -> bool:
         """Is `path` (its folders resolved) writable in the run? An extra writable path, a writable project or the
-        write log always is (post-panel run 1, codex: bound after a kept path, it wins); /tmp and the state folder
-        are, outside the kept paths."""
+        write log always is (post-panel run 1, codex: bound after a kept path, it wins); the state folder is, outside
+        the kept paths. /tmp is not: it is the run's own (task 315)."""
         return inside(path, later) or (inside(path, writable) and not inside(path, kept))
 
     roots = {*writable, *later, *(real(p) for p in pins)}   # mount points: a run cannot move them aside
@@ -1025,8 +1055,17 @@ def build_bwrap_argv(
     # still governed by its own bind. The original order bound the project
     # first and /tmp second, which silently re-exposed a /tmp-resident project
     # read-write in judge mode — found by an empirical spike, 2026-08-13.
-    argv += ["--bind", "/tmp", "/tmp"]
+    # Task 315: /tmp is the run's own, empty — what the host keeps there is neither seen nor written (a kept link into
+    # it then leads nowhere the run can write: Chrome's singleton links refused every claude launch). The launch's
+    # temporary folder under /tmp is made in it, and its PATH folders under /tmp are bound read-only, so the programs
+    # the host's PATH names there are the ones the run finds.
+    argv += ["--tmpfs", "/tmp"]
     layers.append(("/tmp", True))
+    for d in _under_tmp(os.environ.get(v, "") for v in ("TMPDIR", "TMP", "TEMP")):
+        argv += ["--dir", d]
+    for d in _under_tmp(os.environ.get("PATH", "").split(os.pathsep)):
+        argv += ["--ro-bind-try", d, d]
+        layers.append((d, False))
 
     write_log_dir = home / ".local" / "share" / "playbook"
     write_log_dir.mkdir(parents=True, exist_ok=True)
@@ -1060,7 +1099,8 @@ def build_bwrap_argv(
     for sub, empty in _HOME_FILES_MADE.items():
         if (sub.split("/")[0] in folders and not os.path.lexists(home / sub)
                 and (home / sub).parent.is_dir() and _no_link_above(sub)):
-            _publish_new(home / sub, empty)     # agy's `antigravity-cli` missing: agy is not installed, none is made
+            _publish_new(home / sub, empty,     # agy's `antigravity-cli` missing: agy is not installed, none is made
+                         0o444 if sub in _HOME_FILES_UNWRITABLE else 0o644)
     pins, kept, snaps = _home_layer(home, folders, [str(write_log_dir), *rw_paths,
                                                      *([project] if project_writable else [])])
     for path in pins:

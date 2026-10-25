@@ -830,10 +830,19 @@ class _TempPath:
     Usable as a context manager (unlink on normal exit, exception AND
     SystemExit) or via `keep_until_exit()` (atexit-registered unlink for the
     long single-review body whose exits are `sys.exit` calls). `cleanup()` is
-    idempotent — the success path may unlink first."""
+    idempotent — the success path may unlink first. `own_folder`: the file is
+    made in a fresh folder of its own (`self.folder`), removed with it — a
+    folder a sandboxed run can be given writable (task 315: its /tmp is its
+    own, so a file the host made there is not the one the run writes)."""
 
-    def __init__(self, suffix: str = ""):
+    def __init__(self, suffix: str = "", own_folder: bool = False):
         import tempfile as _tempfile
+        self.folder: "Path | None" = None
+        if own_folder:
+            self.folder = Path(_tempfile.mkdtemp(prefix="pb-judge-"))
+            self.path = self.folder / f"out{suffix}"
+            self.path.touch()
+            return
         fd, p = _tempfile.mkstemp(suffix=suffix)
         os.close(fd)
         self.path = Path(p)
@@ -850,6 +859,8 @@ class _TempPath:
             self.path.unlink()
         except OSError:
             pass
+        if self.folder is not None:
+            shutil.rmtree(self.folder, ignore_errors=True)
 
     def keep_until_exit(self) -> Path:
         """Own the file for the rest of the command: the long single-review body
@@ -3773,13 +3784,15 @@ def _cmd_single_review(cmd, cmd_args):
 
         # Under the read-only judge sandbox (project_writable=False), codex
         # cannot write its `-o` transcript into the project tree. Point `-o`
-        # at a temp file — system temp (/tmp, /var/folders) stays writable
-        # under bwrap — and copy it into the task dir from
-        # the parent, after the tamper check (see the save block below).
+        # at a temp file in a folder of its own, which the sandbox makes
+        # writable for the run (its /tmp is private: task 315), and copy it
+        # into the task dir from the parent, after the tamper check (see the
+        # save block below).
         # Owned from allocation to process exit (task 059 / T008 #5): every
         # `sys.exit` below (timeout / budget / dead-pin / tamper) and any
         # exception before the spawn used to orphan this file.
-        codex_log = _TempPath(suffix="-judge-codex.log").keep_until_exit()
+        codex_tmp = _TempPath(suffix="-judge-codex.log", own_folder=True)
+        codex_log = codex_tmp.keep_until_exit()
         # Bypass flag (--dangerously-bypass-approvals-and-sandbox) inserted
         # after `exec` by provider.sandbox._compose_agent_argv.
         codex_args = ["exec"]
@@ -3809,6 +3822,7 @@ def _cmd_single_review(cmd, cmd_args):
                 project_root=project_path,
                 project_view=_pview,     # task 231: the review's fixed copy at the project path
                 project_writable=False,   # judge is read-only — cannot mutate repo/task.md
+                extra_rw=[str(codex_tmp.folder)],   # its `-o` message only
                 env=codex_env,
                 input=full_prompt,
                 capture_output=True,

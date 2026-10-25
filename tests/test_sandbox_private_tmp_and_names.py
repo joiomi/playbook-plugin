@@ -159,12 +159,16 @@ class InsideTheSandbox(t308._Home):
         prog = bindir / "pb315prog"
         prog.write_text("#!/bin/sh\necho from-tmp\n", encoding="utf-8")
         prog.chmod(0o755)
-        path = f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"
+        # /tmp itself (bound, it would make the run's /tmp read-only), a relative entry and a look-alike are not bound;
+        # the program's folder is, once (my mutant run, 23:10: `/tmp` itself counted survived)
+        path = os.pathsep.join(["/tmp", "/tmp/", "pb315rel", "/tmpx", str(bindir), f"{bindir}/",
+                                os.environ.get("PATH", "")])
         with mock.patch.dict(os.environ, {"PATH": path}):
             argv = self.argv(["bash", "-c", f'pb315prog; printf x > "{bindir}/w" 2>/dev/null && echo WROTE || '
-                                            f'echo REFUSED'])
+                                            f'echo REFUSED; printf x > /tmp/pb315-w && echo TMP-WRITABLE'])
+        self.assertEqual([d for a, d in _pairs(argv) if a == "--ro-bind-try" and d.startswith("/tmp")], [str(bindir)])
         r = self._run(argv, {"PATH": path})
-        self.assertEqual(r.stdout.split(), ["from-tmp", "REFUSED"], r.stderr)
+        self.assertEqual(r.stdout.split(), ["from-tmp", "REFUSED", "TMP-WRITABLE"], r.stderr)
         self.assertFalse((bindir / "w").exists())
 
     def _made_and_held(self, agent):
@@ -226,14 +230,22 @@ class TheCodexSingleJudge(unittest.TestCase):
         review._PB_JOURNAL_MOD = None
         review._PB_JOURNAL_LOADED = False
         self.log = tdir / "judge-codex.log"
+        home = self.project / "home"                                 # never the real HOME
+        home.mkdir()
+        patcher = mock.patch.dict(os.environ, {"HOME": str(home)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def test_the_message_folder_is_writable_for_the_run(self):
         from provider import sandbox
         stdout = _codex_ok()
 
+        given = []
+
         def _run(agent, args, **kw):
             out = args[args.index("-o") + 1]
             rw = [os.path.realpath(p) for p in (kw.get("extra_rw") or [])]
+            given.extend(rw)
             if any(os.path.realpath(out).startswith(p.rstrip("/") + "/") for p in rw):
                 Path(out).write_text("FINAL MESSAGE\n", encoding="utf-8")
             return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="", args=list(args))
@@ -246,6 +258,8 @@ class TheCodexSingleJudge(unittest.TestCase):
                 contextlib.suppress(SystemExit):
             self.review.cmd_single_review("plan-review", ["042", "--backend", "codex", "--model", "gpt-5.6-sol:medium"])
         self.assertIn("FINAL MESSAGE", self.log.read_text(encoding="utf-8") if self.log.exists() else "")
+        self.assertTrue(given)
+        self.assertEqual([p for p in given if os.path.lexists(p)], [])   # the review removed the folder
 
 
 @unittest.skipUnless(shutil.which("bwrap"), "no bubblewrap here")
@@ -265,6 +279,13 @@ class TheRedRows(t308._Home):
         self.assertEqual([b for a, b in _pairs(argv) if a == "--tmpfs" and b == "/tmp"], ["/tmp"], argv)
         self.assertNotIn(("--bind", "/tmp"), _pairs(argv))
         self.assertNotIn(("--ro-bind", str(live)), _pairs(argv))
+        # …and a launcher argv with /tmp shared is refused, never run (my mutant run, 23:25: the check removed survived)
+        from provider import sandbox
+        shared = ["bwrap", "--ro-bind", "/", "/", "--bind", "/tmp", "/tmp", "--bind", str(root), str(root),
+                  "/bin/bash", "-c", "true"]
+        with mock.patch.object(sandbox, "build_bwrap_argv", lambda *a, **k: list(shared)):
+            with self.assertRaises(RuntimeError):
+                red._argv("/bin/bash", "true", root, self.home, True)
 
 
 if __name__ == "__main__":

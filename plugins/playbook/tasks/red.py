@@ -522,12 +522,12 @@ def _containment() -> "tuple[bool, str]":
     return True, ""
 
 
-def _argv(bash: str, cmd: str, root: Path, home: Path, contained: bool, private_tmp: bool = False,
-          ro_links: "list[tuple[str, str]] | None" = None, protect: "list[str] | None" = None) -> "list[str]":
-    """The row's argv. Contained: the judges' bubblewrap launch, plus `--die-with-parent` (a killed run takes its row
-    with it, impl round 1 opus), a private `/tmp` when the run's folder is not under it (a live project under `/tmp`
-    must not be writable from a row — impl round 1, agy and codex, GRAVE), and each `red_links` folder bound read-only
-    into the copy."""
+def _argv(bash: str, cmd: str, root: Path, home: Path, contained: bool,
+          ro_links: "list[tuple[str, str]] | None" = None) -> "list[str]":
+    """The row's argv. Contained: the judges' bubblewrap launch, whose `/tmp` is the run's own (a live project under
+    `/tmp` must not be writable from a row — impl round 1, agy and codex, GRAVE; the launcher's own since task 315),
+    plus `--die-with-parent` (a killed run takes its row with it, impl round 1 opus) and each `red_links` folder bound
+    read-only into the copy."""
     if not contained:
         return [bash, "-c", cmd]
     argv = _launcher_argv(bash, cmd, root, home)
@@ -536,18 +536,8 @@ def _argv(bash: str, cmd: str, root: Path, home: Path, contained: bool, private_
         raise RuntimeError("the sandbox's argv does not start with bwrap, or no absolute bwrap was found")
     argv[0] = exe                                       # never a PATH lookup from the copy (impl round 2, GRAVE)
     argv.insert(1, "--die-with-parent")
-    for i in range(len(argv) - 2):
-        if argv[i:i + 3] == ["--bind", "/tmp", "/tmp"]:
-            if private_tmp:
-                argv[i + 3:i + 3] = ["--tmpfs", "/tmp"]
-            else:                                       # /tmp stays shared: each live repository read-only over it
-                ro = []
-                for live in protect or []:
-                    ro += ["--ro-bind", live, live]
-                argv[i + 3:i + 3] = ro
-            break
-    else:
-        raise RuntimeError("the sandbox's argv has no `--bind /tmp /tmp` to make private")
+    if not any(argv[i:i + 2] == ["--tmpfs", "/tmp"] for i in range(len(argv) - 1)):
+        raise RuntimeError("the sandbox's argv has no private /tmp")
     tail = len(argv) - 3                                # the target: bash -c <cmd>
     extra = []
     for real, inside in ro_links or []:
@@ -578,8 +568,7 @@ def _launcher_argv(bash: str, cmd: str, root: Path, home: Path) -> "list[str]":
 
 
 def _run_row(cmd: str, root: Path, home: Path, ceiling: Path, timeout: float, contained: bool,
-             private_tmp: bool = False, ro_links: "list[tuple[str, str]] | None" = None,
-             protect: "list[str] | None" = None) -> "dict":
+             ro_links: "list[tuple[str, str]] | None" = None) -> "dict":
     """One command in one copy: {status, exit, seconds, last, error}. Its own process group: a timeout or an
     interrupt kills the group; a child that left the group and holds the output open cannot hang the run."""
     from tasks.bash_resolver import resolve_bash
@@ -591,7 +580,7 @@ def _run_row(cmd: str, root: Path, home: Path, ceiling: Path, timeout: float, co
                 "error": "", "reader": "", "skips": 0}
     env = _row_env(dict(os.environ), home, ceiling, caged=contained or os.environ.get("PLAYBOOK_SANDBOXED") == "1")
     t0 = time.monotonic()
-    p = subprocess.Popen(_argv(bash, cmd, root, home, contained, private_tmp, ro_links, protect), cwd=str(root), env=env,
+    p = subprocess.Popen(_argv(bash, cmd, root, home, contained, ro_links), cwd=str(root), env=env,
                          stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          start_new_session=True)
     try:
@@ -2314,7 +2303,8 @@ def _guard(cmd: str, cfg: dict) -> "tuple[bool, str]":
 
 
 def _run_parent() -> "str | None":
-    """Where the run's folder goes: /var/tmp when it can, so a row's `/tmp` can be private (impl round 1, GRAVE)."""
+    """Where the run's folder goes: /var/tmp when it can, on disk where /tmp may be memory (a row's `/tmp` is private
+    wherever the folder is: the launcher's own since task 315)."""
     vt = "/var/tmp"
     return vt if os.path.isdir(vt) and os.access(vt, os.W_OK | os.X_OK) else None
 
@@ -2358,15 +2348,14 @@ def _prepare_links(copy: Path, links: "list[tuple[str, str]]", contained: bool, 
 
 
 def _side_run(command: str, pristine: Path, work: Path, home: Path, ceiling: Path, timeout: float, contained: bool,
-              private_tmp: bool, links: "list[tuple[str, str]]", ready: "set[str]",
-              protect: "list[str] | None" = None) -> "dict":
+              links: "list[tuple[str, str]]", ready: "set[str]") -> "dict":
     """One side of one row in a fresh copy of `pristine` and a fresh HOME (impl round 1, codex: a side's writes must
     not reach the other side, nor the next row)."""
     shutil.copytree(pristine, work, symlinks=True)
     home.mkdir(parents=True)
     try:
         ro = [(real, str(work / rel)) for real, rel in links if rel in ready] if contained else None
-        return _run_row(command, work, home, ceiling, timeout, contained, private_tmp, ro, protect)
+        return _run_row(command, work, home, ceiling, timeout, contained, ro)
     finally:
         shutil.rmtree(work, ignore_errors=True)
         shutil.rmtree(home, ignore_errors=True)
@@ -2562,12 +2551,11 @@ def _cmd_red(cmd_args: "list[str]") -> None:
     if not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or timeout <= 0:
         timeout = DEFAULT_TIMEOUT
     contained, why_not = _containment()
-    contained_line = _contained_line(contained, _run_parent() is None, why_not)
+    contained_line = _contained_line(contained, False, why_not)
     run = hashlib.sha256(f"{os.getpid()} {time.time_ns()}".encode()).hexdigest()[:12]
     base_line = _base_line(plan)
     links, link_notes = _links(project, cfg)
     tmp = Path(tempfile.mkdtemp(prefix="pb-red-", dir=_run_parent()))
-    private_tmp = contained and not str(tmp.resolve()).startswith("/tmp/")
     results: "list[dict]" = []
     section_failed = False
     old_handlers = {}
@@ -2590,16 +2578,9 @@ def _cmd_red(cmd_args: "list[str]") -> None:
         tests_sha = _digest_trees(scopes, now_tree, cfg, exclude)
         ready = {"base": _prepare_links(bprist, links, contained, link_notes, "base"),
                  "now": _prepare_links(nprist, links, contained, link_notes, "now")}
-        protect: "list[str]" = []
-        if contained and not private_tmp:              # /tmp shared: each live repository read-only over it
-            for repo in scopes.values():
-                live = str(Path(repo).resolve())
-                if not str(tmp.resolve()).startswith(live + "/"):
-                    protect.append(live)
         print(f"tasks red — task {d.name}, run {run}; base copy: {bprist}", flush=True)
         print(f"  on the base: {base_line}; {laid} test file(s) from the working state laid over it; "
-              + ("contained" + ("" if private_tmp else " (/tmp shared: each live repository bound read-only)")
-                 if contained else f"UNCONTAINED ({why_not})"), flush=True)
+              + ("contained" if contained else f"UNCONTAINED ({why_not})"), flush=True)
         for note in link_notes:
             print("  note: " + note, flush=True)
         for k, row in enumerate(run_rows, 1):
@@ -2608,7 +2589,7 @@ def _cmd_red(cmd_args: "list[str]") -> None:
                    "row_sha": hashlib.sha256(row["line"].encode("utf-8")).hexdigest()[:16], "row_key": row_key(row),
                    "contract": contract, "test": row["test"],
                    "base": plan, "now_tree": now_tree, "tests_sha": tests_sha, "contained": contained,
-                   "private_tmp": private_tmp}
+                   "private_tmp": contained}
             empty = {"exit": None, "seconds": 0.0, "last": "", "error": "", "reader": "", "skips": 0}
             if not cmds:
                 rec.update(dict(empty, status="unrunnable", why=why, command="", tests=[],
@@ -2622,9 +2603,9 @@ def _cmd_red(cmd_args: "list[str]") -> None:
                              "verdict": "refused", "why": guard_why}
                     else:
                         b = _side_run(c, bprist, tmp / "rows" / f"{k}-{j_}-base", tmp / "homes" / f"{k}-{j_}-base",
-                                      tmp, timeout, contained, private_tmp, links, ready["base"], protect)
+                                      tmp, timeout, contained, links, ready["base"])
                         n = _side_run(c, nprist, tmp / "rows" / f"{k}-{j_}-now", tmp / "homes" / f"{k}-{j_}-now",
-                                      tmp, timeout, contained, private_tmp, links, ready["now"], protect)
+                                      tmp, timeout, contained, links, ready["now"])
                         t = {"command": c, "base": b, "now": n,
                              "verdict": verdict(b["status"], n["status"], n.get("skips", 0))}
                     tests.append(t)

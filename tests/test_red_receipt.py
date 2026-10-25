@@ -881,8 +881,9 @@ class RoundTwo(Project):
         self.assertEqual(line["verdict"], "partly proved")                 # never "proved" (mutant P5)
         self.assertEqual([c["verdict"] for c in line["tests"]], ["proved", "already true"])
 
-    def test_a_live_project_under_tmp_is_kept_when_tmp_cannot_be_private(self):
-        # row 48 (agy + opus): no usable /var/tmp — each live scope root is bound read-only, and the section says so
+    def test_a_live_project_under_tmp_is_kept_with_no_var_tmp(self):
+        # row 48 (agy + opus): no usable /var/tmp, so the run's folder is under /tmp — the live project there is kept.
+        # Since task 315 the row's /tmp is private wherever the folder is: the section no longer says /tmp is shared
         if not shutil.which("bwrap"):
             self.skipTest("bubblewrap is not installed")
         from provider import sandbox
@@ -897,7 +898,7 @@ class RoundTwo(Project):
         with mock.patch.object(red, "_run_parent", lambda: None):
             _in_process(self.d, self.env(), red.cmd_red, [])
         self.assertEqual(target.read_text(encoding="utf-8"), before)
-        self.assertIn("/tmp shared", self.section())
+        self.assertNotIn("/tmp shared", self.section())
 
     def test_links_are_ready_per_copy(self):
         # row 49 (codex): the base has the folder itself; the now copy needs the link — each copy decides alone
