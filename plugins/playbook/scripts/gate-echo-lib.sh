@@ -1266,17 +1266,23 @@ WRAPPER_DIR="$(cd "$(dirname "$0")" && pwd -P)"
 PROJECT_ROOT="$(cd "$WRAPPER_DIR/../.." 2>/dev/null && pwd -P)"
 # Run from outside its project (its parent folder, say), the CLI would take that folder for the project — its tasks,
 # its missing verify (task 310, audit 4's G2). Inside the project, a subfolder included, nothing changes. The project
-# is the one the wrapper was called in: two folders above the path it was called by, a linked (shared) `.claude` not
-# resolved, and only when that folder holds `.agent` and this very file (impl round 1, opus and codex: PROJECT_ROOT
-# above names the shared folder's parent; a link to this file elsewhere names nothing).
-CALLED_IN="$(cd "$(dirname "$0")/../.." 2>/dev/null && pwd -P)"
-if [ -z "$CALLED_IN" ]; then
-    echo "Error: cannot tell which project $0 belongs to." >&2
-    exit 1
-fi
-if [ -d "$CALLED_IN/.agent" ] && [ "$CALLED_IN/.claude/bin/${0##*/}" -ef "$0" ]; then
-    case "$(pwd -P)/" in "${CALLED_IN%/}"/*) ;; *) cd "$CALLED_IN" || exit 1 ;; esac
-fi
+# is the one the wrapper was called in, only by a path `<project>/.claude/bin/<name>`: a linked (shared) `.claude` is
+# not resolved (impl round 1, opus and codex), and a link to this file elsewhere is a command of its own that runs
+# where it is called (impl round 2, codex). It must hold `.agent` and this very file. `CDPATH=`, `-L` and `--`: an
+# exported CDPATH, an inherited `SHELLOPTS=physical` or a leading `-` would change what `cd` does (impl round 2).
+case "${0%/*}" in
+    .claude/bin | */.claude/bin)
+        CALLED_IN="$(CDPATH= cd -L -- "${0%/*}/../.." 2>/dev/null && pwd -P)"
+        if [ -z "$CALLED_IN" ]; then
+            echo "Error: cannot tell which project $0 belongs to." >&2
+            exit 1
+        fi
+        if [ -d "$CALLED_IN/.agent" ] && [ "$CALLED_IN/.claude/bin/${0##*/}" -ef "$0" ]; then
+            PROJECT_ROOT="$CALLED_IN"       # the resolver's project too (impl round 2: agy, opus, grok)
+            case "$(pwd -P)/" in "${CALLED_IN%/}"/*) ;; *) cd "$CALLED_IN" || exit 1 ;; esac
+        fi
+        ;;
+esac
 SCRIPT="$(python3 -I - "$PROJECT_ROOT" 2>/dev/null <<'PYRESOLVE'
 @@PLAYBOOK_WRAPPER_RESOLVER@@
 PYRESOLVE
