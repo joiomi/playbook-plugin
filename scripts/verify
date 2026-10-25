@@ -62,12 +62,16 @@ CHECKS: list[tuple] = []
 # (the session bus, where agy's keyring sign-in lives, is disabled in `env()`). By name, and by the shapes a key,
 # a token or a cloud sign-in takes (impl round 1, all four judges: a fixed list missed OPENROUTER_API_KEY, which the
 # plugin's own pi adapter reads, CODEX_API_KEY, and AWS credentials with Claude Code's Bedrock or Vertex switches).
+# Impl round 2 (codex): an agent's own variables go whole — grok takes a credential helper and its config from
+# GROK_AUTH_PROVIDER_COMMAND, GROK_CONFIG, GROK_CONFIG_PATH (its bundled docs) — and so do any token, the ssh agent
+# and git's global settings override (opus, agy: hardening).
 SIGN_IN_VARS = ("CODEX_HOME", "CLAUDE_CONFIG_DIR", "GROK_HOME", "ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN",
                 "CLAUDE_CODE_OAUTH_TOKEN", "OPENAI_API_KEY", "XAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY",
-                "GOOGLE_APPLICATION_CREDENTIALS")
-SIGN_IN_SUFFIXES = ("_API_KEY", "_API_TOKEN", "_AUTH_TOKEN", "_OAUTH_TOKEN", "_ACCESS_TOKEN", "_SESSION_TOKEN",
-                    "_ACCESS_KEY_ID", "_SECRET_ACCESS_KEY")
-SIGN_IN_PREFIXES = ("AWS_", "CLAUDE_CODE_USE_")
+                "GOOGLE_APPLICATION_CREDENTIALS", "API_KEY", "AUTH_TOKEN", "ACCESS_TOKEN", "SSH_AUTH_SOCK",
+                "GIT_CONFIG_GLOBAL")
+SIGN_IN_SUFFIXES = ("_API_KEY", "_TOKEN", "_ACCESS_KEY_ID", "_SECRET_ACCESS_KEY")
+SIGN_IN_PREFIXES = ("AWS_", "CLAUDE_CODE_USE_", "GROK_", "CODEX_", "ANTHROPIC_", "OPENAI_", "XAI_", "GEMINI_",
+                    "OPENROUTER_", "GOOGLE_", "CLOUDSDK_")
 
 
 def is_sign_in(name: str) -> bool:
