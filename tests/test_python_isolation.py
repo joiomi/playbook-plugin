@@ -699,7 +699,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         "scripts/session-start-hook": 2,   # +1: the Python floor probe (task 192, #46)
         "scripts/state-echo-hook": 9,      # +1: the Python floor probe (task 194, #46); -1: one JSON writer for every answer (task 219); +1: the fallback path's shell-log command (task 221)
         "scripts/stop-hook": 4,            # +1: the Python floor probe (task 193, #46)
-        "scripts/task-gate-hook": 15,      # +1: the Python floor probe (task 194, #46); +1: the recovery path's resolved path (task 198, #26); +1: the no-project path's reader of an escaped path (task 302)
+        "scripts/task-gate-hook": 16,      # +1: the Python floor probe (task 194, #46); +1: the recovery path's resolved path (task 198, #26); +1: the no-project path's reader of an escaped path (task 302); +1: the `ws` Monitor's check (task 307)
         "scripts/tasks": 2,
         "tasks/plugin_copies.py": 1,
     }
@@ -708,7 +708,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         _, counts, inline, _ = sweep()
         self.assertEqual(inline, self.ISOLATED_INLINE_CALLS)
         self.assertEqual(counts.get("ok-inline"), sum(self.ISOLATED_INLINE_CALLS.values()))
-        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 65)   # 55 + the floor probes of tasks 192 (2), 193 (2) and 194 (2) + task 198's resolved path - task 219's one JSON writer + task 221's fallback command + task 233's floor probe + task 244's floor probe + task 302's escaped-path reader
+        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 66)   # 55 + the floor probes of tasks 192 (2), 193 (2) and 194 (2) + task 198's resolved path - task 219's one JSON writer + task 221's fallback command + task 233's floor probe + task 244's floor probe + task 302's escaped-path reader + task 307's `ws` Monitor check
 
     # Every call that starts a FILE of the plugin's, file by file — 22 when task 180
     # isolated them (18 in the hooks and scripts, 4 that the merge skill gives the agent).
