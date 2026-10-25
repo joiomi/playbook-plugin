@@ -2369,6 +2369,16 @@ def _repo_fingerprint_material(repo_path: Path, exclude: "list[str]", *,
             return None                  # a failed status/diff is NOT a clean tree
         porcelain = porcelain_r.stdout
         diff = diff_r.stdout
+        # Task 314 (audit 4, G5): status and diff skip an entry marked assume-unchanged (a lower-case tag) or
+        # skip-worktree (`S`), so a change to its file after a review moved nothing. `--full-name`: toplevel-relative,
+        # as the porcelain names above are.
+        bits_r = subprocess.run(
+            ["git", "ls-files", "-v", "-z", "--full-name", "--", ".", *exclude],
+            cwd=repo_path, capture_output=True)
+        if bits_r.returncode != 0:
+            return None
+        marked_rels = sorted(os.fsdecode(e[2:]) for e in bits_r.stdout.split(b"\0")
+                             if len(e) > 2 and e[1:2] == b" " and (e[:1].islower() or e[:1] == b"S"))
     except (OSError, subprocess.SubprocessError):
         return None
     # Untracked CONTENT is hashed explicitly (F18 judge C1, verified
@@ -2447,7 +2457,29 @@ def _repo_fingerprint_material(repo_path: Path, exclude: "list[str]", *,
         # for every ASCII/valid-UTF-8 name (no surrogates present).
         untracked_digest.update(
             f"{rel}\0{fhash}\n".encode("utf-8", "surrogateescape"))
-    return head + porcelain + diff + untracked_digest.hexdigest()
+    material = head + porcelain + diff + untracked_digest.hexdigest()
+    if not marked_rels:
+        return material                  # no index bit: the material of before task 314, byte for byte
+    # each marked entry by its working file: a link by its text (never read through), a file by its bytes
+    marked_digest = hashlib.sha256()
+    for rel in marked_rels:
+        _mpath = toplevel / rel
+        try:
+            _is_link = _mpath.is_symlink()
+        except OSError:
+            _is_link = False
+        if _is_link:
+            try:
+                fhash = "symlink:" + os.readlink(_mpath)
+            except OSError:
+                fhash = "unreadable"
+        elif not os.path.lexists(_mpath):
+            fhash = "absent"
+        else:
+            kind, detail, _n = _safe_hash_regular(_mpath, _FINGERPRINT_HASH_CAP)
+            fhash = detail if kind == "hash" else (f"toolarge:{detail}" if kind == "toolarge" else "unreadable")
+        marked_digest.update(f"{rel}\0{fhash}\n".encode("utf-8", "surrogateescape"))
+    return material + "\0index-bits:" + marked_digest.hexdigest()
 
 
 def _code_roots(cfg: dict) -> "list[str]":
