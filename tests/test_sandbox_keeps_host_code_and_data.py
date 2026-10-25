@@ -76,10 +76,18 @@ class _Home(unittest.TestCase):
     HOME_BASE: "str | None" = None
 
     def setUp(self):
-        try:
-            home = Path(tempfile.mkdtemp(prefix="pb308-home-", dir=self.HOME_BASE)).resolve()
-        except OSError:
-            self.skipTest(f"no temporary folder in {self.HOME_BASE}")
+        bases = [self.HOME_BASE]
+        if self.HOME_BASE and os.environ.get("PLAYBOOK_RED") == "1":
+            bases.append(os.environ["HOME"])     # a `tasks red` row: /var/tmp is read-only, its HOME a throwaway one
+        home = None
+        for base in bases:
+            try:
+                home = Path(tempfile.mkdtemp(prefix="pb308-home-", dir=base)).resolve()
+                break
+            except OSError:
+                continue
+        if home is None:
+            self.skipTest(f"no temporary folder in {bases}")
         self.addCleanup(shutil.rmtree, home, True)
         self.home = home
         for rel in CODE_AND_CONFIG + NOT_AN_AGENTS + STATE:
