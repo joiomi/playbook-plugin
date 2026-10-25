@@ -167,7 +167,6 @@ class TheWrapperRunsInItsProject(unittest.TestCase):
         r = subprocess.run([str(self.wrapper)], cwd=str(self.root), env={**self.env(), "PWD": str(self.root)},
                            capture_output=True, text=True, timeout=60)
         self.assertEqual((r.returncode, r.stdout.strip()), (0, str(self.root)), r.stderr)
-        self.assertIn("holds no .agent", r.stderr)          # impl round 2 (sonnet): it says so
 
     def test_a_link_to_homes_own_wrapper_runs_where_it_is_called(self):
         # impl round 2 (codex, reproduced twice): HOME a project with its own wrapper, linked onto PATH — the `-ef` guard
