@@ -247,6 +247,18 @@ class TheWrapperRunsInItsProject(unittest.TestCase):
             r = subprocess.run([argv0], cwd=str(cwd), env=self.env(), capture_output=True, text=True, timeout=60)
             self.assertEqual((r.returncode, r.stdout.strip()), (0, "pinned"), (argv0, r.stderr))
 
+    def test_a_path_spelled_with_doubled_slashes_or_dots_still_enters_the_project(self):
+        # post-panel run 1 (codex, reproduced twice): the layout check read the path as written, so these spellings
+        # ran the wrapper in the parent folder
+        for n, argv0 in enumerate(("proj/.claude/bin//tasks", "proj/.claude/bin/./tasks", "proj/./.claude//bin/tasks",
+                                   str(self.proj) + "/.claude/bin//tasks"), 1):
+            r = subprocess.run([argv0, "new", "quick", f"fix{n}", "fix f"], cwd=str(self.root), env=self.env(),
+                               capture_output=True, text=True, timeout=300)
+            self.assertEqual(r.returncode, 0, (argv0, r.stdout + r.stderr))
+        self.assertEqual(sorted(p.name for p in (self.proj / ".agent" / "tasks").iterdir()),
+                         ["001-fix1", "002-fix2", "003-fix3", "004-fix4"])
+        self.assertFalse((self.root / ".agent").exists())
+
     def test_control_a_subfolder_of_the_project_still_works(self):
         r = self.tasks("new", "quick", "fix", "fix f", cwd=self.proj / "src")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
