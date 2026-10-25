@@ -85,6 +85,33 @@ class TheWrapperRunsInItsProject(unittest.TestCase):
         self.assertEqual([p.name for p in (odd / ".agent" / "tasks").iterdir()], ["001-fix"])
         self.assertFalse((self.root / ".agent").exists())
 
+    def test_the_cli_starts_in_the_callers_folder_inside_the_project_and_in_the_project_from_outside(self):
+        # my mutant run: an unquoted pattern, or `pwd` for `pwd -P`, left the project's own subfolders for its root —
+        # a stand-in CLI (the manifest points at a tree of its own) prints the folder it was started in
+        stand = self.home / "stand"
+        (stand / "scripts").mkdir(parents=True)
+        (stand / "scripts" / "tasks").write_text("#!/bin/bash\npwd -P\n", encoding="utf-8")
+        (stand / "scripts" / "tasks").chmod(0o755)
+        (self.home / ".claude" / "plugins" / "installed_plugins.json").write_text(json.dumps(
+            {"version": 2, "plugins": {"playbook@mk": [{"scope": "user", "installPath": str(stand),
+                                                         "version": "9.9.9"}]}}), encoding="utf-8")
+        odd = self.root / "pro j[1]"
+        (odd / "sub").mkdir(parents=True)
+        r = subprocess.run([bash_or_skip(), "-c", 'source "$1"; create_wrapper "$2" tasks', "-", str(LIB), str(odd)],
+                           env=self.env(), capture_output=True, text=True, timeout=60)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        (self.root / "into-src").symlink_to(self.proj / "src")
+        for wrapper, cwd, want in ((self.wrapper, self.proj / "src", self.proj / "src"),
+                                   (self.wrapper, self.root / "into-src", self.proj / "src"),
+                                   (self.wrapper, self.proj, self.proj),
+                                   (self.wrapper, self.root, self.proj),
+                                   (odd / ".claude" / "bin" / "tasks", odd / "sub", odd / "sub"),
+                                   (odd / ".claude" / "bin" / "tasks", self.root, odd)):
+            # PWD as a shell sets it: the path the caller came by, a link included
+            r = subprocess.run([str(wrapper)], cwd=str(cwd), env={**self.env(), "PWD": str(cwd)}, capture_output=True,
+                               text=True, timeout=60)
+            self.assertEqual((r.returncode, r.stdout.strip()), (0, str(want)), (str(cwd), r.stderr))
+
     def test_control_a_subfolder_of_the_project_still_works(self):
         r = self.tasks("new", "quick", "fix", "fix f", cwd=self.proj / "src")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
