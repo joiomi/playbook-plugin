@@ -9431,7 +9431,7 @@
     {
       "id": "PB-INIT-SCAFFOLD",
       "category": "installation-and-upgrade",
-      "statement": "/playbook:init creates the project task structure, settings, config, CLAUDE.md, MIND_MAP.md, the `.claude/bin` wrappers, and the gitignore runtime block; it installs no shell logger and removes the one an earlier version wired (task 221) — only that: the `~/.claude/bash-log.sh`/`.zsh` files whose first line is the logger's header, a `BASH_ENV` naming `~/.claude/bash-log.sh` in `~/.claude/settings.json`, and the exact two-line block init wrote into `~/.bash_profile`, `~/.profile` or `~/.zshenv`, each file first copied to init's kept user backup.",
+      "statement": "/playbook:init creates the project task structure, settings, config, CLAUDE.md, MIND_MAP.md, the `.claude/bin` wrappers, and the gitignore runtime block (an existing `.gitignore` keeps its own bytes and line ending, a byte that is not UTF-8 too: task 313); it installs no shell logger and removes the one an earlier version wired (task 221) — only that: the `~/.claude/bash-log.sh`/`.zsh` files whose first line is the logger's header, a `BASH_ENV` naming `~/.claude/bash-log.sh` in `~/.claude/settings.json`, and the exact two-line block init wrote into `~/.bash_profile`, `~/.profile` or `~/.zshenv`, each file first copied to init's kept user backup.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/init",

@@ -516,12 +516,15 @@ def main(argv: "list[str]") -> int:
 
     gitignore = root / ".gitignore"
     try:
-        existing = gitignore.read_text(encoding="utf-8", errors="replace") if gitignore.exists() else None
+        # task 313 (audit 4, G6): bytes in, bytes out, as CLAUDE.md above — `errors="replace"` and universal newlines
+        # rewrote a pattern's byte that is not UTF-8 as U+FFFD and CRLF as LF, so the file it ignored was committable
+        raw = gitignore.read_bytes() if gitignore.exists() else None
+        existing = raw.decode("utf-8", errors="surrogateescape") if raw is not None else None
         updated = merge_gitignore(existing)
         if updated is None:
             print(".gitignore:UNCHANGED")
         else:
-            atomic_write(gitignore, updated)
+            atomic_write(gitignore, updated.encode("utf-8", errors="surrogateescape"))
             print(".gitignore:CREATED" if existing is None else ".gitignore:APPENDED")
     except OSError as e:
         print(f"ERROR:.gitignore: {e}")
