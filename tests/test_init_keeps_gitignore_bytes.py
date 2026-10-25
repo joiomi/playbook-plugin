@@ -106,6 +106,16 @@ class TheMerge(unittest.TestCase):
         self.assertIn(MARKER, lines, "the marker is no longer a line of its own")
         self.assertIn(b".agent/sessions/", lines)
 
+    def test_a_file_without_a_final_newline_keeps_its_last_pattern_a_line_of_its_own(self):
+        # my mutant run on impl round 1's fix: the block glued onto a last line with no newline would end its pattern
+        before = b"build/\n*.pyc"
+        self.gi.write_bytes(before)
+        self.merge()
+        after = self.gi.read_bytes()
+        self.assertTrue(after.startswith(before + b"\n"), after[:60])
+        self.assertIn(MARKER, after.split(b"\n"))
+        self.assertTrue(self.ignored(b"x.pyc"))
+
     def test_control_a_plain_file_gets_the_block_as_before(self):
         before = b"build/\n*.pyc\n"
         self.gi.write_bytes(before)
