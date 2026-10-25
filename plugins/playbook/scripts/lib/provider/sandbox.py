@@ -133,6 +133,26 @@ _HOME_FILES_MADE: dict[str, str] = {
 }
 
 
+def _publish_new(path: Path, text: str) -> None:
+    """Make `path` with `text`, whole or not at all, and never over a file that is there (post-panel run 1, codex: made
+    empty and written after, a crash between left an empty settings file for good). Written to a temporary name of its
+    own beside it, then linked to `path` — link(2) fails where anything is — and the temporary name removed."""
+    tmp = path.with_name(f".{path.name}.playbook-{os.getpid()}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    try:
+        try:
+            os.write(fd, text.encode("utf-8"))
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        try:
+            os.link(tmp, path)
+        except FileExistsError:
+            pass                                        # made meanwhile: that one stays
+    finally:
+        os.unlink(tmp)
+
+
 def _home_refusal(path: Path, why: str) -> RuntimeError:
     return RuntimeError(f"{path} {why}. Nothing was launched.")
 
@@ -207,8 +227,23 @@ def _home_layer(home: Path, folders: "Iterable[str]",
     def inside(path: str, places: "list[str]") -> bool:
         return any(path == w or path.startswith(w.rstrip("/") + "/") for w in places)
 
+    later = [real(w) for w in also_writable]           # bound after the kept paths: they win over them
+
     def in_writable(path: str) -> bool:
-        return inside(path, writable) and not inside(path, kept)
+        """Is `path` (its folders resolved) writable in the run? An extra writable path, a writable project or the
+        write log always is (post-panel run 1, codex: bound after a kept path, it wins); /tmp and the state folder
+        are, outside the kept paths."""
+        return inside(path, later) or (inside(path, writable) and not inside(path, kept))
+
+    def through_a_replaceable_link(path: str) -> bool:
+        """Does `path`, unresolved, pass through a folder that is a link sitting in a place the run may write?
+        The run could re-point that link (post-panel run 1, codex: `~/.claude/cache` → elsewhere)."""
+        parts = Path(path).parts
+        for k in range(2, len(parts)):
+            pre = os.path.join(*parts[:k])
+            if os.path.islink(pre) and in_writable(os.path.join(real(os.path.dirname(pre)), os.path.basename(pre))):
+                return True
+        return False
 
     def leads_out(link: str) -> bool:
         """Does the chain of links from `link` pass through, or end in, a place the run may write? Each hop's own
@@ -221,6 +256,8 @@ def _home_layer(home: Path, folders: "Iterable[str]",
             except OSError:
                 return False                            # not a link (any more): the chain ends here
             nxt = t if os.path.isabs(t) else os.path.join(os.path.dirname(cur), t)
+            if through_a_replaceable_link(nxt):
+                return True
             nxt = os.path.join(real(os.path.dirname(nxt)), os.path.basename(nxt))
             if in_writable(nxt):
                 return True
@@ -978,14 +1015,7 @@ def build_bwrap_argv(
             (home / sub).mkdir(parents=True, exist_ok=True)       # a link or a file there: `_home_layer` judges it
     for sub, empty in _HOME_FILES_MADE.items():
         if sub.split("/")[0] in folders and not os.path.lexists(home / sub):
-            try:                                        # made only where nothing is: never over a file of yours
-                fd = os.open(home / sub, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
-            except FileExistsError:
-                continue
-            try:
-                os.write(fd, empty.encode("utf-8"))
-            finally:
-                os.close(fd)
+            _publish_new(home / sub, empty)
     pins, kept, snaps = _home_layer(home, folders, [str(write_log_dir), *rw_paths,
                                                      *([project] if project_writable else [])])
     for path in pins:
