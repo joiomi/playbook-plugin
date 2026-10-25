@@ -290,7 +290,7 @@ class TheArgv(_Home):
         # post-panel run 2 (codex, a barrier reproduced it twice): between linking the new file into place and removing
         # its temporary name, another launch saw two links and refused — a seat lost for nothing
         p = self.home / ".claude" / "settings.local.json"
-        os.link(p, p.with_name(".settings.local.json.playbook-123-abcdef"))
+        os.link(p, p.with_name(".settings.local.json.playbook-123-abcdef012345"))
         self.argv(["true"])                             # no RuntimeError: that other name is a launch's own
         other = self.home / ".claude" / "projects" / "settings.local.json.copy"
         os.link(p, other)
