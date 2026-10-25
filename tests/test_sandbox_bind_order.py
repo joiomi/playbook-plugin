@@ -71,13 +71,14 @@ class BindOrder(unittest.TestCase):
         # Task 155 impl panel r1 (codex-high, codex-medium): the macOS-only
         # `Library` entry survived the macOS backend's removal, so every Linux launch
         # created ~/Library and mounted it writable. The writable home subpaths
-        # are an allowlist: the agents' state dirs and the generic caches, no more.
+        # are an allowlist: the agents' state dirs, no more. Task 308 (audit 4 G3): the generic `.cache` and `.local`
+        # left it — they hold a person's data and other programs' code; the write log keeps its own bind.
         home = str(Path.home())
         argv = self._argv(str(Path(tempfile.mkdtemp()).resolve()))
         binds = {argv[i + 1] for i, a in enumerate(argv[:-1]) if a == "--bind"}
         under_home = sorted(b[len(home) + 1:] for b in binds if b.startswith(home + "/"))
-        self.assertEqual(under_home, sorted([".cache", ".claude", ".codex", ".gemini", ".grok",
-                                             ".local", ".local/share/playbook", ".omlx", ".pi"]))
+        self.assertEqual(under_home, sorted([".claude", ".codex", ".gemini", ".grok",
+                                             ".local/share/playbook", ".omlx", ".pi"]))
 
     def test_extra_rw_after_project(self):
         proj = Path(tempfile.mkdtemp()).resolve()
