@@ -56,16 +56,76 @@ _BYPASS_FLAGS: dict[str, list[str]] = {
 # never copied; its sign-in itself is in the OS keyring, which a sandboxed agy
 # reaches over the D-Bus socket under the read-only root: task 111), omlx server data,
 # pi config, grok state (auth/sessions/leader socket — grok dies at startup
-# with FS_PERMISSION_DENIED if ~/.grok is read-only), generic tool caches.
+# with FS_PERMISSION_DENIED if ~/.grok is read-only). Task 308 (audit 4 G3): the
+# generic `.cache` and `.local` are gone — they hold a person's data (keyrings, the
+# Trash, mail under ~/.local/share), the commands on PATH (~/.local/bin), the user's
+# Python packages and other programs' code; the write log keeps its own bind.
 _HOME_RW_SUBPATHS: tuple[str, ...] = (
     ".codex",
     ".gemini",
     ".omlx",
     ".pi",
     ".grok",
-    ".cache",
-    ".local",
 )
+
+# Task 308 (audit 4 G3): inside those writable state folders (and `~/.claude`), what a
+# later session on the HOST runs or obeys stays read-only — the plugins and their
+# install records, the settings files (hooks, a status line, MCP servers, trusted
+# folders), the user's instructions, the agents' own binaries and bundled skills. A
+# sandboxed agent rewrote the installed plugin's task gate (his blind session,
+# 2026-10-25). Measured 2026-10-25 04:10-04:12 EET: claude, codex and agy each answer
+# with these read-only and no writable ~/.local or ~/.cache. Grok's `config.toml` is
+# not here: grok rewrites it as it runs.
+_HOME_RO_SUBPATHS: tuple[str, ...] = (
+    ".claude/plugins", ".claude/settings.json", ".claude/settings.local.json", ".claude/CLAUDE.md",
+    ".claude/hooks", ".claude/commands", ".claude/agents", ".claude/skills", ".claude/output-styles",
+    ".codex/packages", ".codex/config.toml", ".codex/AGENTS.md", ".codex/rules", ".codex/skills",
+    ".codex/plugins", ".codex/hooks.json",
+    ".gemini/settings.json", ".gemini/GEMINI.md", ".gemini/config", ".gemini/trustedFolders.json",
+    ".gemini/antigravity-cli/bin", ".gemini/antigravity-cli/builtin",
+    ".grok/bin", ".grok/downloads", ".grok/hooks", ".grok/installed-plugins", ".grok/bundled",
+)
+# Claude Code's folders of the list are made (empty) when missing, so a run cannot
+# create one with a skill, an agent or a command in it. A missing FILE is not held:
+# an empty file in its place would change the host (an empty settings.json is not
+# valid JSON) — and a playbook user always has `~/.claude/settings.json` (enabling
+# the plugin writes it).
+_HOME_RO_DIRS_MADE: tuple[str, ...] = (
+    ".claude/plugins", ".claude/hooks", ".claude/commands", ".claude/agents", ".claude/skills",
+    ".claude/output-styles",
+)
+# A host session sources its own shell snapshot before every shell call: each one
+# that exists at launch stays read-only (the run still writes new ones).
+_HOME_SNAPSHOT_DIRS: tuple[str, ...] = (".claude/shell-snapshots", ".codex/shell_snapshots")
+_SCRIPT_SUFFIXES = (".sh", ".bash", ".zsh", ".py", ".js", ".mjs", ".cjs", ".ts", ".rb", ".pl")
+
+
+def _home_read_only(home: Path) -> "list[str]":
+    """The paths under the agents' writable state folders a run must not change, each that exists at launch:
+    `_HOME_RO_SUBPATHS`, every entry of a shell-snapshot folder, and every regular file at a state folder's top level
+    that is executable or a script (a status line a settings file names). One that is a link cannot be held:
+    bubblewrap cannot bind onto it (measured: the launch fails), and the link itself sits in a folder the run may
+    write, so the run could replace it — the launch is refused, as for git's sources (task 181)."""
+    cands = [home / rel for rel in _HOME_RO_SUBPATHS]
+    for rel in _HOME_SNAPSHOT_DIRS:
+        d = home / rel
+        if d.is_dir() and not d.is_symlink():
+            cands += sorted(d.iterdir())
+    for top in [home / ".claude", *(home / s for s in _HOME_RW_SUBPATHS)]:
+        if top.is_dir() and not top.is_symlink():
+            for p in sorted(top.iterdir()):
+                if not p.is_symlink() and p.is_file() and (p.suffix in _SCRIPT_SUFFIXES or os.access(p, os.X_OK)):
+                    cands.append(p)
+    out: "list[str]" = []
+    for p in cands:
+        if p.is_symlink():
+            raise RuntimeError(
+                f"{p} is a link inside a folder a sandboxed run may write: the run could replace the link, and a "
+                "later session on this machine would follow it. Replace the link with the file or folder it names. "
+                "Nothing was launched.")
+        if p.exists() and str(p) not in out:
+            out.append(str(p))
+    return out
 
 # Friendly model aliases — collapse "agent + canonical model" into one knob.
 # Loaded from JSON so agents can edit the table without a code release. Model
@@ -653,8 +713,10 @@ def build_bwrap_argv(
     project_view: "ProjectView | None" = None,
 ) -> list[str]:
     """Generate the bwrap argv: read-only root, bind project + tmp + per-agent
-    home subpaths read-write, bind git_dir — and every other path of git metadata
-    the caller names in `git_readonly` (`_git_paths_to_protect`) — read-only.
+    home subpaths read-write (each agent's own state folder; what the host runs or
+    obeys inside them read-only again, `_home_read_only` — task 308), bind git_dir —
+    and every other path of git metadata the caller names in `git_readonly`
+    (`_git_paths_to_protect`) — read-only.
 
     `git_sources_unanswered` (roots where git could not be asked, or sources that
     could not be resolved: the launch is
@@ -682,7 +744,8 @@ def build_bwrap_argv(
 
     project_writable=False is the contained "outdir" mode: the project/corpus is
     bound read-only; the only writable project-side location is extra_rw (the
-    workspace). Home subpaths stay writable for the agent's config/caches.
+    workspace). The agents' state folders under home stay writable, but not their
+    code and config (task 308).
 
     no_network=True is the OPT-IN network jail: it appends `--unshare-net`, which
     drops the sandbox into a fresh network namespace (loopback only). It is never
@@ -762,6 +825,16 @@ def build_bwrap_argv(
         target.mkdir(parents=True, exist_ok=True)
         argv += ["--bind", str(target), str(target)]
         layers.append((str(target), True))
+    # ...and, laid over them, what the host runs or obeys later (task 308) — before the project bind, so a project
+    # inside one of them still has its own
+    for sub in _HOME_RO_DIRS_MADE:
+        try:
+            (home / sub).mkdir(exist_ok=True)
+        except FileExistsError:                         # a link or a file there: `_home_read_only` judges it
+            pass
+    for path in _home_read_only(home):
+        argv += ["--ro-bind", path, path]
+        layers.append((path, False))
 
     # Ancestor pins go here: later project binds and record masks must win over
     # them. Pinning a /tmp ancestor after a judge's project would expose it again.

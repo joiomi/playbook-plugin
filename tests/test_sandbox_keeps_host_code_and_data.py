@@ -159,6 +159,19 @@ class InsideTheSandbox(_Home):
         for rel in STATE:
             self.assertEqual(self.attempt(rel), "WROTE", rel)
 
+    def test_a_missing_claude_folder_is_made_empty_and_held(self):
+        # with no skills or agents folder at launch, a run could make one with a skill or an agent the host then loads
+        for name in ("skills", "agents"):
+            shutil.rmtree(self.home / ".claude" / name)
+        for rel in (".claude/skills/s/SKILL.md", ".claude/agents/a.md"):
+            script = f'mkdir -p "$(dirname "$HOME/{rel}")" 2>/dev/null; printf x > "$HOME/{rel}" 2>/dev/null ' \
+                     f'&& echo WROTE || echo REFUSED'
+            r = subprocess.run(self.argv(["bash", "-c", script]), cwd=str(self.proj), capture_output=True, text=True,
+                               timeout=60, env=dict(os.environ, HOME=str(self.home)))
+            self.assertEqual(r.stdout.strip(), "REFUSED", rel)
+        for name in ("skills", "agents"):
+            self.assertEqual(list((self.home / ".claude" / name).iterdir()), [], name)
+
     def test_a_read_only_file_cannot_be_replaced_or_removed(self):
         for verb in ('mv "$HOME/.claude/x" "$HOME/.claude/settings.json"', 'rm -f "$HOME/.claude/settings.json"',
                      'rm -rf "$HOME/.claude/plugins"'):
