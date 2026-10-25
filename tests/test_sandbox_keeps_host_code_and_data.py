@@ -66,9 +66,25 @@ CODE_AND_CONFIG = (
     ".grok/downloads/grok-1.0.0",
     ".grok/installed-plugins/p.json",
     ".grok/bundled/skills/s.md",
+    # impl round 2: names the round-1 list did not have (grok, agy, opus) — read-only because they exist
+    ".grok/trusted_folders.toml",
+    ".grok/sandbox.toml",
+    ".grok/skills/commit/SKILL.md",
+    ".grok/plugins/p.json",
+    ".grok/marketplace-cache/x/hooks/hooks.json",
+    ".gemini/antigravity-cli/settings.json",
+    ".claude/remote-settings.json",
+    ".claude/chrome/chrome-native-host",
+    ".claude/jobs/j/job.json",
+    # a name no list has: read-only because it exists and is not state its agent writes
+    ".grok/a-future-config.toml",
+    ".claude/a-future-tool/run",
+    ".codex/a-future-hooks/h.json",
 )
-# a host session's shell snapshot, which it sources before every shell call
-SNAPSHOTS = (".claude/shell-snapshots/snapshot-bash-1-x.sh", ".codex/shell_snapshots/s.sh")
+# what a host session sources before its shell calls: (the private folder, a file in it)
+SNAPSHOTS = ((".claude/shell-snapshots", ".claude/shell-snapshots/snapshot-bash-1-x.sh"),
+             (".codex/shell_snapshots", ".codex/shell_snapshots/s.sh"),
+             (".claude/session-env", ".claude/session-env/sid/sessionstart-hook-0.sh"))
 # a person's data and the commands on PATH: no agent's state
 NOT_AN_AGENTS = (".local/bin/tool", ".local/share/keyrings/login.keyring", ".local/share/Trash/files/old.txt",
                  ".local/lib/python3.10/site-packages/m.py", ".cache/ms-playwright/chromium/chrome")
@@ -111,7 +127,7 @@ class _Home(unittest.TestCase):
             self.skipTest(f"no temporary folder in {bases}")
         self.addCleanup(shutil.rmtree, home, True)
         self.home = home
-        for rel in CODE_AND_CONFIG + SNAPSHOTS + NOT_AN_AGENTS + STATE:
+        for rel in CODE_AND_CONFIG + tuple(f for _, f in SNAPSHOTS) + NOT_AN_AGENTS + STATE:
             p = home / rel
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text("original\n", encoding="utf-8")
@@ -198,6 +214,16 @@ class TheArgv(_Home):
             self.argv(["true"])
         self.assertIn("shell-snapshots", str(cm.exception))
 
+    def test_a_link_from_a_read_only_folder_into_a_writable_one_refuses_the_launch(self):
+        # a plugin's hook that is a link into the run's own state: the run writes there, the host runs it
+        hook = self.home / CODE_AND_CONFIG[0]
+        hook.unlink()
+        hook.symlink_to(self.home / ".claude" / "projects" / "-p" / "s.jsonl")
+        with self.assertRaises(RuntimeError) as cm:
+            self.argv(["true"])
+        self.assertIn(str(hook), str(cm.exception))
+        self.assertIn("Nothing was launched", str(cm.exception))
+
     def test_a_protected_file_with_another_hard_link_refuses_the_launch(self):
         settings = self.home / ".claude" / "settings.json"
         os.link(settings, self.home / ".claude" / "projects" / "settings.backup")
@@ -235,6 +261,15 @@ class InsideTheSandbox(_Home):
                 self.assertEqual(self.attempt(rel, agent), "REFUSED", (rel, agent))
                 self.assertEqual((self.home / rel).read_text(encoding="utf-8"), "original\n", rel)
 
+    def test_an_existing_entry_no_list_names_is_read_only(self):
+        # impl round 2: each round found a name the list of what not to write did not have; now what exists is held
+        for rel in (".grok/trusted_folders.toml", ".grok/sandbox.toml", ".grok/skills/commit/SKILL.md",
+                    ".gemini/antigravity-cli/settings.json", ".claude/remote-settings.json",
+                    ".claude/chrome/chrome-native-host", ".grok/a-future-config.toml", ".claude/a-future-tool/run",
+                    ".codex/a-future-hooks/h.json"):
+            self.assertEqual(self.attempt(rel, owner(rel)), "REFUSED", rel)
+            self.assertEqual((self.home / rel).read_text(encoding="utf-8"), "original\n", rel)
+
     def test_another_agents_state_cannot_be_written(self):
         for rel, agent in ((".claude/projects/-p/s.jsonl", "codex"), (".codex/auth.json", "claude"),
                            (".gemini/oauth_creds.json", "grok"), (".grok/config.toml", "agy")):
@@ -247,7 +282,7 @@ class InsideTheSandbox(_Home):
         self.assertEqual(self.attempt(WRITE_LOG, "codex"), "WROTE")
 
     def test_a_folder_above_a_read_only_path_cannot_be_moved_aside(self):
-        for rel, agent in ((".gemini/antigravity-cli/bin/agentapi", "agy"), (SNAPSHOTS[0], "claude")):
+        for rel, agent in ((".gemini/antigravity-cli/bin/agentapi", "agy"), (SNAPSHOTS[0][1], "claude")):
             folder = str(Path(rel).parent.parent) if rel.startswith(".gemini") else str(Path(rel).parent)
             self.run_in(f'mv "$HOME/{folder}" "$HOME/{folder}.aside" 2>/dev/null; mkdir -p "$(dirname "$HOME/{rel}")"'
                         f' 2>/dev/null; printf pwned > "$HOME/{rel}" 2>/dev/null; true', agent)
@@ -255,13 +290,14 @@ class InsideTheSandbox(_Home):
             self.assertFalse((self.home / (folder + ".aside")).exists(), folder)
 
     def test_a_host_shell_snapshot_is_neither_seen_nor_written(self):
-        for rel, agent in zip(SNAPSHOTS, ("claude", "codex")):
-            folder = str(Path(rel).parent)
+        for (folder, rel), agent in zip(SNAPSHOTS, ("claude", "codex", "claude")):
+            before = sorted(p.name for p in (self.home / folder).iterdir())
             seen = self.run_in(f'ls -A "$HOME/{folder}"; printf mine > "$HOME/{folder}/new.sh" && echo MADE; '
-                               f'printf pwned > "$HOME/{rel}" 2>/dev/null; true', agent)
+                               f'mkdir -p "$(dirname "$HOME/{rel}")"; printf pwned > "$HOME/{rel}" 2>/dev/null; true',
+                               agent)
             self.assertEqual(seen, "MADE", rel)                        # an empty, private folder of its own
             self.assertEqual((self.home / rel).read_text(encoding="utf-8"), "original\n", rel)
-            self.assertEqual(sorted(p.name for p in (self.home / folder).iterdir()), [Path(rel).name], rel)
+            self.assertEqual(sorted(p.name for p in (self.home / folder).iterdir()), before, rel)
 
     def test_a_missing_folder_of_the_list_is_made_empty_and_held(self):
         # with no such folder at launch, a run could make one with a skill, an agent, a rule or a hook in it
