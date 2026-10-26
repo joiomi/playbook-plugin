@@ -17,16 +17,36 @@ guarantee ledger has 136 rows (135 at 1.6.8; the new one is the session-id injec
 known violation. The live gauntlet on this release: ⟦gauntlet⟧.
 
 **Upgrading:** `/playbook:upgrade`, then restart every Claude Code session: `hooks.json` changed (the Monitor tool's
-command is guarded, task 307). ⟦init⟧ Nothing to migrate. The first sandboxed launch of each agent makes, empty, the
-names of its folder listed under task 315 that are missing (in `~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok`), and
-holds them read-only for its runs; an existing one is left as it is.
+command is guarded, task 307). On a project 1.6.8 set up, 1.6.9's `/playbook:init` changes two template-owned lines of
+CLAUDE.md (tests first, and the test contract among the sections a judge's window keeps), saving the earlier file to
+`.agent/backups/`, and rewrites the project's `.claude/bin` wrappers with task 310's fix — a session's start rewrites
+all of them but `monitor` by itself; nothing else in the project changes (measured). Nothing to migrate. The first
+sandboxed launch of each agent makes, empty, the names of its folder listed under task 315 that are missing (in
+`~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok`), and holds them read-only for its runs; an existing one is left as it
+is.
 
-**Measured before the release**, in temporary folders: ⟦window⟧
+**Measured before the release**, in temporary folders: on a project 1.6.8's `/playbook:init` set up, with a task 1.6.8
+had activated (so with no `base.json`), 1.6.9's hooks, before any 1.6.9 init, let a code edit of that task through,
+refused `git push --force` from a Bash and from a Monitor call, let `ls` through, and refused the stop while the task
+had open gates; 1.6.9's `doctor`, `bootstrap`, `status` and `audit` ran clean, and its close of that task wrote the
+closure's `numbers.json`; a project ruling was recorded; a bugfix task's contract row was proved by `tasks red` — red on
+the code before the fix, green after — and the close passed it (in a first run with no `red_run` in `.agent/config.json`
+the row could not run, and the close refused it, as it should). No judge was called there.
 
 **Going back** to 1.6.8 (`65d7857`): in the release clone the marketplace reads, `git -C <clone> checkout 65d7857`, then
 `claude plugin marketplace update playbook-x-marketplace` and `claude plugin update playbook@playbook-x-marketplace`,
-then restart every Claude Code session and check that `claude plugin list` says 1.6.8. ⟦back⟧ Before the next
-`/playbook:upgrade`, `git -C <clone> checkout main`.
+then restart every Claude Code session and check that `claude plugin list` says 1.6.8. Nothing needs converting:
+measured on that project after 1.6.9 had written its records, 1.6.8's `doctor`, `bootstrap`, `status`, `list`, `audit`,
+`compact` and `numbers` ran clean, and its close of a task 1.6.9 had run `tasks red` on kept the task's `## Test
+contract`, `## Red receipt`, rulings and work plan byte for byte, its `red-receipt.jsonl` and `base.json`, and
+`.agent/rulings.md`; 1.6.8 closes such a task without the contract check (it has none), and its `/playbook:init` puts
+its own two CLAUDE.md lines back; on 1.6.9 again, `tasks red --check` reads the same proof. In a throwaway HOME the
+plugin manager went from 1.6.9 down to 1.6.8 with these two commands, and back up (measured). Under 1.6.8 the defects
+1.6.9 fixed are back, among them, for the records: a judge cut at its timeout replaces the earlier partial log (312), a
+second single-judge review drops the agent's triage among the findings (304), `tasks blocked` after a resume deletes
+what the agent wrote under `## Blocked` (296), an activation deletes a section written after the chat capture (297), and
+a stub's expansion drops what was written into it (299). Before the next `/playbook:upgrade`, `git -C <clone> checkout
+main`.
 
 **verify acts as no one** — task 316 (found in task 315). Every child of `scripts/verify` gets a HOME of the run's
 own (one per run, under /var/tmp where it can be, made under a lock and removed at exit, git's two settings files in
