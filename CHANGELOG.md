@@ -17,8 +17,8 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   that was not the task's, and so did a close from the main tree while the worktree still held its work. Now both
   `tasks work done` and `tasks verify` refuse, naming the worktree, while a lane-less `.claude/worktrees/` checkout of
   the project's repository or of a `code_roots` one holds work the main tree does not have. Work is an uncommitted or
-  index-hidden change, or a commit that neither the main HEAD, its upstream nor a remote's default branch has. The
-  close checks again just before its commit and takes `--force --reason`.
+  index-hidden change, or a commit made in the worktree that the main HEAD does not have, pushed upstream or not. The
+  close checks again just before its commit, `tasks verify` after its run, and the close takes `--force --reason`.
 
 ## [1.6.9] — 2026-10-26
 

@@ -442,4 +442,14 @@ def cmd_verify(cmd_args: "list[str]") -> None:
     results = run_contract(project, commands, timeout,                 # always run: the agent asked (round 2)
                            lambda c: mv.run_command_capture(c, str(project), timeout_secs=timeout), on_result=show,
                            reuse=False, task=task_num)
+    # Task 321 impl round 2 (codex): and again after the run — work a verify command (or another session) wrote into a
+    # worktree while it ran is not the code this run certified. The run's record stays: it is true of the main tree.
+    _stray = _wts.stray_work(project)
+    if _stray:
+        print("Error: work landed in a worktree while verify ran, so this run does not certify the task's code:",
+              file=sys.stderr)
+        for _st in _stray:
+            print(f"  - {_st}", file=sys.stderr)
+        print(_wts.advice(project), file=sys.stderr)
+        raise SystemExit(1)
     raise SystemExit(1 if any(r[2] != 0 for r in results) else 0)

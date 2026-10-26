@@ -93,6 +93,7 @@ class TheWorkMustBeWhereTheCloseLooks(_Project):
         wt = self.worktree()
         (wt / "src" / "app.py").write_text("print(2)\n", encoding="utf-8")
         self.assert_blocked(self.tasks(wt, "work", "done"), str(wt))
+        self.assert_blocked(self.tasks(wt / "src", "work", "done"), str(wt))   # impl round 2 (sonnet): from a subfolder
 
     def test_tasks_verify_from_inside_the_worktree_is_refused(self):
         """Row 2: `tasks verify` there printed `[PASS]` for the main tree's code."""
@@ -293,14 +294,107 @@ class ImplRound1(_Project):
         from tasks import worktree_scope as ws
         real = ws._git
 
-        def fake(cwd, *args):
-            return None if args[:2] == ("worktree", "list") else real(cwd, *args)
+        def fake(cwd, *args, **kw):
+            return None if args[:2] == ("worktree", "list") else real(cwd, *args, **kw)
         ws._git = fake
         try:
             found = ws.stray_work(self.p, self.p)
         finally:
             ws._git = real
         self.assertTrue(any("cannot list" in f for f in found), found)
+
+
+class ImplRound2(_Project):
+    """Impl round 2 (agy, opus, sonnet, codex)."""
+
+    nested = ImplRound1.nested
+
+    def remote(self):
+        remote = self.base / "remote.git"
+        self.git(self.base, "init", "-q", "--bare", "-b", "main", str(remote))
+        self.git(self.p, "remote", "add", "origin", str(remote))
+        self.git(self.p, "push", "-q", "-u", "origin", "main")
+        return remote
+
+    def test_worktree_names_git_quotes_or_splits_block(self):
+        """Row 20 (agy, codex): a name with a non-ASCII letter or a newline — read whole, not quoted or split."""
+        for name in ("w\u021b", "w\nx"):
+            with self.subTest(repr(name)):
+                wt = self.worktree(name=name, branch=f"b{abs(hash(name)) % 1000}")
+                (wt / "src" / "app.py").write_text("print(2)\n", encoding="utf-8")
+                self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt).split("\n")[0])
+                self.git(self.p, "worktree", "remove", "--force", str(wt))
+
+    def test_control_a_clean_sparse_checkout_worktree_closes(self):
+        """Row 21 (agy, opus, sonnet; must-not): the files outside a sparse cone carry `skip-worktree` with nothing
+        hidden under it."""
+        (self.p / "docs").mkdir()
+        (self.p / "docs" / "x.md").write_text("x\n", encoding="utf-8")
+        self.git(self.p, "add", "-A")
+        self.git(self.p, "commit", "-qm", "docs")
+        wt = self.worktree()
+        self.git(wt, "sparse-checkout", "set", "src")
+        self.assertFalse((wt / "docs" / "x.md").exists())
+        self.assert_closed(self.tasks(self.p, "work", "done"))
+
+    def test_the_tasks_commits_on_the_remote_but_not_in_the_main_tree_block(self):
+        """Row 22 (opus): the worktree's commit pushed to origin/main (a PR merged there) and fetched, the main tree not
+        pulled — verify would read the main tree's old code."""
+        self.remote()
+        wt = self.worktree()
+        (wt / "src" / "app.py").write_text("print(2)\n", encoding="utf-8")
+        self.git(wt, "commit", "-qam", "the work")
+        self.git(wt, "push", "-q", "origin", "HEAD:main")
+        self.git(self.p, "fetch", "-q", "origin")
+        self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
+
+    def test_a_code_root_worktree_in_the_projects_worktree_folder_blocks(self):
+        """Row 23 (codex): a `code_roots` repository's worktree placed at `<project>/.claude/worktrees/<name>`."""
+        n = self.nested()
+        wt = self.p / ".claude" / "worktrees" / "libw"
+        self.git(n, "worktree", "add", "-q", str(wt), "-b", "libw")
+        (wt / "m.py").write_text("z = 2\n", encoding="utf-8")
+        self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
+        self.assert_blocked(self.tasks(wt, "work", "done"), str(wt))
+
+    def test_tasks_verify_refuses_work_written_while_it_ran(self):
+        """Row 24 (codex): `tasks verify` checked only before its run; a run that wrote into a clean worktree printed
+        `[PASS]` and was remembered."""
+        wt = self.worktree()
+        cfg = {"verify": f"grep -q 'print(1)' src/app.py && echo late > '{wt}/src/late.py'"}
+        (self.p / ".agent" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+        self.git(self.p, "commit", "-qam", "verify writes late")
+        self.git(wt, "merge", "-q", "--ff-only", "main")
+        r = self.tasks(self.p, "verify")
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(str(wt), r.stdout + r.stderr)
+
+    def test_git_that_refuses_to_answer_blocks(self):
+        """Row 25 (sonnet): git failing for another reason than "not a repository" (dubious ownership, a timeout) is a
+        block, not "no repository here"."""
+        sys.path.insert(0, str(PLUGIN))
+        from tasks import worktree_scope as ws
+        real = ws._git
+
+        def fake(cwd, *args, **kw):
+            if args[:1] == ("rev-parse",):
+                return subprocess.CompletedProcess(["git"], 128, stdout="",
+                                                   stderr="fatal: detected dubious ownership in repository")
+            return real(cwd, *args, **kw)
+        ws._git = fake
+        try:
+            found = ws.stray_work(self.p, self.p)
+        finally:
+            ws._git = real
+        self.assertTrue(any("dubious ownership" in f for f in found), found)
+
+    def test_control_a_worktree_whose_lane_marker_is_a_file_is_its_own(self):
+        """Row 26 (opus Minor, must-not): `find_project_root` takes any `.agent/tasks` that exists; so does the check."""
+        wt = self.worktree()
+        (wt / ".agent").mkdir(exist_ok=True)
+        (wt / ".agent" / "tasks").write_text("", encoding="utf-8")
+        (wt / "src" / "app.py").write_text("print(2)\n", encoding="utf-8")
+        self.assert_closed(self.tasks(self.p, "work", "done"))
 
 
 if __name__ == "__main__":

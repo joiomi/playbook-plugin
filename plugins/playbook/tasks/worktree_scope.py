@@ -10,10 +10,13 @@ commit (`--force --reason` passes, recorded), and `tasks verify` refuses.
 The repositories looked at are the project's and each `code_roots` one. A worktree with its own lane — or under a
 group folder with one, as the hooks' `pb_main_tree` reads it — answers to its own tasks and is not looked at; a nested
 repository is another repository, not a worktree. A worktree holds work when git shows a change in it (untracked files
-count), when an index bit (`assume-unchanged`, `skip-worktree`) hides one, or when it has commits that neither the main
-tree's HEAD nor that branch's upstream nor a remote's default branch has — the task's own pushed commits still count
-(impl round 1: agy, opus, codex). A worktree git cannot read as itself — its `.git` gone, so git answers for the main
-tree instead — fails closed. git runs with the caller's `GIT_*` repository variables dropped.
+count), when an index bit (`assume-unchanged`, or `skip-worktree` over a file that is there — a sparse checkout's
+absent files are no edit) hides one, or when it has commits the main tree's HEAD does not have, counted from the commit
+the worktree was made at (the oldest entry of its HEAD's reflog): what it was made from is not its work, and what it
+committed is, pushed or merged upstream or not, until the main tree has it (impl rounds 1-2: agy, opus, codex). A
+worktree git cannot read as itself — its `.git` gone, so git answers for the main tree instead — fails closed, and so
+does a git that refuses to answer for a repository. Worktree paths are read NUL-separated, as bytes. git runs with the
+caller's `GIT_*` repository variables dropped and replace refs off.
 """
 from __future__ import annotations
 
@@ -24,11 +27,14 @@ from pathlib import Path
 from tasks.verify_memory import _GIT_ENV_DROP
 
 
-def _git(cwd: Path, *args: str) -> "subprocess.CompletedProcess[str] | None":
+def _git(cwd: Path, *args: str, binary: bool = False) -> "subprocess.CompletedProcess | None":
     env = {k: v for k, v in os.environ.items() if k not in _GIT_ENV_DROP}
     try:
-        return subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, errors="replace",
-                              env=env, timeout=60)
+        if binary:
+            return subprocess.run(["git", "--no-replace-objects", *args], cwd=str(cwd), capture_output=True, env=env,
+                                  timeout=60)
+        return subprocess.run(["git", "--no-replace-objects", *args], cwd=str(cwd), capture_output=True, text=True,
+                              errors="replace", env=env, timeout=60)
     except (OSError, subprocess.SubprocessError):
         return None
 
@@ -45,12 +51,13 @@ def _resolved(base: Path, path: "str | None") -> "Path | None":
 
 
 def _has_lane(d: Path) -> bool:
-    """`d` holds `.agent/tasks` or a `.agent/<lane>/tasks` — the markers `find_project_root` looks for."""
+    """`d` holds `.agent/tasks` or a `.agent/<lane>/tasks` — the markers `find_project_root` looks for, as it reads
+    them: any that exists (impl round 2, opus)."""
     agent = d / ".agent"
-    if (agent / "tasks").is_dir():
+    if (agent / "tasks").exists():
         return True
     try:
-        return agent.is_dir() and any((s / "tasks").is_dir() for s in agent.iterdir() if s.is_dir())
+        return agent.is_dir() and any((s / "tasks").exists() for s in agent.iterdir() if s.is_dir())
     except OSError:
         return False
 
@@ -78,22 +85,15 @@ def _repositories(project: Path) -> "list[Path]":
 
 
 class _Repo:
-    """One repository: its top-level, common git directory, the folders its Claude Code worktrees live in, and the
-    commits that are not a worktree's own work."""
+    """One repository: its top-level, common git directory, the folders its Claude Code worktrees live in (its own, its
+    top's, and the project's — impl round 2, codex: a `code_roots` repository's worktree in the project's folder), and
+    its main tree's HEAD."""
 
-    def __init__(self, folder: Path, top: Path, common: Path):
+    def __init__(self, folder: Path, top: Path, common: Path, project: Path):
         self.top, self.common = top, common
-        self.worktree_dirs = sorted({folder / ".claude" / "worktrees", top / ".claude" / "worktrees"})
-        head = _out(_git(top, "rev-parse", "HEAD"))
-        known = [head] if head else []
-        upstream = _out(_git(top, "rev-parse", "--symbolic-full-name", "@{upstream}"))
-        if upstream:
-            known.append(upstream)
-        for line in (_out(_git(top, "for-each-ref", "--format=%(refname) %(symref)", "refs/remotes")) or "").splitlines():
-            name, _, target = line.partition(" ")
-            if name.endswith("/HEAD") and target:
-                known.append(target)                # a remote's default branch, as a clone records it
-        self.known = known
+        self.worktree_dirs = sorted({folder / ".claude" / "worktrees", top / ".claude" / "worktrees",
+                                     project / ".claude" / "worktrees"})
+        self.head = _out(_git(top, "rev-parse", "HEAD"))
 
     def is_claude_worktree(self, wt: Path) -> bool:
         return any(_inside(wt, d) and wt != d for d in self.worktree_dirs)
@@ -116,11 +116,16 @@ class _Repo:
             return f"the worktree {wt} cannot be read by git, so its work cannot be told apart from the main tree's"
         if status.stdout.strip():
             return f"the worktree {wt} holds uncommitted changes that the main tree does not have (untracked files count)"
-        hidden = [ln for ln in bits.stdout.splitlines() if ln[:1].islower() or ln[:1] == "S"]
+        hidden = [ln for ln in bits.stdout.splitlines()
+                  if ln[:1].islower() or (ln[:1] == "S" and (wt / ln[2:]).exists())]
         if hidden:
             return (f"the worktree {wt} has {len(hidden)} file(s) under an assume-unchanged or skip-worktree bit, which "
                     "hides an edit from git status")
-        ahead = _out(_git(wt, "rev-list", "--count", wt_head, "--not", *self.known))
+        # what the worktree was made at is not its work: the oldest entry of its HEAD's reflog (impl round 2, opus —
+        # the remote-tracking refs counted the task's own commits once they were upstream, the main tree not pulled)
+        made_at = (_out(_git(wt, "reflog", "show", "--format=%H", "HEAD")) or "").splitlines()[-1:]
+        known = [x for x in [self.head, *made_at] if x]
+        ahead = _out(_git(wt, "rev-list", "--count", wt_head, "--not", *known))
         if ahead is None:
             return f"the worktree {wt}: git cannot tell whether its commits are in the main tree"
         if ahead != "0":
@@ -135,11 +140,17 @@ def stray_work(project: Path, cwd: "Path | None" = None) -> "list[str]":
     found: "list[str]" = []
     seen: "set[Path]" = set()
     for folder in _repositories(project):
-        top = _resolved(folder, _out(_git(folder, "rev-parse", "--show-toplevel")))
+        asked = _git(folder, "rev-parse", "--show-toplevel")
+        if asked is not None and asked.returncode != 0 and "not a git repository" in (asked.stderr or ""):
+            continue                                # no git repository here: nothing to compare
+        top = _resolved(folder, _out(asked))
         common = _resolved(folder, _out(_git(folder, "rev-parse", "--git-common-dir")))
         if top is None or common is None:
-            continue                                # no git repository here: nothing to compare
-        repo = _Repo(folder, top, common)
+            # impl round 2 (sonnet): a git that refuses (dubious ownership) or does not answer is no "no repository"
+            said = ((asked.stderr or "").strip().splitlines() or ["no answer"])[0] if asked is not None else "no answer"
+            found.append(f"git cannot answer for {folder} ({said}), so its worktrees cannot be checked")
+            continue
+        repo = _Repo(folder, top, common, project)
         # (a) the cwd is another worktree of this repository, holding work
         if cwd != top and (_inside(cwd, folder) or _inside(cwd, top)):
             ctop = _resolved(cwd, _out(_git(cwd, "rev-parse", "--show-toplevel")))
@@ -153,14 +164,14 @@ def stray_work(project: Path, cwd: "Path | None" = None) -> "list[str]":
                     seen.add(ctop)
                     found.append(f"you are in the worktree {ctop}, and this task's verify runs in the main tree: {why}")
         # (b) a lane-less Claude Code worktree that holds work the main tree does not have
-        listing = _out(_git(top, "worktree", "list", "--porcelain"))
-        if listing is None:
+        listed = _git(top, "worktree", "list", "--porcelain", "-z", binary=True)
+        if listed is None or listed.returncode != 0:
             found.append(f"git cannot list the worktrees of {top}, so their work cannot be checked")
             continue
-        for line in listing.splitlines():
-            if not line.startswith("worktree "):
+        for field in listed.stdout.split(b"\0"):      # a path is read whole (impl round 2: agy, codex)
+            if not field.startswith(b"worktree ") or not field[len(b"worktree "):]:
                 continue
-            wt = Path(line[len("worktree "):]).resolve()
+            wt = Path(os.fsdecode(field[len(b"worktree "):])).resolve()
             if wt == top or wt in seen or not repo.is_claude_worktree(wt) or not wt.is_dir() or repo.own_lane(wt):
                 continue
             why = repo.work_in(wt)
