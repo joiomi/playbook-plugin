@@ -345,13 +345,15 @@ def sandbox_detection_fallback(out: Path) -> int:
         # nested: a process INSIDE the plugin's own sandbox (a real judge, haiku) runs the launcher's preview there.
         # "Nested" is the plugin's own cage: `run()` marks its child PLAYBOOK_SANDBOXED=1 (`is_sandboxed`); a
         # foreign bubblewrap is not one of ours and is not claimed to be detected.
+        # the judge's own output folder, handed to its launch as a writable path: since task 315 a run's /tmp is its
+        # own, so a folder of the host's /tmp the launch does not name is not the host's inside (task 318, P15)
         drop = Path(tempfile.gettempdir()) / f"pb184-nested-{uuid.uuid4().hex[:10]}"
         drop.mkdir()
         try:
             judge_runs(run, "nested: a real judge inside the plugin's sandbox runs the launcher's preview", proj,
                        [f"{sandbox} --agent claude --print-argv -- --version > {drop}/nested.txt 2>&1; "
                         f"echo rc=$? >> {drop}/nested.txt; echo marker=$PLAYBOOK_SANDBOXED >> {drop}/nested.txt"],
-                       env=base)
+                       extra=("--ro-project", "--rw", str(drop)), env=base)
             got = (drop / "nested.txt").read_text(errors="replace") if (drop / "nested.txt").exists() else "(absent)"
             run.note(f"--- the inner launcher's output (nested.txt) ---\n{got.rstrip()}")
             first = (got.splitlines() or [""])[0]
@@ -405,7 +407,7 @@ def sandbox_read_network(out: Path) -> int:
                            f"python3 -c \"import urllib.request; print(urllib.request.urlopen('https://www.example.com', timeout=15).status)\" > {drop}/net.txt 2>&1",
                            f"{{ echo written > {proj}/judge-wrote-this.txt ; }} 2> {drop}/write.txt; echo rc=$? >> {drop}/write.txt",
                            f"cat {proj}/.agent/chat_log.md > {drop}/records.txt 2>&1; echo rc=$? >> {drop}/records.txt"],
-                       watch=[proj])
+                       extra=("--ro-project", "--rw", str(drop)), watch=[proj])   # its output folder (task 318, P15)
         got = {n: (drop / n).read_text(errors="replace") if (drop / n).exists() else "(absent)"
                for n in ("read.txt", "net.txt", "write.txt", "records.txt")}
         for n, v in got.items():
