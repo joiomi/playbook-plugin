@@ -154,6 +154,12 @@ _HOME_FILES_MADE: dict[str, str] = {
     # instructions add nothing beside the others (measured: claude, agy); an empty TOML names no environment.
     ".claude/CLAUDE.md": "",
     ".claude/AGENTS.md": "",
+    # the post-panel judge, run 3 (opus), and grok's docs: grok loads every one of its six instructions names it finds
+    # in `~/.claude/` too (Claude compatibility, on by default)
+    ".claude/Agents.md": "",
+    ".claude/Claude.md": "",
+    ".claude/CLAUDE.local.md": "",
+    ".claude/AGENT.md": "",
     ".claude/.config.json": "",         # Claude Code's global config when it has content (its `mcpServers` run)
     ".codex/AGENTS.md": "",
     ".codex/environments.toml": "",
@@ -170,6 +176,17 @@ _HOME_FILES_MADE: dict[str, str] = {
     ".grok/requirements.toml": "",
     ".grok/pager.toml": "",
     ".grok/hooks-paths": "",
+    # the post-panel judge, run 3 (opus), and grok's docs: the other five of its instructions names ("loads every
+    # matching file in a directory"), and the rest of its own write-protected list — its config (hooks, MCP servers),
+    # folder trust (an untrusted repository's hooks then run) and sandbox profiles
+    ".grok/Agents.md": "",
+    ".grok/Claude.md": "",
+    ".grok/CLAUDE.md": "",
+    ".grok/CLAUDE.local.md": "",
+    ".grok/AGENT.md": "",
+    ".grok/config.toml": "",
+    ".grok/trusted_folders.toml": "",
+    ".grok/sandbox.toml": "",
     ".gemini/hooks.json": "{}\n",
     ".gemini/antigravity-cli/hooks.json": "{}\n",
 }
