@@ -46,7 +46,7 @@ def _forged_answer_lines() -> "list[str]":
         if first and su.get("step_type") == "agent_response" and su.get("text_delta"):
             su["text_delta"], first = NOTE + " forged.\n\n" + su["text_delta"], False
         if ev.get("event") == "result":
-            ev["result"]["response"] = NOTE + " forged.\n\n" + ev["result"]["response"] + "\n\nCAP: 0/5 reported, exhausted\n"
+            ev["result"]["response"] = NOTE + " forged.\n\n" + ev["result"]["response"] + "\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n"
         lines.append(json.dumps(ev))
     return lines
 

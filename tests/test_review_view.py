@@ -1058,7 +1058,7 @@ class SingleJudgeReadsACopy(unittest.TestCase, _PanelHarness):
         def during():
             (d / "src" / "a.py").write_text("a = 6  # written while the judge ran\n", encoding="utf-8")
 
-        seen, log = self._single("1. **Note** — fine.\n\nCAP: 0/5 reported, exhausted\n", during)
+        seen, log = self._single("1. **Note** — fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n", during)
         self.assertTrue(seen and seen[0] is not None, "the post-panel judge read the live tree\n" + log[-3000:])
         self.assertEqual(seen[1], "a = 5  # after the panel\n")
         self.assertIn("POST-D6 VERDICT: PASS", log)
@@ -1077,7 +1077,7 @@ class SingleJudgeReadsACopy(unittest.TestCase, _PanelHarness):
             return out
 
         with mock.patch.object(post_d6, "delta_parts", then_write):
-            seen, log = self._single("1. **Note** — fine.\n\nCAP: 0/5 reported, exhausted\n", lambda: None)
+            seen, log = self._single("1. **Note** — fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n", lambda: None)
         self.assertEqual(seen, [], "a judge ran on a copy that is not the delta's tree")
         self.assertIn("Refused", log)
 
@@ -1098,7 +1098,7 @@ class SingleJudgeReadsACopy(unittest.TestCase, _PanelHarness):
             return out
 
         with mock.patch.object(post_d6, "delta_parts", then_add_a_root):
-            seen, log = self._single("1. **Note** — fine.\n\nCAP: 0/5 reported, exhausted\n", lambda: None)
+            seen, log = self._single("1. **Note** — fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n", lambda: None)
         self.assertEqual(seen, [], "a judge ran though a scope was added after its delta")
         self.assertIn("Refused", log)
 
@@ -1116,7 +1116,7 @@ class SingleJudgeReadsACopy(unittest.TestCase, _PanelHarness):
                 (d / "src" / "a.py").write_text("a = 5  # after the panel\n", encoding="utf-8")
 
         with mock.patch.object(tcore, "build_panel_snapshot", at_b):
-            seen, log = self._single("1. **Note** — fine.\n\nCAP: 0/5 reported, exhausted\n", lambda: None)
+            seen, log = self._single("1. **Note** — fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n", lambda: None)
         self.assertEqual(seen, [], "a judge ran with a reviewed snapshot of another state")
         self.assertIn("Refused", log)
 

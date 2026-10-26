@@ -323,7 +323,7 @@ def _codex_ok():
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     # task 320: as a review the protocol accepts — the captured "OK" answer, ending with the CAP line
-    return mod.CODEX_OK.replace('"text":"OK"', '"text":"OK\\n\\nCAP: 0/5 reported, exhausted"')
+    return mod.CODEX_OK.replace('"text":"OK"', '"text":"OK\\n\\nNo findings.\\n\\nCAP: 0/5 reported, exhausted"')
 
 
 class TheCodexSingleJudge(unittest.TestCase):

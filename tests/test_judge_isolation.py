@@ -34,7 +34,7 @@ from tasks import cli as tcli  # noqa: E402
 from tasks import review as treview  # noqa: E402  (tamper trio moved by the 1.5.9 split)
 
 
-def _ok_result(stdout="REVIEW BODY\n\nCAP: 0/5 reported, exhausted\n"):
+def _ok_result(stdout="REVIEW BODY\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n"):
     return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
 
 
@@ -1050,7 +1050,7 @@ class SingleJudgeExitTamperTest(unittest.TestCase):
         def fake(agent, agent_args, **kw):
             _sh.rmtree(tdir)     # rogue destroys the task dir, then returns clean
             return subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="REVIEW BODY\n\nCAP: 0/5 reported, exhausted\n", stderr="")
+                args=[], returncode=0, stdout="REVIEW BODY\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n", stderr="")
         code, err, _ = self._drive(proj, fake)
         self.assertEqual(code, 1)
         self.assertIn("TAMPER DETECTED", err,
@@ -1064,7 +1064,7 @@ class SingleJudgeExitTamperTest(unittest.TestCase):
 
         def fake(agent, agent_args, **kw):
             return subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="REVIEW BODY\n\nCAP: 0/5 reported, exhausted\n", stderr="")
+                args=[], returncode=0, stdout="REVIEW BODY\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n", stderr="")
         patches = [mock.patch("tasks.review.atomic_write",
                               side_effect=OSError("disk full"))]
         code, err, _ = self._drive(proj, fake, patches=patches)

@@ -134,28 +134,45 @@ def judge_failed(text: str) -> bool:
 # provider's (impl round 1, opus and codex: a quoted usage limit recorded a healthy seat as out of credit).
 NOT_A_REVIEW_HEAD = "(FAILED — not a review:"
 # What the review protocol makes a judge's last line — `CAP: <k>/5 reported, exhausted|more remain` (template.py) —
-# here bare, bold or in backticks, and with words after it, as real judges wrote it.
-_SEAT_CAP_RE = re.compile(r"^[\s*_`>]*CAP:\s*(\d+)\s*/\s*\d+\s+reported\b", re.IGNORECASE)
+# here bare, bold, in backticks, after a list mark (impl round 2, agy and sonnet), and with words after it.
+_SEAT_CAP_RE = re.compile(r"^[\s*_`>]*(?:(?:[-*+]|\d+[.)])\s+[\s*_`]*)?CAP:\s*(\d+)\s*/\s*\d+\s+reported\b",
+                          re.IGNORECASE)
 # A rule or a fence closing the answer after its CAP line (impl round 1, agy and sonnet).
 _SEAT_TRAILER_RE = re.compile(r"\s*(-{3,}|\*{3,}|_{3,}|`{3,}|~{3,})\s*")
 # A finding as the prompt asks for one ("Start every finding with its severity in bold"): at the start of a line,
-# alone or after a list mark — a plan that echoes the severities mid-sentence is no finding (impl round 1).
-_SEAT_FINDING_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)?\*\*(Critical|Important|Minor)\*\*", re.MULTILINE)
-# A turn that stopped to wait on a command it had started — agy's measured shapes, each OPENING with it and ending
-# `CAP: 0/5 …`; a review that mentions waiting further down is still a review (impl round 1).
-_SEAT_WAIT_RE = re.compile(r"^\W*(I have launched|I've launched|I('m| am) waiting|Waiting for|Please wait|Wait for)\b",
-                           re.IGNORECASE)
+# alone or after a list mark — a plan that echoes the severities mid-sentence is no finding (impl round 1) — in the
+# stop rule's forms: any case, a `[` or a `:` (impl round 2, opus; `post_d6._FINDING_RE`).
+_SEAT_FINDING_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)?\*\*\s*\[?\s*(Critical|Important|Minor)\b",
+                              re.IGNORECASE | re.MULTILINE)
+# A turn that stopped to wait on a command it had started — agy's measured shapes ended `CAP: 0/5 …`; a line of the
+# answer, anywhere (impl round 2, codex: the prompt's lens sentence put before the wait hid it from a first-line test).
+_SEAT_WAIT_RE = re.compile(
+    r"^\W*(I have launched|I've launched|I('m| am) waiting|Waiting (?:for|on)|Please wait|Wait (?:for|on))\b",
+    re.IGNORECASE | re.MULTILINE)
+# A CAP of 0 is a review when the answer says it found nothing, or points at what it read (impl round 2, opus, sonnet
+# and codex: a refusal or a plan that still wrote the CAP line counted). The forms are the ones counted seats used
+# (`.agent/tasks/320-*/cap0_probe.out`, this repo and WoW): "No Critical or Important findings", "No new findings",
+# "I found no …", "Nothing to report", a lone "None.", the Romanian "Nu am găsit / identificat …".
+_SEAT_NONE_RE = re.compile(
+    r"\bno\s+(?:(?:new|further|other|more|actionable|grounded|counted|real)\s+)*(?:\*\*)?(?:critical|important|minor)?"
+    r"(?:\*\*)?(?:\s*(?:or|and|,|/)\s*(?:\*\*)?(?:critical|important|minor)(?:\*\*)?)*\s*"
+    r"(?:findings?|issues?|problems?|defects?)\b|\bfound\s+no(?:thing)?\b|\bnothing\s+(?:to\s+report|found)\b"
+    r"|^\W*none\W*$|\bnu\s+am\s+(?:găsit|gasit|identificat)\b",
+    re.IGNORECASE | re.MULTILINE)
+# What a judge read, cited: `path/file.ext:12`, `file.ext#L12`, or a backticked path or file name.
+_SEAT_CITE_RE = re.compile(r"[\w./@+-]+\.[A-Za-z]\w*(?::\d+|#L\d+)|`[^`\n]*[\w-][/.][\w-][^`\n]*`")
 
 
 def not_a_review(text: str) -> "str | None":
     """Why a judge's exit-0 text is no review, or None when it is one (task 320, audit 5's G6).
 
     `judge_failed` knows the failure markers only, so a refusal, a filter block, a plan-only stop or a wait counted
-    as a judge that succeeded. A text is a review when its last non-empty line — a closing rule or fence aside — is
-    the protocol's CAP line, unless the CAP is 0, it names no finding, and its first line is a wait on a command the
-    judge had started; or, with no CAP line, when a line opens with a finding the way the prompt asks (`**Critical**`,
-    `**Important**`, `**Minor**`). A failure-marked text is `judge_failed`'s and gets no second reason here. The
-    reason never quotes the judge."""
+    as a judge that succeeded. A text is a review when a line opens with a finding the way the prompt asks
+    (`**Critical**`, `**Important**`, `**Minor**`), or when its last non-empty line — a closing rule or fence aside —
+    is the protocol's CAP line. A CAP of 0 with no finding and some prose is a review only when the answer says it
+    found nothing or cites what it read, and never when a line of it is a wait on a command the judge had started
+    without that statement; a bare CAP line is a review. A failure-marked text is `judge_failed`'s and gets no second
+    reason here. The reason never quotes the judge."""
     t = (text or "").lstrip("\ufeff").replace("\u2019", "'").replace("\u2018", "'")
     if judge_failed(t):
         return None
@@ -167,8 +184,12 @@ def not_a_review(text: str) -> "str | None":
     finding = _SEAT_FINDING_RE.search(t)
     cap = _SEAT_CAP_RE.match(lines[-1])
     if cap:
-        if int(cap.group(1)) == 0 and not finding and _SEAT_WAIT_RE.match(lines[0]):
-            return "the judge stopped while waiting for a command it had started, and reports 0 findings"
+        if int(cap.group(1)) == 0 and not finding and len(lines) > 1:
+            says_none = _SEAT_NONE_RE.search(t)
+            if not says_none and _SEAT_WAIT_RE.search("\n".join(lines[:-1])):
+                return "the judge stopped while waiting for a command it had started, and reports 0 findings"
+            if not says_none and not _SEAT_CITE_RE.search("\n".join(lines[:-1])):
+                return "it reports 0 findings, but neither says it found none nor points at anything it read"
         return None
     if finding:
         return None
@@ -210,8 +231,8 @@ def classify_failure(output_text: str) -> str:
     t = output_text or ""
     if not judge_failed(t):
         return OTHER
-    if t.lstrip().startswith(NOT_A_REVIEW_HEAD):      # task 320: the judge's own words follow it
-        return OTHER
+    if NOT_A_REVIEW_HEAD in t:      # task 320: the judge's own words follow it — first, or under the single
+        return OTHER                # judge's `(FAILED — exit 1)` (impl round 2, codex)
     if "invalid_request_error" in t and _CODEX_CLI_TOO_OLD in t:
         return CLI_UPGRADE_REQUIRED
     if "invalid_request_error" in t and _CODEX_MODEL_GONE in t:

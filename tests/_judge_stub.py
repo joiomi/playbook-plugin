@@ -84,7 +84,7 @@ def agy_as_review(stream: str) -> str:
             continue
         res = ev.get("result") if isinstance(ev, dict) and ev.get("event") == "result" else None
         if isinstance(res, dict) and isinstance(res.get("response"), str) and res["response"].strip():
-            res["response"] = res["response"].rstrip("\n") + "\n\nCAP: 0/5 reported, exhausted\n"
+            res["response"] = res["response"].rstrip("\n") + "\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n"
             ln = json.dumps(ev, ensure_ascii=False, separators=(",", ":")) + ("\n" if ln.endswith("\n") else "")
         out.append(ln)
     return "".join(out)

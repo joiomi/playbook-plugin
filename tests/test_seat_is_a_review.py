@@ -51,6 +51,15 @@ class NotAReview(unittest.TestCase):
             # impl round 1 (codex): a typographic apostrophe
             "curly wait": "I\u2019m waiting for the command to finish.\n" + CAP0,
             "curly launched": "I\u2019ve launched the suite in the background.\nWaiting for it.\n" + CAP0,
+            # impl round 2 (codex reproduced the first and the third through the CLI; opus, sonnet): a non-review that
+            # still writes the CAP line, as agy wrote it under its waits
+            "refusal + CAP": "I'm sorry, I can't help with reviewing this.\n" + CAP0,
+            "plan + CAP": "I'll read the diff first, then run the tests.\n" + CAP0,
+            "lens line, then a wait": ("The change touches no shared or persisted state.\nI have launched `python3 "
+                                       "scripts/verify` in the background.\nWaiting for it to finish.\n" + CAP0),
+            "the lens line alone": "The change touches no shared or persisted state.\n" + CAP0,
+            "a Romanian plan + CAP": "Voi citi implementarea \u0219i voi urm\u0103ri fluxul de date.\n" + CAP0,
+            "waiting on": "Waiting on the suite to finish.\n" + CAP0,
         }
         for name, text in shapes.items():
             with self.subTest(name):
@@ -66,8 +75,8 @@ class NotAReview(unittest.TestCase):
             "no findings + CAP": "No Critical or Important findings.\n\n" + CAP0,
             "more remain": "**Important** `a.py:1` x\n**Important** `b.py:2` y\nCAP: 5/5 reported, more remain",
             "CAP with words after": "Checked.\nCAP: 0/5 reported, exhausted — no further Critical/Important findings",
-            "bold CAP": "Checked the delta.\n\n**CAP: 0/5 reported, exhausted**",
-            "backticked CAP": "Checked the delta.\n\n`CAP: 0/5 reported, exhausted`",
+            "bold CAP": "No findings in the delta.\n\n**CAP: 0/5 reported, exhausted**",
+            "backticked CAP": "No findings in the delta.\n\n`CAP: 0/5 reported, exhausted`",
             "CAP with a period": "Nothing found.\n" + CAP0 + ".",
             "no CAP, bold finding": "- **N3 — row 15.**\n\n**Important** `red.py:12` the cleanup misses SIGKILL.",
             "findings that wait": ("Waiting for the suite took long, but:\n**Important** `a.py:3` x\n"
@@ -77,13 +86,26 @@ class NotAReview(unittest.TestCase):
             "BOM": "\ufeffNo findings.\n" + CAP0,
             "BOM on the CAP line": "\ufeff" + CAP0,
             "Romanian": "Nu am găsit probleme Critical sau Important. Au trecut 73 de teste.\n\n" + CAP0,
-            "200,000 characters": ("x" * 200_000) + "\n" + CAP0,
+            "200,000 characters": "No findings. " + ("x" * 200_000) + "\n" + CAP0,
             # impl round 1 (agy, sonnet): a rule or a closing fence after the CAP line
             "CAP then a rule": "No findings.\n" + CAP0 + "\n---",
             "CAP then a fence": "Checked `a.py`.\n" + CAP0 + "\n```",
             # impl round 1 (agy, opus, sonnet, codex): a review that mentions waiting is still a review
-            "a CAP-0 review naming a wait mid-text": ("The lock is bounded.\n- Waiting for the lock is capped by "
-                                                      "`timeout=5`.\n" + CAP0),
+            "a CAP-0 review naming a wait mid-text": ("No findings. The lock is bounded.\n- Waiting for the lock is "
+                                                      "capped by `timeout=5`.\n" + CAP0),
+            # impl round 2: a CAP-0 answer with prose says it found nothing, or points at what it read
+            "CAP 0 citing a line": "The retry at `tasks/review.py:2296` stays bounded.\n" + CAP0,
+            "CAP 0 citing a path": "I read `tasks/models_check.py` and its tests.\n" + CAP0,
+            "CAP 0, I found no": "I found no Critical or Important problem in the delta.\n" + CAP0,
+            "CAP 0, Romanian": "Nu am identificat probleme în diferența revizuită.\n" + CAP0,
+            "CAP 0, nothing to report": "Nothing to report: the change is a version bump.\n" + CAP0,
+            "CAP 0, two qualifiers": "No new actionable findings. The rollback recipe holds.\n" + CAP0,   # 275's codex
+            # impl round 2 (agy, opus, sonnet): a listed CAP line; the stop rule's forms of a finding
+            "a listed CAP line": "No findings.\n- CAP: 0/5 reported, exhausted",
+            "a numbered CAP line": "No findings.\n1. CAP: 0/5 reported, exhausted",
+            "Critical with a colon, no CAP": "**Critical:** `a.py:1` the guard fails open.",
+            "bracketed, no CAP": "**[Important]** `a.py:1` x.",
+            "lower case, no CAP": "- **important** `a.py:1` x.",
             "a Minor-only review that says waiting": "**Minor** `a.py:3` x.\nWaiting for the suite took long.\n" + CAP0,
             "a numbered finding, no CAP": "1. **Important** — `a.py:1` the check misses x.",
             "a listed finding, no CAP": "- **Minor** `b.py:2` a wording.",
@@ -110,6 +132,17 @@ class NotAReview(unittest.TestCase):
                 self.assertIsNone(seat_outage.classify_outage(marked, provider=provider))
                 self.assertEqual(models_check.classify_failure(marked), models_check.OTHER)
         self.assertEqual(seat_outage._NOT_A_REVIEW_HEAD, models_check.NOT_A_REVIEW_HEAD)   # the one head, twice
+        # impl round 2 (codex, reproduced through the CLI): the single judge's failure path formats the marked text
+        # under `(FAILED — exit 1)`, so the head is no longer first — the dead-model classifier still reads none of it
+        import subprocess
+        from provider.sandbox import format_judge_output
+        quoted = "invalid_request_error: this model is not supported for this account"
+        formatted = format_judge_output(subprocess.CompletedProcess(
+            ["codex"], 1, stdout=f"{models_check.NOT_A_REVIEW_HEAD} the answer is empty)\n\n{quoted}\n{quoted}\n",
+            stderr=""))
+        self.assertTrue(judge_failed(formatted))
+        self.assertEqual(models_check.classify_failure(formatted), models_check.OTHER)
+        self.assertIsNone(seat_outage.classify_outage(formatted, provider="codex"))
 
     def test_a_failure_is_left_to_judge_failed(self):
         failures = [
