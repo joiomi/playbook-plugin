@@ -9,7 +9,7 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   text as a judge that succeeded, and a single judge saved it as findings. Real judges had returned refusals, a filter
   block, plan-only stops and waits for a command they had started. Now an answer must open a line with a
   `**Critical**`/`**Important**`/`**Minor**` finding, or end with the protocol's CAP line. A CAP of 0 with other text
-  must say it found nothing (not "yet") or cite a `file:line` it read, and must not be a wait. Otherwise it is recorded as `(FAILED — not a review: …)`: it does
+  must say it found nothing (not "yet") or cite a `file:line` it read, and must be neither a plan nor a wait. Otherwise it is recorded as `(FAILED — not a review: …)`: it does
   not count toward the quorum, a single review fails with exit 1, and a post-panel run is released. Such an answer is
   never read as the provider's outage or a dead model. A `--prompt` consultation is unchanged.
 

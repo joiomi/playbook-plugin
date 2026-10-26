@@ -66,6 +66,12 @@ class NotAReview(unittest.TestCase):
             "a wait, nothing found so far": "Waiting for the suite. Nothing found so far.\n" + CAP0,
             "Important context, then a plan": "**Important context**\nI will start by reading the diff and tests.",
             "a plan naming a file + CAP": "I'll read `tasks/review.py` first, then run the tests.\n" + CAP0,
+            # post-panel run 2 (codex): a provisional none past its first words; a plan that cites a line
+            "I found no findings yet": "I'm waiting for the command to finish; I found no findings yet.\n" + CAP0,
+            "no Critical findings so far": "No Critical findings so far, still reading.\n" + CAP0,
+            "a plan citing a line + CAP": "I'll read `tasks/review.py:2296` first, then run the tests.\n" + CAP0,
+            "let me, citing a line": "Let me check `a.py:3` before concluding.\n" + CAP0,
+            "a Romanian plan citing a line": "Voi citi `tasks/review.py:2296` și apoi rulez testele.\n" + CAP0,
         }
         for name, text in shapes.items():
             with self.subTest(name):
@@ -107,6 +113,8 @@ class NotAReview(unittest.TestCase):
             "CAP 0, Romanian": "Nu am identificat probleme în diferența revizuită.\n" + CAP0,
             "CAP 0, nothing to report": "Nothing to report: the change is a version bump.\n" + CAP0,
             "CAP 0, two qualifiers": "No new actionable findings. The rollback recipe holds.\n" + CAP0,   # 275's codex
+            "CAP 0 citing a line, past tense": "I traced `tasks/review.py:2296`; the retry stays bounded.\n" + CAP0,
+            "CAP 0, a none and a later note": "No findings. I'll note `a.py:3` reads oddly, but it is correct.\n" + CAP0,
             # impl round 2 (agy, opus, sonnet): a listed CAP line; the stop rule's forms of a finding
             "a listed CAP line": "No findings.\n- CAP: 0/5 reported, exhausted",
             "a numbered CAP line": "No findings.\n1. CAP: 0/5 reported, exhausted",

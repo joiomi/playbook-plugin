@@ -162,16 +162,27 @@ _SEAT_NONE_RE = re.compile(
     r"(?:findings?|issues?|problems?|defects?)\b|\bfound\s+no(?:thing)?\b|\bnothing\s+(?:to\s+report|found)\b"
     r"|^\W*none\W*$|\bnu\s+am\s+(?:găsit|gasit|identificat)\b",
     re.IGNORECASE | re.MULTILINE)
-# A "none" that is provisional is none: "no findings yet", "nothing found so far" (post-panel run 1, codex).
-_SEAT_PROVISIONAL_RE = re.compile(r"\s*[,;:]?\s*(?:yet|so\s+far|for\s+now|încă)\b", re.IGNORECASE)
+# A "none" that is provisional is none: "no findings yet", "nothing found so far", "I found no findings yet" — the
+# word anywhere in the rest of its sentence (post-panel runs 1-2, codex).
+_SEAT_PROVISIONAL_RE = re.compile(r"\b(?:yet|so\s+far|for\s+now|încă)\b", re.IGNORECASE)
+_SEAT_SENTENCE_END_RE = re.compile(r"[.!?\n]")
+# A plan, not a finding: a sentence that says what the judge will do (post-panel run 2, codex: "I'll read
+# `tasks/review.py:2296` first, then run the tests." + CAP 0 passed the citation test).
+_SEAT_PLAN_RE = re.compile(r"(?:^|(?<=[.!?;])\s+)\W*(?:I'll|I will|I'm going to|I am going to|Let me|Voi|O să)\b",
+                           re.IGNORECASE | re.MULTILINE)
 # What a judge read, cited at a line: `path/file.ext:12`, `file.ext#L12`. A file's name alone is no citation — a plan
 # names the files it means to read (post-panel run 1, codex: "I'll read `tasks/review.py` first" counted).
 _SEAT_CITE_RE = re.compile(r"[\w./@+-]+\.[A-Za-z]\w*(?::\d+|#L\d+)")
 
 
 def _says_none(text: str) -> bool:
-    """The answer says, for good, that it found nothing (`_SEAT_NONE_RE`, not followed by "yet" or "so far")."""
-    return any(not _SEAT_PROVISIONAL_RE.match(text, m.end()) for m in _SEAT_NONE_RE.finditer(text))
+    """The answer says, for good, that it found nothing: a `_SEAT_NONE_RE` statement whose sentence has no "yet",
+    "so far" or "for now" in the rest of it."""
+    for m in _SEAT_NONE_RE.finditer(text):
+        end = _SEAT_SENTENCE_END_RE.search(text, m.end())
+        if not _SEAT_PROVISIONAL_RE.search(text, m.end(), end.start() if end else len(text)):
+            return True
+    return False
 
 
 def not_a_review(text: str) -> "str | None":
@@ -181,7 +192,8 @@ def not_a_review(text: str) -> "str | None":
     as a judge that succeeded. A text is a review when a line opens with a finding the way the prompt asks
     (`**Critical**`, `**Important**`, `**Minor**`), or when its last non-empty line — a closing rule or fence aside —
     is the protocol's CAP line. A CAP of 0 with no finding and some prose is a review only when the answer says it
-    found nothing (not "yet") or cites a line it read, and never when a line of it is a wait on a command the judge had started
+    found nothing (not "yet") or cites a line it read, and never when, without that statement, it says what it
+    will do (a plan) or a line of it is a wait on a command the judge had started
     without that statement; a bare CAP line is a review. A failure-marked text is `judge_failed`'s and gets no second
     reason here. The reason never quotes the judge."""
     t = (text or "").lstrip("\ufeff").replace("\u2019", "'").replace("\u2018", "'")
@@ -199,6 +211,8 @@ def not_a_review(text: str) -> "str | None":
             says_none = _says_none(t)
             if not says_none and _SEAT_WAIT_RE.search("\n".join(lines[:-1])):
                 return "the judge stopped while waiting for a command it had started, and reports 0 findings"
+            if not says_none and _SEAT_PLAN_RE.search("\n".join(lines[:-1])):
+                return "it reports 0 findings and says what it will do, not what it found"
             if not says_none and not _SEAT_CITE_RE.search("\n".join(lines[:-1])):
                 return "it reports 0 findings, but neither says it found none nor points at anything it read"
         return None
