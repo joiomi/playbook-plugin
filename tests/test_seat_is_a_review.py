@@ -72,6 +72,12 @@ class NotAReview(unittest.TestCase):
             "a plan citing a line + CAP": "I'll read `tasks/review.py:2296` first, then run the tests.\n" + CAP0,
             "let me, citing a line": "Let me check `a.py:3` before concluding.\n" + CAP0,
             "a Romanian plan citing a line": "Voi citi `tasks/review.py:2296` și apoi rulez testele.\n" + CAP0,
+            # post-panel run 3 (codex, each recorded a post-panel PASS through the CLI): a provisional word before the
+            # none, a provisional none with a citation after it, a plan after an opening word
+            "so far, no findings": "I'm waiting for the suite. So far, no findings.\n" + CAP0,
+            "no findings yet, then a citation": "No findings yet; still reviewing `tasks/review.py:2296`.\n" + CAP0,
+            "next, I'll read": "Next, I'll read `tasks/review.py:2296` first, then run the tests.\n" + CAP0,
+            "then I will": "Then I will run `tests/test_x.py:1` and report.\n" + CAP0,
         }
         for name, text in shapes.items():
             with self.subTest(name):

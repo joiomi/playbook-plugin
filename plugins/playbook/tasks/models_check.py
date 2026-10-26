@@ -162,25 +162,34 @@ _SEAT_NONE_RE = re.compile(
     r"(?:findings?|issues?|problems?|defects?)\b|\bfound\s+no(?:thing)?\b|\bnothing\s+(?:to\s+report|found)\b"
     r"|^\W*none\W*$|\bnu\s+am\s+(?:găsit|gasit|identificat)\b",
     re.IGNORECASE | re.MULTILINE)
-# A "none" that is provisional is none: "no findings yet", "nothing found so far", "I found no findings yet" — the
-# word anywhere in the rest of its sentence (post-panel runs 1-2, codex).
-_SEAT_PROVISIONAL_RE = re.compile(r"\b(?:yet|so\s+far|for\s+now|încă)\b", re.IGNORECASE)
-_SEAT_SENTENCE_END_RE = re.compile(r"[.!?\n]")
-# A plan, not a finding: a sentence that says what the judge will do (post-panel run 2, codex: "I'll read
-# `tasks/review.py:2296` first, then run the tests." + CAP 0 passed the citation test).
-_SEAT_PLAN_RE = re.compile(r"(?:^|(?<=[.!?;])\s+)\W*(?:I'll|I will|I'm going to|I am going to|Let me|Voi|O să)\b",
-                           re.IGNORECASE | re.MULTILINE)
+# A "none" that is provisional is none: "no findings yet", "So far, no findings", "I found no findings yet" — the
+# word anywhere in its sentence, before or after it (post-panel runs 1-3, codex). A sentence ends at a stop that a
+# space or the text's end follows, or a line break: the stop of `review.py` is no sentence's end.
+_SEAT_PROVISIONAL_RE = re.compile(
+    r"\b(?:yet|so\s+far|for\s+now|încă|still\s+(?:reviewing|reading|checking|working|running|looking))\b",
+    re.IGNORECASE)
+_SEAT_SENTENCE_END_RE = re.compile(r"[.!?;](?=\s|$)|\n")
+# A plan, not a finding: words that say what the judge will do, anywhere — after "Next," or "Then" too (post-panel
+# runs 2-3, codex: "I'll read `tasks/review.py:2296` first, then run the tests." + CAP 0 passed the citation test).
+_SEAT_PLAN_RE = re.compile(r"\b(?:I'll|I will|I'm going to|I am going to|Let me|Voi|O să)\b", re.IGNORECASE)
 # What a judge read, cited at a line: `path/file.ext:12`, `file.ext#L12`. A file's name alone is no citation — a plan
 # names the files it means to read (post-panel run 1, codex: "I'll read `tasks/review.py` first" counted).
 _SEAT_CITE_RE = re.compile(r"[\w./@+-]+\.[A-Za-z]\w*(?::\d+|#L\d+)")
 
 
+def _sentence(text: str, start: int, end: int) -> "tuple[int, int]":
+    """The bounds of the sentence that holds text[start:end] (`_SEAT_SENTENCE_END_RE`)."""
+    before = [m.end() for m in _SEAT_SENTENCE_END_RE.finditer(text, 0, start)]
+    after = _SEAT_SENTENCE_END_RE.search(text, end)
+    return (before[-1] if before else 0), (after.start() if after else len(text))
+
+
 def _says_none(text: str) -> bool:
-    """The answer says, for good, that it found nothing: a `_SEAT_NONE_RE` statement whose sentence has no "yet",
-    "so far" or "for now" in the rest of it."""
+    """The answer says, for good, that it found nothing: a `_SEAT_NONE_RE` statement whose sentence holds no
+    provisional word ("yet", "so far", "for now", "still reviewing", …) before or after it."""
     for m in _SEAT_NONE_RE.finditer(text):
-        end = _SEAT_SENTENCE_END_RE.search(text, m.end())
-        if not _SEAT_PROVISIONAL_RE.search(text, m.end(), end.start() if end else len(text)):
+        a, b = _sentence(text, m.start(), m.end())
+        if not _SEAT_PROVISIONAL_RE.search(text, a, b):
             return True
     return False
 
@@ -213,6 +222,8 @@ def not_a_review(text: str) -> "str | None":
                 return "the judge stopped while waiting for a command it had started, and reports 0 findings"
             if not says_none and _SEAT_PLAN_RE.search("\n".join(lines[:-1])):
                 return "it reports 0 findings and says what it will do, not what it found"
+            if not says_none and _SEAT_PROVISIONAL_RE.search("\n".join(lines[:-1])):
+                return "it reports 0 findings so far: its review is not finished"
             if not says_none and not _SEAT_CITE_RE.search("\n".join(lines[:-1])):
                 return "it reports 0 findings, but neither says it found none nor points at anything it read"
         return None
