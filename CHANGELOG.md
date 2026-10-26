@@ -15,9 +15,10 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 - **A close certifies only the code it runs verify on** (task 321, audit 5's G1). From inside a Claude Code worktree
   that holds no task records, `tasks work done` ran the verify contract in the main tree and closed `[PASS]` on code
   that was not the task's, and so did a close from the main tree while the worktree still held its work. Now both
-  `tasks work done` and `tasks verify` refuse, naming the worktree: when the working directory is another worktree of
-  the project's repository, or when a lane-less `.claude/worktrees/` checkout holds uncommitted changes or commits
-  that neither the main tree's HEAD nor a remote has. The close takes `--force --reason`.
+  `tasks work done` and `tasks verify` refuse, naming the worktree, while a lane-less `.claude/worktrees/` checkout of
+  the project's repository or of a `code_roots` one holds work the main tree does not have. Work is an uncommitted or
+  index-hidden change, or a commit that neither the main HEAD, its upstream nor a remote's default branch has. The
+  close checks again just before its commit and takes `--force --reason`.
 
 ## [1.6.9] — 2026-10-26
 

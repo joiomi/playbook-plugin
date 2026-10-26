@@ -1561,6 +1561,16 @@ def cmd_work(cmd_args):
                 # before the commit — a contract written, base.json changed or code a verify command wrote while the
                 # close ran is judged here; the commit then compares this check's digest, by files.
                 _rc286 = _contract_check(Path(project_path), task_file, prev_task, force, before=_rc286)
+                # Task 321 impl round 1 (codex): and the worktree check again — work a verify command or another
+                # session wrote into a worktree while the close ran is judged here, just before the commit.
+                _stray = _wts.stray_work(Path(project_path))
+                if _stray and not force:
+                    print("Blocked: work landed in a worktree while this close ran, and the close would certify code "
+                          "that is not where the work is:", file=sys.stderr)
+                    for _st in _stray:
+                        print(f"  - {_st}", file=sys.stderr)
+                    print(f"{_wts.advice(Path(project_path))} Override with --force --reason.", file=sys.stderr)
+                    sys.exit(1)
                 receipt = format_verify_receipt(
                     entries, _head, risk, reason=(reason if force else None),
                     dirty_files=_dirty, freshness=_freshness, post_d6=_pd6_receipt,

@@ -165,7 +165,7 @@ class TheWorkMustBeWhereTheCloseLooks(_Project):
         remote = self.base / "remote.git"
         self.git(self.base, "init", "-q", "--bare", "-b", "main", str(remote))
         self.git(self.p, "remote", "add", "origin", str(remote))
-        self.git(self.p, "push", "-q", "origin", "main")
+        self.git(self.p, "push", "-q", "-u", "origin", "main")     # main tracks origin/main, as a clone's does
         other = self.base / "other"
         self.git(self.base, "clone", "-q", str(remote), str(other))
         (other / "upstream.txt").write_text("u\n", encoding="utf-8")
@@ -175,6 +175,132 @@ class TheWorkMustBeWhereTheCloseLooks(_Project):
         self.git(self.p, "fetch", "-q", "origin")
         self.worktree(base="origin/main")
         self.assert_closed(self.tasks(self.p, "work", "done"))
+
+
+class ImplRound1(_Project):
+    """Impl round 1 (agy, opus, sonnet, codex): what the first fix still let through, and what it blocked wrongly."""
+
+    def nested(self, name="lib"):
+        n = self.p / name
+        n.mkdir()
+        self.git(n, "init", "-q", "-b", "main")
+        (n / "m.py").write_text("z = 1\n", encoding="utf-8")
+        self.git(n, "add", "-A")
+        self.git(n, "commit", "-qm", "nested")
+        cfg = json.loads((self.p / ".agent" / "config.json").read_text(encoding="utf-8"))
+        cfg["code_roots"] = [name]
+        (self.p / ".agent" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+        return n
+
+    def test_a_pushed_unmerged_worktree_branch_blocks(self):
+        """Row 11 (agy, opus, codex): commit in the worktree, push its branch, nothing merged — `--remotes` counted the
+        task's own pushed commits as known and the close passed."""
+        remote = self.base / "remote.git"
+        self.git(self.base, "init", "-q", "--bare", "-b", "main", str(remote))
+        self.git(self.p, "remote", "add", "origin", str(remote))
+        self.git(self.p, "push", "-q", "-u", "origin", "main")
+        wt = self.worktree()
+        (wt / "src" / "app.py").write_text("print(2)\n", encoding="utf-8")
+        self.git(wt, "commit", "-qam", "the work")
+        self.git(wt, "push", "-q", "-u", "origin", "wt1")
+        self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
+
+    def test_a_worktree_whose_git_file_is_gone_blocks(self):
+        """Row 12 (agy, codex): with its `.git` file deleted, git walks up to the main tree and answers for it."""
+        wt = self.worktree()
+        (wt / "src" / "app.py").write_text("print(2)\n", encoding="utf-8")
+        (wt / ".git").unlink()
+        # for the right reason: git cannot read it — not the main tree's own untracked records, read in its place
+        self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt), "cannot be read")
+
+    def test_a_code_root_worktree_holding_work_blocks(self):
+        """Row 13 (opus, codex): a worktree of a `code_roots` repository, from the main tree and from inside it."""
+        n = self.nested()
+        wt = n / ".claude" / "worktrees" / "x"
+        self.git(n, "worktree", "add", "-q", str(wt), "-b", "x")
+        (wt / "m.py").write_text("z = 2\n", encoding="utf-8")
+        self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
+        self.assert_blocked(self.tasks(wt, "work", "done"), str(wt))
+
+    def test_work_written_into_a_worktree_while_verify_runs_blocks(self):
+        """Row 14 (codex): a worktree clean when the close starts gets work while verify runs — checked again at the
+        commit."""
+        wt = self.worktree()
+        cfg = {"verify": f"grep -q 'print(1)' src/app.py && echo late > '{wt}/src/late.py'"}
+        (self.p / ".agent" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+        self.git(self.p, "commit", "-qam", "verify writes late")
+        self.git(wt, "merge", "-q", "--ff-only", "main")
+        self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
+
+    def test_an_edit_hidden_under_an_index_bit_blocks(self):
+        """Row 15 (codex): `assume-unchanged` and `skip-worktree` hide an edit from `git status`."""
+        for flag in ("--assume-unchanged", "--skip-worktree"):
+            with self.subTest(flag):
+                wt = self.worktree(name=f"w{flag[2:6]}", branch=f"b{flag[2:6]}")
+                self.git(wt, "update-index", flag, "src/app.py")
+                (wt / "src" / "app.py").write_text("print(2)\n", encoding="utf-8")
+                self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
+                self.git(self.p, "worktree", "remove", "--force", str(wt))
+
+    def test_control_a_clean_worktree_at_main_head_closes_from_inside_it(self):
+        """Row 16 (opus Minor, must-not): from inside a worktree that holds nothing of its own, verify in the main tree
+        certifies the same code."""
+        wt = self.worktree()
+        self.assert_closed(self.tasks(wt, "work", "done"))
+
+    def test_control_a_worktree_under_a_laned_group_is_not_this_tasks(self):
+        """Row 17 (opus Minor, must-not): `<group>/<name>` under a group folder with a lane is its own tree, as the
+        hooks read it (`pb_main_tree`)."""
+        group = self.p / ".claude" / "worktrees" / "grp"
+        (group / ".agent" / "tasks" / "001-g").mkdir(parents=True)
+        (group / ".agent" / "tasks" / "001-g" / "task.md").write_text("# 001 - G\n", encoding="utf-8")
+        wt = group / "w"
+        self.git(self.p, "worktree", "add", "-q", str(wt), "-b", "gw")
+        (wt / "src" / "app.py").write_text("print(2)\n", encoding="utf-8")
+        self.assert_closed(self.tasks(self.p, "work", "done"))
+
+    def test_a_worktree_of_the_repository_top_blocks_for_a_project_in_a_subfolder(self):
+        """Row 18 (sonnet Minor): a project in a subfolder of its repository; Claude Code roots its worktrees at the
+        repository's top."""
+        repo = self.base / "repo"
+        repo.mkdir()
+        self.git(repo, "init", "-q", "-b", "main")
+        sub = repo / "sub"
+        (sub / ".agent" / "tasks" / "001-fixit").mkdir(parents=True)
+        (sub / "src").mkdir()
+        (sub / "src" / "app.py").write_text("print(1)\n", encoding="utf-8")
+        (sub / ".agent" / "config.json").write_text(json.dumps({"verify": "grep -q 'print(1)' src/app.py"}),
+                                                    encoding="utf-8")
+        (repo / ".gitignore").write_text("sub/.agent/tasks/\nsub/.agent/sessions/\nsub/.agent/journal/\n"
+                                         ".claude/worktrees/\n", encoding="utf-8")
+        self.git(repo, "add", "-A")
+        self.git(repo, "commit", "-qm", "base")
+        tf = sub / ".agent" / "tasks" / "001-fixit" / "task.md"
+        tf.write_text(DONE_TASK.replace("- [x] Change app\n  done in the worktree\n", "- [ ] Change app\n"),
+                      encoding="utf-8")
+        self.assertEqual(self.tasks(sub, "work", "1").returncode, 0)
+        tf.write_text(DONE_TASK, encoding="utf-8")
+        wt = repo / ".claude" / "worktrees" / "w1"
+        self.git(repo, "worktree", "add", "-q", str(wt), "-b", "w1")
+        (wt / "sub" / "src" / "app.py").write_text("print(2)\n", encoding="utf-8")
+        r = self.tasks(sub, "work", "done")
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn(str(wt), r.stdout + r.stderr)
+
+    def test_a_worktree_listing_git_cannot_give_blocks(self):
+        """Row 19 (sonnet Minor): `git worktree list` failing while the repository answers is no empty list."""
+        sys.path.insert(0, str(PLUGIN))
+        from tasks import worktree_scope as ws
+        real = ws._git
+
+        def fake(cwd, *args):
+            return None if args[:2] == ("worktree", "list") else real(cwd, *args)
+        ws._git = fake
+        try:
+            found = ws.stray_work(self.p, self.p)
+        finally:
+            ws._git = real
+        self.assertTrue(any("cannot list" in f for f in found), found)
 
 
 if __name__ == "__main__":
