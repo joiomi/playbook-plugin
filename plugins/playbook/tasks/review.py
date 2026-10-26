@@ -203,12 +203,12 @@ def _as_review_or_failure(output):
     refusal, filter block, plan-only stop or wait counted as a judge that succeeded. The marker comes first, so every
     reader — the verdict, the retry bookkeeping, the spend status, judge.md — takes it for a failure, and the judge's
     own text follows it. The carried usage, soft cut and note stay with it."""
-    from tasks.models_check import not_a_review
+    from tasks.models_check import NOT_A_REVIEW_HEAD, not_a_review
     why = not_a_review(output)
     if why is None:
         return output
     from provider.usage import JudgeOutput
-    return JudgeOutput(f"(FAILED — not a review: {why})\n\n{output}", usage=getattr(output, "usage", None),
+    return JudgeOutput(f"{NOT_A_REVIEW_HEAD} {why})\n\n{output}", usage=getattr(output, "usage", None),
                        soft_cut=getattr(output, "soft_cut", None), note=getattr(output, "note", None))
 
 
@@ -4084,12 +4084,12 @@ def _cmd_single_review(cmd, cmd_args):
     # wait — takes the failure path below as a failure-marked one does: no saved log, no findings, rc 1, and a
     # post-panel run is released (`fail_run`, it produced no review). Every backend, before the operator stream.
     if result.returncode == 0:
-        from tasks.models_check import not_a_review as _not_a_review
+        from tasks.models_check import NOT_A_REVIEW_HEAD, not_a_review as _not_a_review
         _why_not = _not_a_review(result.stdout or "")
         if _why_not:
             result = subprocess.CompletedProcess(
                 getattr(result, "args", None), 1,
-                stdout=f"(FAILED — not a review: {_why_not})\n\n{result.stdout or ''}", stderr=result.stderr or "")
+                stdout=f"{NOT_A_REVIEW_HEAD} {_why_not})\n\n{result.stdout or ''}", stderr=result.stderr or "")
 
     # Clean tree: stream the judge's output for the operator (best-effort — a
     # closed sink must not crash a completed review).

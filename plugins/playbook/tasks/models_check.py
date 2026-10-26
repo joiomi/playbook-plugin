@@ -129,40 +129,50 @@ def judge_failed(text: str) -> bool:
             or t.startswith(_BUDGET_EXCEEDED))
 
 
-# Task 320 (audit 5's G6): what the review protocol makes a judge's last line — `CAP: <k>/5 reported, exhausted|more
-# remain` (template.py) — here bare, bold or in backticks, and with words after it, as real judges wrote it.
+# Task 320 (audit 5's G6): the head of a judge's answer that is no review. It holds none of the judge's own text, so no
+# reader of a failure's first line (`seat_outage.classify_outage`, `classify_failure`) takes the judge's words for the
+# provider's (impl round 1, opus and codex: a quoted usage limit recorded a healthy seat as out of credit).
+NOT_A_REVIEW_HEAD = "(FAILED — not a review:"
+# What the review protocol makes a judge's last line — `CAP: <k>/5 reported, exhausted|more remain` (template.py) —
+# here bare, bold or in backticks, and with words after it, as real judges wrote it.
 _SEAT_CAP_RE = re.compile(r"^[\s*_`>]*CAP:\s*(\d+)\s*/\s*\d+\s+reported\b", re.IGNORECASE)
-# A finding as the prompt asks for one, for a review that left its CAP line out.
-_SEAT_FINDING_RE = re.compile(r"\*\*(Critical|Important|Minor)\*\*")
-# A turn that stopped to wait on a command it had started — agy's measured shapes, each ending `CAP: 0/5 …`.
-_SEAT_WAIT_RE = re.compile(
-    r"^\W*(I have launched|I've launched|I('m| am) waiting|Waiting for|Please wait|Wait for)\b",
-    re.IGNORECASE | re.MULTILINE)
+# A rule or a fence closing the answer after its CAP line (impl round 1, agy and sonnet).
+_SEAT_TRAILER_RE = re.compile(r"\s*(-{3,}|\*{3,}|_{3,}|`{3,}|~{3,})\s*")
+# A finding as the prompt asks for one ("Start every finding with its severity in bold"): at the start of a line,
+# alone or after a list mark — a plan that echoes the severities mid-sentence is no finding (impl round 1).
+_SEAT_FINDING_RE = re.compile(r"^\s*(?:[-*+]\s+|\d+[.)]\s+)?\*\*(Critical|Important|Minor)\*\*", re.MULTILINE)
+# A turn that stopped to wait on a command it had started — agy's measured shapes, each OPENING with it and ending
+# `CAP: 0/5 …`; a review that mentions waiting further down is still a review (impl round 1).
+_SEAT_WAIT_RE = re.compile(r"^\W*(I have launched|I've launched|I('m| am) waiting|Waiting for|Please wait|Wait for)\b",
+                           re.IGNORECASE)
 
 
 def not_a_review(text: str) -> "str | None":
     """Why a judge's exit-0 text is no review, or None when it is one (task 320, audit 5's G6).
 
     `judge_failed` knows the failure markers only, so a refusal, a filter block, a plan-only stop or a wait counted
-    as a judge that succeeded. A text is a review when its last non-empty line is the protocol's CAP line — unless
-    the CAP is 0 and the text says the judge stopped to wait on a command it had started — or, with no CAP line,
-    when it names a finding the way the prompt asks (`**Critical**`, `**Important**`, `**Minor**`). A failure-marked
-    text is `judge_failed`'s and gets no second reason here."""
-    t = (text or "").lstrip("﻿")
+    as a judge that succeeded. A text is a review when its last non-empty line — a closing rule or fence aside — is
+    the protocol's CAP line, unless the CAP is 0, it names no finding, and its first line is a wait on a command the
+    judge had started; or, with no CAP line, when a line opens with a finding the way the prompt asks (`**Critical**`,
+    `**Important**`, `**Minor**`). A failure-marked text is `judge_failed`'s and gets no second reason here. The
+    reason never quotes the judge."""
+    t = (text or "").lstrip("\ufeff").replace("\u2019", "'").replace("\u2018", "'")
     if judge_failed(t):
         return None
     lines = [ln for ln in t.splitlines() if ln.strip()]
+    while lines and _SEAT_TRAILER_RE.fullmatch(lines[-1]):
+        lines.pop()
     if not lines:
         return "the answer is empty"
+    finding = _SEAT_FINDING_RE.search(t)
     cap = _SEAT_CAP_RE.match(lines[-1])
     if cap:
-        if int(cap.group(1)) == 0 and _SEAT_WAIT_RE.search(t):
+        if int(cap.group(1)) == 0 and not finding and _SEAT_WAIT_RE.match(lines[0]):
             return "the judge stopped while waiting for a command it had started, and reports 0 findings"
         return None
-    if _SEAT_FINDING_RE.search(t):
+    if finding:
         return None
-    return ("the answer does not end with the CAP line the review asks for, and names no finding "
-            f"(it ends: {lines[-1].strip()[:80]!r})")
+    return "the answer does not end with the CAP line the review asks for, and names no finding"
 
 
 def budget_exceeded(text: str) -> bool:
@@ -188,7 +198,9 @@ def classify_failure(output_text: str) -> str:
     """Classify a FAILED judge string → MODEL_UNAVAILABLE | CLI_UPGRADE_REQUIRED | OTHER.
 
     Only failure-marked strings are classified — a successful (rc==0) review
-    that quotes these patterns never reaches the pattern checks, which kills
+    that quotes these patterns never reaches the pattern checks, nor does an
+    answer that is no review (`NOT_A_REVIEW_HEAD`, task 320: the judge's own
+    text follows its head), which kills
     the self-referential false positive (this repo's task.md contains every
     pattern verbatim and rides in judge context). Branches are mutually
     exclusive, most-specific first. Callers must still probe-confirm a
@@ -197,6 +209,8 @@ def classify_failure(output_text: str) -> str:
     """
     t = output_text or ""
     if not judge_failed(t):
+        return OTHER
+    if t.lstrip().startswith(NOT_A_REVIEW_HEAD):      # task 320: the judge's own words follow it
         return OTHER
     if "invalid_request_error" in t and _CODEX_CLI_TOO_OLD in t:
         return CLI_UPGRADE_REQUIRED

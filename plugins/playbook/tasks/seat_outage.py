@@ -139,6 +139,9 @@ _EVENT_STREAM_PROVIDERS = ("codex", "grok", "agy")
 _MALFORMED_HEAD = "(FAILED — malformed or unrecognized structured judge output:"
 _ERROR_HEAD = "(FAILED — the judge CLI reported an error:"
 _PARTIAL_TEXT = "[partial text before the failure]"
+# Task 320: an exit-0 answer that is no review (`models_check.NOT_A_REVIEW_HEAD`) — the provider said nothing;
+# all that follows is the judge's own text (impl round 1, opus and codex).
+_NOT_A_REVIEW_HEAD = "(FAILED — not a review:"
 
 
 def classify_outage(output_text: str, now: Optional[_dt.datetime] = None,
@@ -152,7 +155,7 @@ def classify_outage(output_text: str, now: Optional[_dt.datetime] = None,
         return None
     now = now or _dt.datetime.now().astimezone()
     lines = text.lstrip().splitlines()
-    if lines[0].startswith(_MALFORMED_HEAD):
+    if lines[0].startswith((_MALFORMED_HEAD, _NOT_A_REVIEW_HEAD)):
         return None
     if lines[0].startswith(_ERROR_HEAD):
         lines = lines[:next((i for i, ln in enumerate(lines) if ln.strip() == _PARTIAL_TEXT), len(lines))]

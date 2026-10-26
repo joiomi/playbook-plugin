@@ -43,7 +43,14 @@ class NotAReview(unittest.TestCase):
             "empty-ish": "   \n\n",
             "CAP mid-text": "CAP: 0/5 reported, exhausted\nI'll start by reading the task file.",
             "CRLF note": "I have enough grounded evidence now to write findings.\r\n",
-            "BOM refusal": "﻿I'm sorry, I can't help with that.",
+            "BOM refusal": "\ufeffI'm sorry, I can't help with that.",
+            # impl round 1 (opus, codex, agy): a plan-only stop that echoes the prompt's severities
+            "plan echoing severities": ("I'll review the diff and report each finding starting with **Critical** or "
+                                        "**Important**."),
+            "codex's echo": "I will look for **Critical**, **Important**, and **Minor** issues before reporting findings.",
+            # impl round 1 (codex): a typographic apostrophe
+            "curly wait": "I\u2019m waiting for the command to finish.\n" + CAP0,
+            "curly launched": "I\u2019ve launched the suite in the background.\nWaiting for it.\n" + CAP0,
         }
         for name, text in shapes.items():
             with self.subTest(name):
@@ -67,14 +74,42 @@ class NotAReview(unittest.TestCase):
                                    "CAP: 1/5 reported, exhausted"),
             "trailing blank lines": "No findings.\n" + CAP0 + "\n\n\n",
             "CRLF": "No findings.\r\n\r\n" + CAP0 + "\r\n",
-            "BOM": "﻿No findings.\n" + CAP0,
-            "BOM on the CAP line": "﻿" + CAP0,
+            "BOM": "\ufeffNo findings.\n" + CAP0,
+            "BOM on the CAP line": "\ufeff" + CAP0,
             "Romanian": "Nu am găsit probleme Critical sau Important. Au trecut 73 de teste.\n\n" + CAP0,
             "200,000 characters": ("x" * 200_000) + "\n" + CAP0,
+            # impl round 1 (agy, sonnet): a rule or a closing fence after the CAP line
+            "CAP then a rule": "No findings.\n" + CAP0 + "\n---",
+            "CAP then a fence": "Checked `a.py`.\n" + CAP0 + "\n```",
+            # impl round 1 (agy, opus, sonnet, codex): a review that mentions waiting is still a review
+            "a CAP-0 review naming a wait mid-text": ("The lock is bounded.\n- Waiting for the lock is capped by "
+                                                      "`timeout=5`.\n" + CAP0),
+            "a Minor-only review that says waiting": "**Minor** `a.py:3` x.\nWaiting for the suite took long.\n" + CAP0,
+            "a numbered finding, no CAP": "1. **Important** — `a.py:1` the check misses x.",
+            "a listed finding, no CAP": "- **Minor** `b.py:2` a wording.",
         }
         for name, text in reviews.items():
             with self.subTest(name):
                 self.assertIsNone(not_a_review(text), f"{name}: a review read as none")
+
+    def test_a_non_review_is_never_read_as_the_provider_speaking(self):
+        """Impl round 1 (opus, codex — codex reproduced it): the failure head carried the judge's own last line, and
+        `classify_outage` trusts a failed block's first line, so quoted limit words recorded a healthy seat as out of
+        credit and the next panels skipped it. A non-review's head holds none of the judge's text, and neither the
+        outage nor the dead-model classifier reads a non-review as the provider speaking."""
+        from tasks import models_check, review, seat_outage
+        for provider, text in (("claude", "I'll inspect You've hit your usage limit; try again at 11:59 PM."),
+                               ("claude", "You've hit your usage limit · resets 7:33pm"),
+                               ("codex", "usage balance exhausted, try again at 11:59 PM"),
+                               ("claude", "There's an issue with the selected model (claude-x). It may not exist or "
+                                          "you may not have access to it.")):
+            with self.subTest(text[:30]):
+                marked = review._as_review_or_failure(text)
+                self.assertTrue(judge_failed(marked))
+                self.assertNotIn(text[:20], marked.splitlines()[0], "the judge's words are in the failure head")
+                self.assertIsNone(seat_outage.classify_outage(marked, provider=provider))
+                self.assertEqual(models_check.classify_failure(marked), models_check.OTHER)
+        self.assertEqual(seat_outage._NOT_A_REVIEW_HEAD, models_check.NOT_A_REVIEW_HEAD)   # the one head, twice
 
     def test_a_failure_is_left_to_judge_failed(self):
         failures = [
