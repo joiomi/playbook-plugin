@@ -454,5 +454,43 @@ class PostPanelRun2(_Project):
         self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
 
 
+
+class PostPanelRun3(_Project):
+    """Post-panel run 3 (codex, each reproduced twice through the CLI)."""
+
+    def test_a_branch_switch_after_the_work_keeps_it_work(self):
+        """Row 32: commit in the worktree, then `git switch -c continuation` — the new branch's creation is the task's
+        own commit, no base."""
+        wt = self.worktree()
+        (wt / "src" / "app.py").write_text("print(2)\n", encoding="utf-8")
+        self.git(wt, "commit", "-qam", "the work")
+        self.git(wt, "switch", "-q", "-c", "continuation")
+        self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
+
+    def test_a_hidden_deletion_in_a_quoted_cone_folder_blocks(self):
+        """Row 33: git C-quotes the cone folder `caf\u00e9` in `sparse-checkout list`; read as its name, its file is in the
+        cone."""
+        (self.p / "caf\u00e9").mkdir()
+        (self.p / "caf\u00e9" / "app.py").write_text("c = 1\n", encoding="utf-8")
+        self.git(self.p, "add", "-A")
+        self.git(self.p, "commit", "-qm", "a quoted folder")
+        wt = self.worktree()
+        self.git(wt, "sparse-checkout", "set", "caf\u00e9")
+        self.git(wt, "update-index", "--skip-worktree", "caf\u00e9/app.py")
+        (wt / "caf\u00e9" / "app.py").unlink()
+        self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
+
+    def test_a_lost_sparse_definition_exempts_nothing(self):
+        """Row 34: the worktree's `info/sparse-checkout` gone — git lists an empty cone with a warning; no file is then
+        known to be left out."""
+        wt = self.worktree()
+        self.git(wt, "sparse-checkout", "set", "src")
+        self.git(wt, "update-index", "--skip-worktree", "src/app.py")
+        (wt / "src" / "app.py").unlink()
+        Path(self.git(wt, "rev-parse", "--path-format=absolute", "--git-path", "info/sparse-checkout").stdout.strip()
+             ).unlink()
+        self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
+
+
 if __name__ == "__main__":
     unittest.main()

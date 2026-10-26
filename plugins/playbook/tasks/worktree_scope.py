@@ -70,31 +70,70 @@ def _inside(child: Path, parent: Path) -> bool:
         return False
 
 
-def _made_at(wt: Path) -> "str | None":
-    """The commit the worktree's work starts from: its branch's creation (`branch: Created from …`, the oldest entry of
-    the branch's reflog — it outlives a worktree made again on the branch, post-panel run 2, codex), or, detached, the
-    oldest entry of its HEAD's reflog that `git worktree add` wrote, with no message. Anything else — a reflog that
-    expired, so the oldest entry left is the task's own commit (post-panel run 1, codex) — is no base: None, and then
-    the count is against the main HEAD alone (fail closed)."""
+def _creations(wt: Path) -> "list[str]":
+    """Where the worktree's work may start, newest first: its branch's creation (`branch: Created from …`, the oldest
+    entry of the branch's reflog — it outlives a worktree made again on the branch, post-panel run 2), then its HEAD's
+    creation (the oldest HEAD entry, with no message, that `git worktree add` wrote — it outlives a branch switch,
+    post-panel run 3)."""
+    found = []
     branch = _out(_git(wt, "symbolic-ref", "-q", "HEAD"))
     if branch:
         oldest = (_out(_git(wt, "reflog", "show", "--format=%H %gs", branch)) or "").splitlines()[-1:]
-        return next((ln.split(" ", 1)[0] for ln in oldest if " branch: Created from " in f" {ln} "), None)
+        found += [ln.split(" ", 1)[0] for ln in oldest if " branch: Created from " in f" {ln} "]
     oldest = (_out(_git(wt, "reflog", "show", "--format=%H %gs", "HEAD")) or "").splitlines()[-1:]
-    return next((ln.strip() for ln in oldest if ln.strip() and " " not in ln.strip()), None)
+    found += [ln.strip() for ln in oldest if ln.strip() and " " not in ln.strip()]
+    return found
+
+
+def _made_at(wt: Path, main_head: "str | None") -> "str | None":
+    """The commit the worktree's work starts from: the first of `_creations` that the main tree's HEAD or a
+    remote-tracking ref already has — a creation at a commit that only the worktree holds (a branch switched to after
+    the work, post-panel run 3; a reflog expired down to the task's own commit, post-panel run 1) is the task's own
+    work, no base. None when no creation is credible: the count is then against the main HEAD alone (fail closed)."""
+    for c in _creations(wt):
+        known = _git(wt, "merge-base", "--is-ancestor", c, main_head) if main_head else None
+        if known is not None and known.returncode == 0:
+            return c
+        if _out(_git(wt, "for-each-ref", "--count=1", "--contains", c, "--format=%(refname)", "refs/remotes")):
+            return c
+    return None
 
 
 def _outside_cone(wt: Path):
-    """A test: is a path left out by the worktree's sparse cone? Only a cone-mode sparse checkout leaves paths out
-    knowably — the root's files, the listed folders and the files of their parent folders are in it; with no sparse
-    checkout, or a non-cone one, nothing counts as left out (fail closed)."""
+    """A test: is a path left out by the worktree's sparse cone? Only a cone-mode sparse checkout with a definition
+    git reads leaves paths out knowably — the root's files, the listed folders (C-quoted names decoded, as
+    `core.py`'s fingerprint reads them — post-panel run 3) and the files of their parent folders are in it, compared
+    case-folded where `core.ignoreCase` is on. With no sparse checkout, a non-cone one, a definition file that is gone or
+    a list that is empty or cannot be read, nothing counts as left out (fail closed — post-panel run 3, codex)."""
+    never = lambda name: False                      # noqa: E731
     if _out(_git(wt, "config", "--bool", "core.sparseCheckout")) != "true" \
             or _out(_git(wt, "config", "--bool", "core.sparseCheckoutCone")) != "true":
-        return lambda name: False
-    dirs = [d.strip("/") for d in (_out(_git(wt, "sparse-checkout", "list")) or "").splitlines() if d.strip("/")]
+        return never
+    spec = _resolved(wt, _out(_git(wt, "rev-parse", "--git-path", "info/sparse-checkout")))
+    if spec is None or not spec.is_file():
+        return never
+    got = _git(wt, "-c", "core.quotePath=true", "sparse-checkout", "list")
+    if got is None or got.returncode != 0 or (got.stderr or "").strip():
+        return never
+    import ast
+    dirs = []
+    for line in got.stdout.splitlines():
+        if len(line) >= 2 and line[0] == line[-1] == '"':
+            try:
+                line = os.fsdecode(ast.literal_eval("b" + line))
+            except (ValueError, SyntaxError):
+                return never                        # a name it cannot read: nothing is known to be left out
+        if line.strip("/"):
+            dirs.append(line.strip("/"))
+    if not dirs:
+        return never
+    fold = _out(_git(wt, "config", "--bool", "core.ignoreCase")) == "true"
+    norm = (lambda x: x.casefold()) if fold else (lambda x: x)
+    dirs = [norm(d) for d in dirs]
     parents = {"/".join(d.split("/")[:i]) for d in dirs for i in range(1, d.count("/") + 1)}
 
     def outside(name: str) -> bool:
+        name = norm(name)
         folder = name.rsplit("/", 1)[0] if "/" in name else ""
         if not folder or folder in parents:
             return False
@@ -163,7 +202,7 @@ class _Repo:
                     "hides an edit from git status")
         # what the worktree was made at is not its work: the oldest entry of its HEAD's reflog (impl round 2, opus —
         # the remote-tracking refs counted the task's own commits once they were upstream, the main tree not pulled)
-        made_at = _made_at(wt)
+        made_at = _made_at(wt, self.head)
         known = [x for x in [self.head, made_at] if x]
         ahead = _out(_git(wt, "rev-list", "--count", wt_head, "--not", *known))
         if ahead is None:
