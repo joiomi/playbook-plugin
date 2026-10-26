@@ -25,8 +25,8 @@ set up, 1.6.9's init changes two template-owned lines of CLAUDE.md (tests first,
 sections a judge's window keeps), saving the earlier file to `.agent/backups/`, and rewrites the seven wrappers; nothing
 else in the project changes (measured). Nothing to migrate. The first sandboxed launch of each agent makes the names of
 its folder listed under task 315 that are missing (in `~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok`) — empty, or `{}`
-for the JSON ones, Claude Code's `.config.json` with no write bit — and holds them read-only for its runs; an existing
-one is left as it is.
+for the JSON ones; Claude Code's `.config.json` empty and with no write bit — and holds them read-only for its runs; an
+existing one is left as it is.
 
 **Measured before the release**, in temporary folders: on a project 1.6.8's `/playbook:init` set up, with a task 1.6.8
 had activated (so with no `base.json`), 1.6.9's hooks, before any 1.6.9 init, let a code edit of that task through,
