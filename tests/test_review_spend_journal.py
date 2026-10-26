@@ -416,7 +416,7 @@ class PanelSpendE2E(_E2EBase):
         _orig_run = ClaudeAdapter.run_headless_judge
         ClaudeAdapter.is_available = classmethod(lambda cls: True)
         ClaudeAdapter.run_headless_judge = (
-            lambda self, **kw: "1. **Note** — looks fine.\n")
+            lambda self, **kw: "1. **Note** — looks fine.\n\nCAP: 0/5 reported, exhausted\n")
         try:
             with _chdir(self.project):
                 with contextlib.suppress(SystemExit):
@@ -451,7 +451,7 @@ class SingleSpendE2E(_E2EBase):
         from provider import sandbox
         _orig_run, _orig_which = sandbox.run, shutil.which
         sandbox.run = lambda agent, args, **kw: types.SimpleNamespace(
-            returncode=0, stdout="1. **Note** — looks fine.\n", stderr="")
+            returncode=0, stdout="1. **Note** — looks fine.\n\nCAP: 0/5 reported, exhausted\n", stderr="")
         shutil.which = lambda name: "/usr/bin/" + name
         code = None
         try:
@@ -616,7 +616,7 @@ class TamperRecordsNothing(_E2EBase):
         from provider.adapters.claude import ClaudeAdapter
         _oa, _or = ClaudeAdapter.is_available, ClaudeAdapter.run_headless_judge
         ClaudeAdapter.is_available = classmethod(lambda cls: True)
-        ClaudeAdapter.run_headless_judge = lambda self, **kw: "1. **Note** — fine\n"
+        ClaudeAdapter.run_headless_judge = lambda self, **kw: "1. **Note** — fine\n\nCAP: 0/5 reported, exhausted\n"
         p = mock.patch.object(review, "_detect_tamper_full",
                               lambda pp, t, b: {"mutations": ["dirty"], "cautions": []})
         p.start()
@@ -643,6 +643,14 @@ class StructuredUsageE2E(_E2EBase):
     GROK_USAGE = {"status": "known", "in": 13443, "out": 26}
 
 
+    @staticmethod
+    def _as_review(fixture):
+        """A captured "reply with OK" answer, as a review the protocol accepts (task 320: it ends with the CAP line)."""
+        cap = "OK\\n\\nCAP: 0/5 reported, exhausted"
+        out = fixture.replace('"text":"OK"', '"text":"' + cap + '"').replace('"text": "OK"', '"text": "' + cap + '"')
+        assert out != fixture
+        return out
+
     def _fixture(self, name):
         import importlib.util
         spec = importlib.util.spec_from_file_location(
@@ -666,7 +674,7 @@ class StructuredUsageE2E(_E2EBase):
             mock.patch.object(GrokAdapter, "is_available", classmethod(lambda cls: True)),
             # Production adapters return PROSE that CARRIES usage — never the JSON.
             mock.patch.object(ClaudeAdapter, "run_headless_judge",
-                              lambda self, **kw: "1. **Note** — looks fine.\n"),
+                              lambda self, **kw: "1. **Note** — looks fine.\n\nCAP: 0/5 reported, exhausted\n"),
             mock.patch.object(CodexAdapter, "run_headless_judge",
                               lambda self, **kw: JudgeOutput("1. fine (codex)", usage=self.__class__._U)),
             mock.patch.object(GrokAdapter, "run_headless_judge",
@@ -750,7 +758,7 @@ class StructuredUsageE2E(_E2EBase):
         return calls, recs, buf.getvalue()
 
     def test_single_codex_records_usage_streams_prose_and_saves_prose(self):
-        calls, recs, printed = self._single("codex", self._fixture("CODEX_OK"))
+        calls, recs, printed = self._single("codex", self._as_review(self._fixture("CODEX_OK")))
         self.assertTrue(any("--json" in c for c in calls), calls)
         self.assertEqual(len(recs), 1, recs)
         self.assertEqual(recs[0]["usage"], self.CODEX_USAGE)
@@ -764,7 +772,7 @@ class StructuredUsageE2E(_E2EBase):
         self.assertNotIn("turn.completed", body)
 
     def test_single_grok_records_usage_and_saves_prose(self):
-        calls, recs, printed = self._single("grok", self._fixture("GROK_OK"))
+        calls, recs, printed = self._single("grok", self._as_review(self._fixture("GROK_OK")))
         self.assertTrue(any("--output-format" in c and "json" in c for c in calls), calls)
         self.assertEqual(recs[0]["usage"], self.GROK_USAGE)
         log = self.agent / "tasks" / "042-demo" / "judge-grok.log"
@@ -988,7 +996,7 @@ class SpendErrorE2E(_E2EBase):
         def _judge(self, **kw):
             if "sonnet" in repr(kw):
                 return "(FAILED — exit 1)\n[stderr tail]\nHTTP 402 Payment Required\n"
-            return "1. fine\n"
+            return "1. fine\n\nCAP: 0/5 reported, exhausted\n"
 
         for p in (mock.patch.object(ClaudeAdapter, "is_available", classmethod(lambda cls: True)),
                   mock.patch.object(ClaudeAdapter, "run_headless_judge", _judge)):

@@ -4,6 +4,14 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Fixed
+- **A judge's answer counts as a review only when it is one** (task 320, audit 5's G6). A panel counted any exit-0
+  text as a judge that succeeded, and a single judge saved it as findings. Real judges had returned refusals, a filter
+  block, plan-only stops and waits for a command they had started. Now an answer must end with the protocol's CAP
+  line (except a CAP of 0 from a judge that stopped to wait), or name a `**Critical**`/`**Important**`/`**Minor**`
+  finding. Otherwise it is recorded as `(FAILED — not a review: …)`: it does not count toward the quorum, a single
+  review fails with exit 1, and a post-panel run is released. A `--prompt` consultation is unchanged.
+
 ## [1.6.9] — 2026-10-26
 
 **The stabilization audit's fixes, and the test contract with its red receipt** — tasks 278-316 (the owner's order of

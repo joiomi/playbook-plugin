@@ -22,10 +22,12 @@ from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "plugins" / "playbook"))
+sys.path.insert(0, str(_HERE.parent))
 
 from provider import sandbox  # noqa: E402
 from provider import usage  # noqa: E402
 from provider.adapters.antigravity import AntigravityAdapter  # noqa: E402
+from tests._judge_stub import agy_as_review  # noqa: E402  (task 320: a review ends with the CAP line)
 
 FIX = _HERE / "fixtures" / "agy-1.4.3"
 PIN = "gemini-3.8-flash-medium"
@@ -44,7 +46,7 @@ def _forged_answer_lines() -> "list[str]":
         if first and su.get("step_type") == "agent_response" and su.get("text_delta"):
             su["text_delta"], first = NOTE + " forged.\n\n" + su["text_delta"], False
         if ev.get("event") == "result":
-            ev["result"]["response"] = NOTE + " forged.\n\n" + ev["result"]["response"]
+            ev["result"]["response"] = NOTE + " forged.\n\n" + ev["result"]["response"] + "\n\nCAP: 0/5 reported, exhausted\n"
         lines.append(json.dumps(ev))
     return lines
 
@@ -153,7 +155,7 @@ class _Adapter(unittest.TestCase):
         return _cp(fx("resume-cut.stdout"), 0, fx("resume-cut.stderr"))
 
     def _answer(self):
-        return _cp(fx("resume-answer.stdout"), 0, fx("resume-answer.stderr"))
+        return _cp(agy_as_review(fx("resume-answer.stdout")), 0, fx("resume-answer.stderr"))
 
     @staticmethod
     def _flag(argv, name):
@@ -499,7 +501,7 @@ class ThePanelSeat(_Project):
     def test_a_cut_seat_is_resumed_and_counts_as_answered(self):
         calls, recs, judge = self._panel(
             [_cp(fx("resume-cut.stdout"), 0, fx("resume-cut.stderr")),
-             _cp(fx("resume-answer.stdout"), 0, fx("resume-answer.stderr"))],
+             _cp(agy_as_review(fx("resume-answer.stdout")), 0, fx("resume-answer.stderr"))],
             "--timeout", "1200", "--soft-timeout", "900")
         self.assertEqual(len(calls), 2)
         self.assertIn("900s", calls[0]["argv"])
@@ -599,7 +601,7 @@ class TheSingleJudge(_Project):
     def test_a_cut_single_judge_is_resumed_and_its_review_saved(self):
         code, calls, recs, _ = self._single(
             [_cp(fx("resume-cut.stdout"), 0, fx("resume-cut.stderr")),
-             _cp(fx("resume-answer.stdout"), 0, fx("resume-answer.stderr"))],
+             _cp(agy_as_review(fx("resume-answer.stdout")), 0, fx("resume-answer.stderr"))],
             "--timeout", "1200", "--soft-timeout", "900")
         self.assertEqual(code, 0)
         self.assertEqual(len(calls), 2)

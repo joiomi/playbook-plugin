@@ -416,7 +416,9 @@ class SinglePathReadsTheEnvelope(_Project):
         return calls, [r for r in self._journal() if r.get("hook") == "review"], buf.getvalue()
 
     def test_single_records_usage_and_saves_the_prose(self):
-        calls, recs, printed = self._single(_fx("multiturn.stdout"))
+        obj = json.loads(_fx("multiturn.stdout"))         # task 320: a review ends with the protocol's CAP line
+        obj["result"] += "\n\nCAP: 0/5 reported, exhausted"
+        calls, recs, printed = self._single(json.dumps(obj))
         argv = calls[0]
         i = argv.index("--output-format")
         self.assertEqual(argv[i:i + 2], ["--output-format", "json"])

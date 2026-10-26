@@ -213,5 +213,63 @@ class APanelIsResolvedAgainstItsQuorum(_Project):
         self.assertIn("PANEL FAIL: 1/3", self.verdict(self.panel(None, fail=("claude-haiku-5-5", "claude-sonnet-5-5"))))
 
 
+_REFUSAL = "I'm sorry, I can't help with reviewing this.\n"
+_PLAN_ONLY = "I will start by reading the task file and the changed code.\n"
+_WAIT = ("I have launched `python3 scripts/verify` in the background to verify the suite and will continue once it "
+         "finishes.\nWaiting for `scripts/verify` to complete in the background.\nCAP: 0/5 reported, exhausted\n")
+
+
+@unittest.skipUnless(bwrap_usable(), "no bubblewrap that can start a sandbox here")
+class ASeatCountsOnlyWhenItsTextIsAReview(_Project):
+    """Task 320 (audit 5's G6): a judge's exit-0 text that is no review — real judges returned each of these shapes —
+    must not count as a judge that succeeded, in a panel round, in the single judge, or in the post-panel judge."""
+
+    def say(self, **texts):
+        d = self.stub_out / "say"       # where a sandboxed run can read it: /tmp is the run's own (task 315)
+        d.mkdir(exist_ok=True)
+        for model, text in texts.items():
+            (d / f"claude-{model}-5-5.txt").write_text(text, encoding="utf-8")
+        return dict(self.env, PB_STUB_SAY=str(d))
+
+    def judge_md(self) -> str:
+        return (next((self.p / ".agent" / "tasks").glob("001-*")) / "judge.md").read_text(encoding="utf-8")
+
+    def test_a_refusal_and_a_plan_only_stop_are_not_reviews(self):
+        r = self.tasks("panel-review", "1", "--mode", "impl", env=self.say(haiku=_REFUSAL, sonnet=_PLAN_ONLY))
+        self.assertIn("PANEL FAIL: 1/3 judges succeeded, quorum 2", r.stdout, r.stdout + r.stderr)
+        jm = self.judge_md()
+        self.assertEqual(jm.count("(FAILED — not a review:"), 2, jm)
+        self.assertIn("I'm sorry, I can't help with reviewing this.", jm)       # the judge's own text is kept
+        self.assertIn("I will start by reading the task file", jm)
+
+    def test_a_wait_with_cap_zero_is_not_a_review(self):
+        r = self.tasks("panel-review", "1", "--mode", "impl", env=self.say(haiku=_WAIT))
+        self.assertIn("PANEL PASS: 2/3 judges succeeded, quorum 2", r.stdout, r.stdout + r.stderr)
+        self.assertEqual(self.judge_md().count("(FAILED — not a review:"), 1)
+
+    def test_control_a_consultation_counts_a_plain_answer(self):
+        r = self.tasks("panel-review", "--prompt", "Reply with the single word OK.",
+                       env=self.say(opus="OK\n", sonnet="OK\n", haiku="OK\n"))
+        self.assertIn("PANEL PASS: 3/3", r.stdout, r.stdout + r.stderr)
+
+    def test_the_single_judge_fails_on_a_refusal(self):
+        r = self.tasks("impl-review", "1", env=self.say(sonnet=_REFUSAL))
+        self.assertNotEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("not a review", r.stdout + r.stderr)
+        self.assertNotIn("Saved:", r.stdout)
+
+    def test_the_post_panel_judge_fails_on_a_wait(self):
+        r = self.tasks("panel-review", "1", "--mode", "impl")
+        self.assertIn("PANEL PASS: 3/3", r.stdout, r.stdout + r.stderr)
+        (self.p / "README.md").write_text("x\nchanged after the panel\n", encoding="utf-8")
+        r = self.tasks("impl-review", "1", env=self.say(sonnet=_WAIT))
+        self.assertIn("post-D6: single-judge run 1", r.stdout + r.stderr)
+        self.assertNotIn("POST-D6 VERDICT: PASS", r.stdout)
+        self.assertIn("not a review", r.stdout + r.stderr)
+        self.assertNotEqual(r.returncode, 0)
+        runs = (next((self.p / ".agent" / "tasks").glob("001-*")) / "post-panel-reviews.jsonl").read_text(encoding="utf-8")
+        self.assertIn('"status": "failed"', runs)
+
+
 if __name__ == "__main__":
     unittest.main()

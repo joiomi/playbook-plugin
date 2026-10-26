@@ -1000,7 +1000,8 @@ class ARealReviewWhereNothingContainsTheJudge(unittest.TestCase):
     def _review(self, judge: str):
         standin = self.bindir / "claude"
         standin.write_text("#!/bin/sh\ncat >/dev/null\n" + _JUDGES[judge] +
-                           'echo "No Critical or Important findings."\n', encoding="utf-8")
+                           'echo "No Critical or Important findings."\necho "CAP: 0/5 reported, exhausted"\n',
+                           encoding="utf-8")
         standin.chmod(0o755)
         before = self.record.read_bytes()
         r = self._tasks("impl-review", "001", "--backend", "claude", "--timeout", "120")

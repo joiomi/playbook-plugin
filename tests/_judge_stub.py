@@ -9,6 +9,8 @@ does at the boundary the review path drives — and no more:
     and says in its answer whether the write went through;
   * fails (exit 1, an error on stdout as claude prints one) when its `--model` is listed
     in $PB_STUB_FAIL_MODELS, so a panel can be given a controlled mix of verdicts;
+  * answers, exit 0, with the text of `$PB_STUB_SAY/<model>.txt` when that file exists (task 320:
+    a refusal, a wait, a plain answer — texts that are or are not a review);
   * otherwise answers with one finding in the review format, exit 0.
 
 No network, no model: the review path, the sandbox and bubblewrap are the real ones.
@@ -51,6 +53,8 @@ printf 'cwd=%s\nwrite=%s\nsandboxed=%s\n' "$PWD" "$w" "${PLAYBOOK_SANDBOXED:-}" 
 case " ${PB_STUB_FAIL_MODELS:-} " in
     *" $model "*) echo "API Error: the stub was told to fail for model $model"; exit 1 ;;
 esac
+# task 320: answer with a given text, exit 0 — a refusal, a wait, a plain "OK" — when one is laid out for the model
+if [ -n "${PB_STUB_SAY:-}" ] && [ -f "$PB_STUB_SAY/$model.txt" ]; then cat "$PB_STUB_SAY/$model.txt"; exit 0; fi
 printf '**Important** — `src/x.py:1` a finding from the stand-in judge (%s).\n\nWRITE-ATTEMPT: %s\n\nCAP: 1/5 reported, exhausted\n' "$model" "$w"
 '''
 
@@ -64,6 +68,26 @@ fi
 echo "stand-in agy: not a judge" >&2
 exit 1
 '''
+
+
+def agy_as_review(stream: str) -> str:
+    """A captured agy stream-json run as a review the protocol accepts (task 320): its `result` event's answer ends
+    with the CAP line. The captures under tests/fixtures/ stay verbatim; a test that needs the run to read as a review
+    passes it through this."""
+    import json
+    out = []
+    for ln in stream.splitlines(keepends=True):
+        try:
+            ev = json.loads(ln)
+        except ValueError:
+            out.append(ln)
+            continue
+        res = ev.get("result") if isinstance(ev, dict) and ev.get("event") == "result" else None
+        if isinstance(res, dict) and isinstance(res.get("response"), str) and res["response"].strip():
+            res["response"] = res["response"].rstrip("\n") + "\n\nCAP: 0/5 reported, exhausted\n"
+            ln = json.dumps(ev, ensure_ascii=False, separators=(",", ":")) + ("\n" if ln.endswith("\n") else "")
+        out.append(ln)
+    return "".join(out)
 
 
 def stub_bin(directory: Path, *, agy: bool = False) -> Path:

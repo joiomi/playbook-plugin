@@ -112,8 +112,8 @@ class FindingsLand(unittest.TestCase):
 
     def test_a_second_review_is_appended_not_replacing_the_first(self):
         self._task(with_impl_section=False)
-        self._impl_review(_stdout_with_review("first review text"))
-        self._impl_review(_stdout_with_review("second review text"))
+        self._impl_review(_stdout_with_review("first review text\n\nCAP: 0/5 reported, exhausted"))
+        self._impl_review(_stdout_with_review("second review text\n\nCAP: 0/5 reported, exhausted"))
         jm = (self.tdir / "judge-single.md").read_text(encoding="utf-8")
         self.assertEqual(jm.count("## Single-judge impl review — "), 2)
         self.assertLess(jm.index("first review text"), jm.index("second review text"))

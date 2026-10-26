@@ -36,6 +36,7 @@ from provider.adapters.antigravity import AntigravityAdapter  # noqa: E402
 from provider.usage import JudgeOutput  # noqa: E402
 from tasks import models_check as mc  # noqa: E402
 from tasks import review  # noqa: E402
+from tests._judge_stub import agy_as_review  # noqa: E402  (task 320)
 
 FIX = _HERE / "fixtures" / "agy-1.2.17"
 
@@ -1727,7 +1728,7 @@ class ReviewRunner(unittest.TestCase):
         return [r for r in _journal(self.agent) if r["hook"] == "review"]
 
     def test_panel_seat_writes_one_record_with_agys_token_counts(self):
-        p1, p2 = self._patched(_cp(fx("success-tools.stdout")))
+        p1, p2 = self._patched(_cp(agy_as_review(fx("success-tools.stdout"))))
         with p1, p2, _chdir(self.project), contextlib.suppress(SystemExit):
             review.cmd_panel_review(["042", "--models", "agy:gemini-3.8-flash-high"])
         recs = self._reviews()
@@ -1772,7 +1773,7 @@ class ReviewRunner(unittest.TestCase):
         return code
 
     def test_single_judge_arm_uses_the_adapters_judge_invocation(self):
-        code = self._single(_cp(fx("success-tools.stdout")))
+        code = self._single(_cp(agy_as_review(fx("success-tools.stdout"))))
         self.assertEqual(code, 0)
         agent, args, kw = self.calls[0]
         self.assertEqual(agent, "agy")

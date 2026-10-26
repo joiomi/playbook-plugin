@@ -334,7 +334,7 @@ class PanelDegradedKeepsVerdict(_Project):
         code = None
         cwd = os.getcwd()
         with mock.patch.object(ClaudeAdapter, "is_available", classmethod(lambda cls: True)), \
-             mock.patch.object(ClaudeAdapter, "run_headless_judge", lambda self, **kw: "1. **Note** — fine.\n"), \
+             mock.patch.object(ClaudeAdapter, "run_headless_judge", lambda self, **kw: "1. **Note** — fine.\n\nCAP: 0/5 reported, exhausted\n"), \
              mock.patch.object(R, "_detect_tamper_full", side_effect=self._degraded):
             os.chdir(self.d)
             try:
@@ -360,7 +360,7 @@ class PanelDegradedKeepsVerdict(_Project):
         from provider.adapters.claude import ClaudeAdapter
         cwd = os.getcwd()
         with mock.patch.object(ClaudeAdapter, "is_available", classmethod(lambda cls: True)), \
-             mock.patch.object(ClaudeAdapter, "run_headless_judge", lambda self, **kw: "1. **Note** — fine.\n"):
+             mock.patch.object(ClaudeAdapter, "run_headless_judge", lambda self, **kw: "1. **Note** — fine.\n\nCAP: 0/5 reported, exhausted\n"):
             os.chdir(self.d)
             try:
                 with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
@@ -382,7 +382,7 @@ class SingleDegradedKeepsFindings(_Project):
         cwd = os.getcwd()
 
         def fake_run(agent, agent_args, **kw):
-            return subprocess.CompletedProcess(args=[], returncode=0, stdout="1. **Note** — fine.\n", stderr="")
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout="1. **Note** — fine.\n\nCAP: 0/5 reported, exhausted\n", stderr="")
         with contextlib.ExitStack() as stack:
             stack.enter_context(mock.patch.object(sys, "argv", argv))
             stack.enter_context(mock.patch("shutil.which", return_value="/usr/bin/claude"))
@@ -1143,7 +1143,7 @@ class PanelStampEndToEnd(unittest.TestCase):
                     (self.d / "a.py").write_text("a = 2  # landed mid-review\n", encoding="utf-8")
                     _git("commit", "-qam", "concurrent", cwd=self.d)
                     done.append(1)
-            return "1. **Note** — fine.\n"
+            return "1. **Note** — fine.\n\nCAP: 0/5 reported, exhausted\n"
 
         text = self._panel(judge)
         self.assertNotEqual(self.tsf(self.d), fp0, "the fixture did not move the tree")
@@ -1155,7 +1155,7 @@ class PanelStampEndToEnd(unittest.TestCase):
 
     def test_an_undisturbed_panel_run_stamps_and_describes_the_tree(self):
         fp0, head0 = self.tsf(self.d), self._head()
-        text = self._panel(lambda adapter, **kw: "1. **Note** — fine.\n")
+        text = self._panel(lambda adapter, **kw: "1. **Note** — fine.\n\nCAP: 0/5 reported, exhausted\n")
         self.assertIn(f"**Tree-state:** {fp0}", text)
         self.assertIn("**Panel-snapshot:**", text)
         self.assertIn(f"**Commit:** {head0}", text)
@@ -1169,7 +1169,7 @@ class PanelStampEndToEnd(unittest.TestCase):
             return "" if len(calls) == 1 else real(project_path, **kw)
 
         with mock.patch("tasks.core.tree_state_fingerprint", flaky):
-            text = self._panel(lambda adapter, **kw: "1. **Note** — fine.\n")
+            text = self._panel(lambda adapter, **kw: "1. **Note** — fine.\n\nCAP: 0/5 reported, exhausted\n")
         self.assertNotIn("**Tree-state:**", text)
         self.assertNotIn("**Panel-snapshot:**", text)
         self.assertIn("**Tree-state unavailable:**", text)

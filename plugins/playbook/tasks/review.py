@@ -198,6 +198,20 @@ def _judge_error(output, status, timeout_label=None):
         return ""
 
 
+def _as_review_or_failure(output):
+    """A judge's text as it stands when it is a review, else failure-marked (task 320, audit 5's G6): an exit-0
+    refusal, filter block, plan-only stop or wait counted as a judge that succeeded. The marker comes first, so every
+    reader — the verdict, the retry bookkeeping, the spend status, judge.md — takes it for a failure, and the judge's
+    own text follows it. The carried usage, soft cut and note stay with it."""
+    from tasks.models_check import not_a_review
+    why = not_a_review(output)
+    if why is None:
+        return output
+    from provider.usage import JudgeOutput
+    return JudgeOutput(f"(FAILED — not a review: {why})\n\n{output}", usage=getattr(output, "usage", None),
+                       soft_cut=getattr(output, "soft_cut", None), note=getattr(output, "note", None))
+
+
 def _parse_judge_usage(output_text):
     """Token usage for the spend record — else None (the caller then records
     `{"status":"unknown"}`). NEVER fabricates numbers.
@@ -2275,6 +2289,8 @@ def _cmd_panel_review(cmd_args):
     _answered: dict = {}
 
     def _take(spec, label, output, dur_ms, timed_out):
+        if task_path:       # a review round: a consultation (`--prompt`) asks for no review protocol
+            output = _as_review_or_failure(output)
         if label in _retry:
             _failed_now = _judge_failed(output)
             _o = _seat_outage.classify_outage(output, provider=label.split(":", 1)[0]) if _failed_now else None
@@ -4064,6 +4080,16 @@ def _cmd_single_review(cmd, cmd_args):
             _text += "\n"
         result = subprocess.CompletedProcess(
             getattr(result, "args", None), _rc, stdout=_text, stderr=result.stderr or "")
+    # Task 320 (audit 5's G6): an exit-0 answer that is no review — a refusal, a filter block, a plan-only stop, a
+    # wait — takes the failure path below as a failure-marked one does: no saved log, no findings, rc 1, and a
+    # post-panel run is released (`fail_run`, it produced no review). Every backend, before the operator stream.
+    if result.returncode == 0:
+        from tasks.models_check import not_a_review as _not_a_review
+        _why_not = _not_a_review(result.stdout or "")
+        if _why_not:
+            result = subprocess.CompletedProcess(
+                getattr(result, "args", None), 1,
+                stdout=f"(FAILED — not a review: {_why_not})\n\n{result.stdout or ''}", stderr=result.stderr or "")
 
     # Clean tree: stream the judge's output for the operator (best-effort — a
     # closed sink must not crash a completed review).
