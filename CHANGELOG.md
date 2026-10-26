@@ -12,9 +12,11 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 that guards, and the judges — found what is grave by his rule (a guard that fails open, the loss of his data, a defect
 on a path he uses); each fix is its own task, its red test first, below, newest first. PHASE-B items 9a and 9b come with
 them: every full task carries a pinned test contract, and `tasks red` records each row failing on the code before the
-fix and passing after (278-287). The suite has ⟦tests⟧ tests (5,942 at 1.6.8); CI is the same two Linux lanes. The
+fix and passing after (278-287). The suite has 6,613 tests (5,942 at 1.6.8); CI is the same two Linux lanes. The
 guarantee ledger has 136 rows (135 at 1.6.8; the new one is the session-id injection's, task 301), 123 verified, and no
-known violation. The live gauntlet on this release: ⟦gauntlet⟧.
+known violation. The live gauntlet on this release: 19 PASS (one new row, the session-id injection's), 5 WAITING (the
+grok rows: its account is out of credit), 0 FAIL — the quorum row failed once, a codex seat failing after 412 s, and was
+WAITING, every clause passing, when run again.
 
 **Upgrading:** `/playbook:upgrade`, then restart every Claude Code session: `hooks.json` changed (the Monitor tool's
 command is guarded, task 307). On a project 1.6.8 set up, 1.6.9's `/playbook:init` changes two template-owned lines of
