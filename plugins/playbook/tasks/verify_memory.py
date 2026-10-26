@@ -389,6 +389,16 @@ def cmd_verify(cmd_args: "list[str]") -> None:
     from tasks.core import resolve_session_id
     from tasks.intent import find_task_dir
     project = find_project_root()
+    # Task 321 (audit 5's G1): a green run here must be of the code the work is in — not the main tree's, run from
+    # inside a lane-less Claude Code worktree or while one holds work the main tree's HEAD does not have.
+    from tasks import worktree_scope as _wts
+    _stray = _wts.stray_work(project)
+    if _stray:
+        print("Error: tasks verify would certify code that is not where the work is:", file=sys.stderr)
+        for _st in _stray:
+            print(f"  - {_st}", file=sys.stderr)
+        print(_wts.advice(project), file=sys.stderr)
+        raise SystemExit(1)
     tasks_dir = resolve_agent_dir(project) / "tasks"
     task_file = None
     if cmd_args:

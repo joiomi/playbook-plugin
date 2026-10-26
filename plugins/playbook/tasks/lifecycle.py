@@ -939,6 +939,19 @@ def cmd_work(cmd_args):
                               "count. Finish them, or override with --force --reason.",
                               file=sys.stderr)
                         sys.exit(1)
+                # Task 321 (audit 5's G1): the work must be where verify runs. From inside a lane-less Claude Code
+                # worktree, or while one holds work the main tree's HEAD does not have, verify ran on the main tree's
+                # code and a `[PASS]` described code that is not the task's. A close check: `--force --reason` passes it.
+                from tasks import worktree_scope as _wts
+                _stray = _wts.stray_work(Path(project_path))
+                if _stray and not force:
+                    print("Blocked: this close would certify code that is not where the work is:", file=sys.stderr)
+                    for _st in _stray:
+                        print(f"  - {_st}", file=sys.stderr)
+                    print(f"{_wts.advice(Path(project_path))} Override with --force --reason.", file=sys.stderr)
+                    sys.exit(1)
+                elif _stray:
+                    print("note (forced past it): " + "; ".join(_stray), file=sys.stderr)
                 # Task 286 (PHASE-B 9b part 7; the owner, 2026-10-22 08:26: "Doar ce e sigur greșit"): the test
                 # contract's check — BEFORE verify, so a certain block spends no verify run and no judge (sonnet). A
                 # check that cannot judge refuses (fail closed); only `--force --reason` goes through, recorded.
