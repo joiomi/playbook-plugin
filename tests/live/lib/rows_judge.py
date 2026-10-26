@@ -11,6 +11,7 @@ Seats are cheap on purpose: `haiku` for claude and `gpt-6.1-sol` at `low` effort
 rows test what the review paths send, contain and conclude, which the effort does not change."""
 from __future__ import annotations
 
+import atexit
 import json
 import re
 import shlex
@@ -92,8 +93,13 @@ class Judges:
     def __init__(self, prefix: str):
         self.base = Path(tempfile.mkdtemp(prefix=prefix))
         self.proj = scratch_project(self.base / "proj")
-        self.rec = self.base / "rec"
-        self.rec.mkdir()
+        # the shims write here from inside the judge's sandbox: since task 315 its /tmp is its own, so the folder is
+        # in the one place outside the project a judge may write — playbook's write log folder of the HOME the judges
+        # run with (`provider/sandbox.py`), under a name no project's slug takes; removed when the row ends (task 318)
+        log_dir = Path.home() / ".local" / "share" / "playbook"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        self.rec = Path(tempfile.mkdtemp(prefix=f"gauntlet-rec-{prefix}", dir=log_dir))
+        atexit.register(shutil.rmtree, self.rec, True)
         shims = self.base / "shims"
         shims.mkdir()
         for name in ("claude", "codex"):
