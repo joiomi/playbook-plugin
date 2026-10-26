@@ -110,20 +110,32 @@ class _Repo:
         if wtop != wt or wcommon != self.common:
             return f"the worktree {wt} cannot be read by git as itself, so its work cannot be told apart from the main tree's"
         status = _git(wt, "status", "--porcelain", "--untracked-files=normal")
-        bits = _git(wt, "ls-files", "-v")
+        bits = _git(wt, "ls-files", "-v", "-z", binary=True)          # names read whole (post-panel run 1, codex)
+        sparse = _out(_git(wt, "config", "--bool", "core.sparseCheckout")) == "true"
         wt_head = _out(_git(wt, "rev-parse", "HEAD"))
         if status is None or status.returncode != 0 or bits is None or bits.returncode != 0 or wt_head is None:
             return f"the worktree {wt} cannot be read by git, so its work cannot be told apart from the main tree's"
         if status.stdout.strip():
             return f"the worktree {wt} holds uncommitted changes that the main tree does not have (untracked files count)"
-        hidden = [ln for ln in bits.stdout.splitlines()
-                  if ln[:1].islower() or (ln[:1] == "S" and (wt / ln[2:]).exists())]
+        # a skip-worktree file that is not there is a sparse cone's absence only where a sparse checkout is on; without
+        # one it is a hidden deletion (post-panel run 1, codex)
+        hidden = []
+        for entry in bits.stdout.split(b"\0"):
+            tag, name = entry[:1], os.fsdecode(entry[2:])
+            if not name:
+                continue
+            if tag.islower() or (tag == b"S" and (not sparse or os.path.lexists(wt / name))):
+                hidden.append(name)
         if hidden:
             return (f"the worktree {wt} has {len(hidden)} file(s) under an assume-unchanged or skip-worktree bit, which "
                     "hides an edit from git status")
         # what the worktree was made at is not its work: the oldest entry of its HEAD's reflog (impl round 2, opus —
         # the remote-tracking refs counted the task's own commits once they were upstream, the main tree not pulled)
-        made_at = (_out(_git(wt, "reflog", "show", "--format=%H", "HEAD")) or "").splitlines()[-1:]
+        # It counts only as the worktree's creation: `git worktree add` writes that entry with no message; an oldest
+        # entry that is something else (an expired reflog's leftover — post-panel run 1, codex) is no base, and then
+        # the count is against the main HEAD alone (fail closed)
+        oldest = (_out(_git(wt, "reflog", "show", "--format=%H %gs", "HEAD")) or "").splitlines()[-1:]
+        made_at = [ln.split(" ", 1)[0] for ln in oldest if ln.strip() and " " not in ln.strip()]
         known = [x for x in [self.head, *made_at] if x]
         ahead = _out(_git(wt, "rev-list", "--count", wt_head, "--not", *known))
         if ahead is None:

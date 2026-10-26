@@ -397,5 +397,37 @@ class ImplRound2(_Project):
         self.assert_closed(self.tasks(self.p, "work", "done"))
 
 
+class PostPanelRun1(_Project):
+    """Post-panel run 1 (codex): what round 2's fixes still let through."""
+
+    def test_a_hidden_deletion_under_skip_worktree_blocks(self):
+        """Row 27: no sparse checkout — a `skip-worktree` file deleted is a hidden edit, not a sparse cone's absence."""
+        wt = self.worktree()
+        self.git(wt, "update-index", "--skip-worktree", "src/app.py")
+        (wt / "src" / "app.py").unlink()
+        self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
+
+    def test_a_hidden_edit_of_a_quoted_file_name_blocks(self):
+        """Row 28: git C-quotes `src/caf\u00e9.py` in `ls-files -v`; read NUL-separated, the name is found."""
+        (self.p / "src" / "caf\u00e9.py").write_text("v = 1\n", encoding="utf-8")
+        self.git(self.p, "add", "-A")
+        self.git(self.p, "commit", "-qm", "a quoted name")
+        wt = self.worktree()
+        self.git(wt, "update-index", "--skip-worktree", "src/caf\u00e9.py")
+        (wt / "src" / "caf\u00e9.py").write_text("v = 2\n", encoding="utf-8")
+        self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
+
+    def test_a_reflog_without_its_creation_entry_blocks(self):
+        """Row 29: the reflog's creation entries expired and only the task's commit is left — that commit is no base."""
+        wt = self.worktree()
+        (wt / "src" / "app.py").write_text("print(2)\n", encoding="utf-8")
+        self.git(wt, "commit", "-qam", "the work")
+        n = len(self.git(wt, "reflog", "show", "--format=%H", "HEAD").stdout.split())
+        for i in range(n - 1, 0, -1):                       # drop every entry older than the task's commit
+            self.git(wt, "reflog", "delete", f"HEAD@{{{i}}}")
+        self.assertEqual(self.git(wt, "reflog", "show", "--format=%gs", "HEAD").stdout.strip(), "commit: the work")
+        self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
+
+
 if __name__ == "__main__":
     unittest.main()
