@@ -60,6 +60,12 @@ class NotAReview(unittest.TestCase):
             "the lens line alone": "The change touches no shared or persisted state.\n" + CAP0,
             "a Romanian plan + CAP": "Voi citi implementarea \u0219i voi urm\u0103ri fluxul de date.\n" + CAP0,
             "waiting on": "Waiting on the suite to finish.\n" + CAP0,
+            # post-panel run 1 (codex, each reproduced through the CLI): a provisional "none", a bold word that only
+            # starts with a severity, a plan that names a file
+            "a wait that says no findings yet": "I'm waiting for the command to finish; no findings yet.\n" + CAP0,
+            "a wait, nothing found so far": "Waiting for the suite. Nothing found so far.\n" + CAP0,
+            "Important context, then a plan": "**Important context**\nI will start by reading the diff and tests.",
+            "a plan naming a file + CAP": "I'll read `tasks/review.py` first, then run the tests.\n" + CAP0,
         }
         for name, text in shapes.items():
             with self.subTest(name):
@@ -89,13 +95,14 @@ class NotAReview(unittest.TestCase):
             "200,000 characters": "No findings. " + ("x" * 200_000) + "\n" + CAP0,
             # impl round 1 (agy, sonnet): a rule or a closing fence after the CAP line
             "CAP then a rule": "No findings.\n" + CAP0 + "\n---",
-            "CAP then a fence": "Checked `a.py`.\n" + CAP0 + "\n```",
+            "CAP then a fence": "No findings in `a.py`.\n" + CAP0 + "\n```",
             # impl round 1 (agy, opus, sonnet, codex): a review that mentions waiting is still a review
             "a CAP-0 review naming a wait mid-text": ("No findings. The lock is bounded.\n- Waiting for the lock is "
                                                       "capped by `timeout=5`.\n" + CAP0),
             # impl round 2: a CAP-0 answer with prose says it found nothing, or points at what it read
             "CAP 0 citing a line": "The retry at `tasks/review.py:2296` stays bounded.\n" + CAP0,
-            "CAP 0 citing a path": "I read `tasks/models_check.py` and its tests.\n" + CAP0,
+            "CAP 0 citing a line in a link": "Checked [models_check.py#L180](models_check.py#L180).\n" + CAP0,
+            "CAP 0, severities in backticks": "No `**Critical**` or `**Important**` defects found across the lenses.\n" + CAP0,
             "CAP 0, I found no": "I found no Critical or Important problem in the delta.\n" + CAP0,
             "CAP 0, Romanian": "Nu am identificat probleme în diferența revizuită.\n" + CAP0,
             "CAP 0, nothing to report": "Nothing to report: the change is a version bump.\n" + CAP0,
