@@ -40,15 +40,16 @@ the row could not run, and the close refused it, as it should). No judge was cal
 then restart every Claude Code session and check that `claude plugin list` says 1.6.8. Nothing needs converting:
 measured on that project after 1.6.9 had written its records, 1.6.8's `doctor`, `bootstrap`, `status`, `list`, `audit`,
 `compact` and `numbers` ran clean, and its close of a task 1.6.9 had run `tasks red` on kept the task's `## Test
-contract`, `## Red receipt`, rulings and work plan byte for byte, its `red-receipt.jsonl` and `base.json`, and
+contract`, `## Red receipt` and `## Work Plan` byte for byte, its `red-receipt.jsonl` and `base.json`, and the project's
 `.agent/rulings.md`; 1.6.8 closes such a task without the contract check (it has none), and its `/playbook:init` puts
 its own two CLAUDE.md lines back; on 1.6.9 again, `tasks red --check` reads the same proof. In a throwaway HOME the
-plugin manager went from 1.6.9 down to 1.6.8 with these two commands, and back up (measured). Under 1.6.8 the defects
-1.6.9 fixed are back, among them, for the records: a judge cut at its timeout replaces the earlier partial log (312), a
-second single-judge review drops the agent's triage among the findings (304), `tasks blocked` after a resume deletes
-what the agent wrote under `## Blocked` (296), an activation deletes a section written after the chat capture (297), and
-a stub's expansion drops what was written into it (299). Before the next `/playbook:upgrade`, `git -C <clone> checkout
-main`.
+plugin manager went from 1.6.9 down to 1.6.8 with these two commands, and back up (measured). The empty names 1.6.9's
+sandbox made in the agents' folders stay (they change nothing for the agents, measured in task 315); under 1.6.8 a
+sandboxed run can write the agents' folders again, as before task 308. Under 1.6.8 the defects 1.6.9 fixed are back,
+among them, for the records: a judge cut at its timeout replaces the earlier partial log (312), a second single-judge
+review drops the agent's triage among the findings (304), `tasks blocked` after a resume deletes what the agent wrote
+under `## Blocked` (296), an activation deletes a section written after the chat capture (297), and a stub's expansion
+drops what was written into it (299). Before the next `/playbook:upgrade`, `git -C <clone> checkout main`.
 
 **verify acts as no one** — task 316 (found in task 315). Every child of `scripts/verify` gets a HOME of the run's
 own (one per run, under /var/tmp where it can be, made under a lock and removed at exit, git's two settings files in
