@@ -300,6 +300,23 @@ class InsideTheSandbox(t308._Home):
         # names hook files (18-sandbox.md) — each a hook source a grok run could make where none is
         self._made_and_held("grok", {".grok/requirements.toml": "", ".grok/pager.toml": "", ".grok/hooks-paths": ""}, [])
 
+    def test_grok_s_six_instructions_names_are_made_and_held_in_its_folder_and_in_claude_s(self):
+        # the post-panel judge, run 3 (opus), and grok's own docs (12-project-rules.md): grok "loads every matching
+        # file in a directory" of `Agents.md`, `Claude.md`, `CLAUDE.md`, `CLAUDE.local.md`, `AGENT.md` and `AGENTS.md`,
+        # in `$GROK_HOME` and, with Claude compatibility on (the default), in `~/.claude/` — a grok run could make five
+        # of them in its folder, a claude run four in its own
+        names = ("Agents.md", "Claude.md", "CLAUDE.md", "CLAUDE.local.md", "AGENT.md", "AGENTS.md")
+        self._made_and_held("grok", {f".grok/{n}": "" for n in names}, [])
+        self._made_and_held("claude", {f".claude/{n}": "" for n in names}, [])
+
+    def test_grok_s_config_folder_trust_and_sandbox_profiles_are_made_and_held(self):
+        # the post-panel judge, run 3 (opus), and grok's own write-protected list (18-sandbox.md): `config.toml` (its
+        # hooks, and MCP servers: commands the host's grok starts), `trusted_folders.toml` (folder trust: an untrusted
+        # repository's project hooks then run) and `sandbox.toml` (its sandbox profiles) — held where they are, but a
+        # grok run could make each on a grok home that lacks it
+        self._made_and_held("grok", {".grok/config.toml": "", ".grok/trusted_folders.toml": "",
+                                     ".grok/sandbox.toml": ""}, [])
+
 
 def _codex_ok():
     spec = importlib.util.spec_from_file_location("_t315_judge_usage", _HERE / "test_judge_usage.py")
