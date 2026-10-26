@@ -388,13 +388,15 @@ class ImplRound2(_Project):
             ws._git = real
         self.assertTrue(any("dubious ownership" in f for f in found), found)
 
-    def test_control_a_worktree_whose_lane_marker_is_a_file_is_its_own(self):
-        """Row 26 (opus Minor, must-not): `find_project_root` takes any `.agent/tasks` that exists; so does the check."""
+    def test_a_worktree_whose_lane_marker_is_a_file_blocks(self):
+        """Row 26 (post-panel run 2, codex — reversing round 2's opus Minor): the hooks own a worktree by a lane
+        DIRECTORY (`pb_has_lane`, `-d`), so a file `.agent/tasks` leaves its code under the main tree's task, and its
+        work blocks the close."""
         wt = self.worktree()
         (wt / ".agent").mkdir(exist_ok=True)
         (wt / ".agent" / "tasks").write_text("", encoding="utf-8")
         (wt / "src" / "app.py").write_text("print(2)\n", encoding="utf-8")
-        self.assert_closed(self.tasks(self.p, "work", "done"))
+        self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
 
 
 class PostPanelRun1(_Project):
@@ -426,6 +428,29 @@ class PostPanelRun1(_Project):
         for i in range(n - 1, 0, -1):                       # drop every entry older than the task's commit
             self.git(wt, "reflog", "delete", f"HEAD@{{{i}}}")
         self.assertEqual(self.git(wt, "reflog", "show", "--format=%gs", "HEAD").stdout.strip(), "commit: the work")
+        self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
+
+
+
+class PostPanelRun2(_Project):
+    """Post-panel run 2 (codex, each reproduced through the CLI)."""
+
+    def test_a_worktree_made_again_on_its_branch_keeps_its_work(self):
+        """Row 30: commit in the worktree, remove it, make it again on the same branch — the branch's creation is the
+        base, not the new worktree's."""
+        wt = self.worktree()
+        (wt / "src" / "app.py").write_text("print(2)\n", encoding="utf-8")
+        self.git(wt, "commit", "-qam", "the work")
+        self.git(self.p, "worktree", "remove", str(wt))
+        self.git(self.p, "worktree", "add", "-q", str(wt), "wt1")
+        self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
+
+    def test_a_hidden_deletion_inside_the_sparse_cone_blocks(self):
+        """Row 31: with a sparse checkout on, a skip-worktree file INSIDE the cone that is gone is a hidden deletion."""
+        wt = self.worktree()
+        self.git(wt, "sparse-checkout", "set", "src")
+        self.git(wt, "update-index", "--skip-worktree", "src/app.py")
+        (wt / "src" / "app.py").unlink()
         self.assert_blocked(self.tasks(self.p, "work", "done"), str(wt))
 
 

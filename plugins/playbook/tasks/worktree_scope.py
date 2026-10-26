@@ -10,10 +10,10 @@ commit (`--force --reason` passes, recorded), and `tasks verify` refuses.
 The repositories looked at are the project's and each `code_roots` one. A worktree with its own lane — or under a
 group folder with one, as the hooks' `pb_main_tree` reads it — answers to its own tasks and is not looked at; a nested
 repository is another repository, not a worktree. A worktree holds work when git shows a change in it (untracked files
-count), when an index bit (`assume-unchanged`, or `skip-worktree` over a file that is there — a sparse checkout's
-absent files are no edit) hides one, or when it has commits the main tree's HEAD does not have, counted from the commit
-the worktree was made at (the oldest entry of its HEAD's reflog): what it was made from is not its work, and what it
-committed is, pushed or merged upstream or not, until the main tree has it (impl rounds 1-2: agy, opus, codex). A
+count), when an index bit (`assume-unchanged`, or `skip-worktree` over a file that is there, or gone from inside a
+cone-mode sparse checkout's cone) hides one, or when it has commits the main tree's HEAD does not have, counted from
+where its work starts (`_made_at`: its branch's creation): what it was made from is not its work, and what it committed
+is, pushed or merged upstream or not, until the main tree has it (impl rounds 1-2, post-panel runs 1-2). A
 worktree git cannot read as itself — its `.git` gone, so git answers for the main tree instead — fails closed, and so
 does a git that refuses to answer for a repository. Worktree paths are read NUL-separated, as bytes. git runs with the
 caller's `GIT_*` repository variables dropped and replace refs off.
@@ -51,13 +51,13 @@ def _resolved(base: Path, path: "str | None") -> "Path | None":
 
 
 def _has_lane(d: Path) -> bool:
-    """`d` holds `.agent/tasks` or a `.agent/<lane>/tasks` — the markers `find_project_root` looks for, as it reads
-    them: any that exists (impl round 2, opus)."""
+    """`d` holds a `.agent/tasks` or `.agent/<lane>/tasks` FOLDER — a lane as the hooks read one (`pb_has_lane`, `-d`),
+    since they decide whose task a worktree's code is under (post-panel run 2, codex, reversing round 2's reading)."""
     agent = d / ".agent"
-    if (agent / "tasks").exists():
+    if (agent / "tasks").is_dir():
         return True
     try:
-        return agent.is_dir() and any((s / "tasks").exists() for s in agent.iterdir() if s.is_dir())
+        return agent.is_dir() and any((s / "tasks").is_dir() for s in agent.iterdir() if s.is_dir())
     except OSError:
         return False
 
@@ -68,6 +68,38 @@ def _inside(child: Path, parent: Path) -> bool:
         return True
     except ValueError:
         return False
+
+
+def _made_at(wt: Path) -> "str | None":
+    """The commit the worktree's work starts from: its branch's creation (`branch: Created from …`, the oldest entry of
+    the branch's reflog — it outlives a worktree made again on the branch, post-panel run 2, codex), or, detached, the
+    oldest entry of its HEAD's reflog that `git worktree add` wrote, with no message. Anything else — a reflog that
+    expired, so the oldest entry left is the task's own commit (post-panel run 1, codex) — is no base: None, and then
+    the count is against the main HEAD alone (fail closed)."""
+    branch = _out(_git(wt, "symbolic-ref", "-q", "HEAD"))
+    if branch:
+        oldest = (_out(_git(wt, "reflog", "show", "--format=%H %gs", branch)) or "").splitlines()[-1:]
+        return next((ln.split(" ", 1)[0] for ln in oldest if " branch: Created from " in f" {ln} "), None)
+    oldest = (_out(_git(wt, "reflog", "show", "--format=%H %gs", "HEAD")) or "").splitlines()[-1:]
+    return next((ln.strip() for ln in oldest if ln.strip() and " " not in ln.strip()), None)
+
+
+def _outside_cone(wt: Path):
+    """A test: is a path left out by the worktree's sparse cone? Only a cone-mode sparse checkout leaves paths out
+    knowably — the root's files, the listed folders and the files of their parent folders are in it; with no sparse
+    checkout, or a non-cone one, nothing counts as left out (fail closed)."""
+    if _out(_git(wt, "config", "--bool", "core.sparseCheckout")) != "true" \
+            or _out(_git(wt, "config", "--bool", "core.sparseCheckoutCone")) != "true":
+        return lambda name: False
+    dirs = [d.strip("/") for d in (_out(_git(wt, "sparse-checkout", "list")) or "").splitlines() if d.strip("/")]
+    parents = {"/".join(d.split("/")[:i]) for d in dirs for i in range(1, d.count("/") + 1)}
+
+    def outside(name: str) -> bool:
+        folder = name.rsplit("/", 1)[0] if "/" in name else ""
+        if not folder or folder in parents:
+            return False
+        return not any(name.startswith(d + "/") for d in dirs)
+    return outside
 
 
 def _repositories(project: Path) -> "list[Path]":
@@ -111,32 +143,28 @@ class _Repo:
             return f"the worktree {wt} cannot be read by git as itself, so its work cannot be told apart from the main tree's"
         status = _git(wt, "status", "--porcelain", "--untracked-files=normal")
         bits = _git(wt, "ls-files", "-v", "-z", binary=True)          # names read whole (post-panel run 1, codex)
-        sparse = _out(_git(wt, "config", "--bool", "core.sparseCheckout")) == "true"
+        outside = _outside_cone(wt)
         wt_head = _out(_git(wt, "rev-parse", "HEAD"))
         if status is None or status.returncode != 0 or bits is None or bits.returncode != 0 or wt_head is None:
             return f"the worktree {wt} cannot be read by git, so its work cannot be told apart from the main tree's"
         if status.stdout.strip():
             return f"the worktree {wt} holds uncommitted changes that the main tree does not have (untracked files count)"
-        # a skip-worktree file that is not there is a sparse cone's absence only where a sparse checkout is on; without
-        # one it is a hidden deletion (post-panel run 1, codex)
+        # a skip-worktree file that is not there is a sparse cone's absence only when the cone leaves it out; anywhere
+        # else it is a hidden deletion (post-panel runs 1-2, codex)
         hidden = []
         for entry in bits.stdout.split(b"\0"):
             tag, name = entry[:1], os.fsdecode(entry[2:])
             if not name:
                 continue
-            if tag.islower() or (tag == b"S" and (not sparse or os.path.lexists(wt / name))):
+            if tag.islower() or (tag == b"S" and (os.path.lexists(wt / name) or not outside(name))):
                 hidden.append(name)
         if hidden:
             return (f"the worktree {wt} has {len(hidden)} file(s) under an assume-unchanged or skip-worktree bit, which "
                     "hides an edit from git status")
         # what the worktree was made at is not its work: the oldest entry of its HEAD's reflog (impl round 2, opus —
         # the remote-tracking refs counted the task's own commits once they were upstream, the main tree not pulled)
-        # It counts only as the worktree's creation: `git worktree add` writes that entry with no message; an oldest
-        # entry that is something else (an expired reflog's leftover — post-panel run 1, codex) is no base, and then
-        # the count is against the main HEAD alone (fail closed)
-        oldest = (_out(_git(wt, "reflog", "show", "--format=%H %gs", "HEAD")) or "").splitlines()[-1:]
-        made_at = [ln.split(" ", 1)[0] for ln in oldest if ln.strip() and " " not in ln.strip()]
-        known = [x for x in [self.head, *made_at] if x]
+        made_at = _made_at(wt)
+        known = [x for x in [self.head, made_at] if x]
         ahead = _out(_git(wt, "rev-list", "--count", wt_head, "--not", *known))
         if ahead is None:
             return f"the worktree {wt}: git cannot tell whether its commits are in the main tree"
