@@ -19,13 +19,14 @@ grok rows: its account is out of credit), 0 FAIL — the quorum row failed once,
 WAITING, every clause passing, when run again.
 
 **Upgrading:** `/playbook:upgrade`, then restart every Claude Code session: `hooks.json` changed (the Monitor tool's
-command is guarded, task 307). On a project 1.6.8 set up, 1.6.9's `/playbook:init` changes two template-owned lines of
-CLAUDE.md (tests first, and the test contract among the sections a judge's window keeps), saving the earlier file to
-`.agent/backups/`, and rewrites the project's `.claude/bin` wrappers with task 310's fix — a session's start rewrites
-all of them but `monitor` by itself; nothing else in the project changes (measured). Nothing to migrate. The first
-sandboxed launch of each agent makes, empty, the names of its folder listed under task 315 that are missing (in
-`~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok`), and holds them read-only for its runs; an existing one is left as it
-is.
+command is guarded, task 307). Then run `/playbook:init` in each project: a session's start rewrites the project's
+`.claude/bin` wrappers but `monitor`, so init is what brings task 310's fix to `.claude/bin/monitor`. On a project 1.6.8
+set up, 1.6.9's init changes two template-owned lines of CLAUDE.md (tests first, and the test contract among the
+sections a judge's window keeps), saving the earlier file to `.agent/backups/`, and rewrites the seven wrappers; nothing
+else in the project changes (measured). Nothing to migrate. The first sandboxed launch of each agent makes the names of
+its folder listed under task 315 that are missing (in `~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok`) — empty, or `{}`
+for the JSON ones, Claude Code's `.config.json` with no write bit — and holds them read-only for its runs; an existing
+one is left as it is.
 
 **Measured before the release**, in temporary folders: on a project 1.6.8's `/playbook:init` set up, with a task 1.6.8
 had activated (so with no `base.json`), 1.6.9's hooks, before any 1.6.9 init, let a code edit of that task through,
