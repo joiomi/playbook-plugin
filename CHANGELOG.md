@@ -4,6 +4,133 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.6.9] — 2026-10-26
+
+**The stabilization audit's fixes, and the test contract with its red receipt** — tasks 278-316 (the owner's order of
+2026-10-22: no new features, an audit of the plugin with a stop rule, one release after it). Four audits (tasks 289,
+295, 300, 306) — each the live gauntlet, a blind session of his, the guards' false alarms, mutation runs on the code
+that guards, and the judges — found what is grave by his rule (a guard that fails open, the loss of his data, a defect
+on a path he uses); each fix is its own task, its red test first, below, newest first. PHASE-B items 9a and 9b come with
+them: every full task carries a pinned test contract, and `tasks red` records each row failing on the code before the
+fix and passing after (278-287). The suite has ⟦tests⟧ tests (5,942 at 1.6.8); CI is the same two Linux lanes. The
+guarantee ledger has 136 rows (135 at 1.6.8; the new one is the session-id injection's, task 301), 123 verified, and no
+known violation. The live gauntlet on this release: ⟦gauntlet⟧.
+
+**Upgrading:** `/playbook:upgrade`, then restart every Claude Code session: `hooks.json` changed (the Monitor tool's
+command is guarded, task 307). ⟦init⟧ Nothing to migrate. The first sandboxed launch of each agent makes, empty, the
+names of its folder listed under task 315 that are missing (in `~/.claude`, `~/.codex`, `~/.gemini`, `~/.grok`), and
+holds them read-only for its runs; an existing one is left as it is.
+
+**Measured before the release**, in temporary folders: ⟦window⟧
+
+**Going back** to 1.6.8 (`65d7857`): in the release clone the marketplace reads, `git -C <clone> checkout 65d7857`, then
+`claude plugin marketplace update playbook-x-marketplace` and `claude plugin update playbook@playbook-x-marketplace`,
+then restart every Claude Code session and check that `claude plugin list` says 1.6.8. ⟦back⟧ Before the next
+`/playbook:upgrade`, `git -C <clone> checkout main`.
+
+**verify acts as no one** — task 316 (found in task 315). Every child of `scripts/verify` gets a HOME of the run's
+own (one per run, under /var/tmp where it can be, made under a lock and removed at exit, git's two settings files in
+it), its own XDG and runtime folders, and no sign-in: every agent's own variables (`GROK_*`, `CODEX_*`, `ANTHROPIC_*`,
+…), any `*_API_KEY` or `*_TOKEN`, AWS credentials, the ssh agent and git's global override are cut, and the session bus
+is disabled (agy's keyring sign-in). Until then three spend-journal tests reached a failed judge's live probe and ran
+the real codex, signed in as whoever ran verify — 977 such sessions on the owner's machine since 2026-10-06 — and grok;
+they now stand in for the probe.
+
+**A sandboxed run has a /tmp of its own, and the names an agent loads from its folder are made and held** — task 315
+(audit 4's follow-up; the owner's design answers of 2026-10-25). /tmp is a private tmpfs: a kept link into the host's
+/tmp (Chrome's singleton links in a Claude Code job) no longer refuses the launch, the launch's TMPDIR under /tmp is
+made in it and its PATH folders there are bound read-only, read from the run's own environment; no folder of that tmpfs
+is pinned from the host (round 1: pinned, the host's folder above a project under /tmp was bound writable). The names
+each agent looks up at the top of its folder and lacks are made — Claude Code's `.config.json` (empty, no write bit:
+with content it is its global config), `CLAUDE.md`, `AGENTS.md`, `rules`, `workflows`, `dev-mods`; codex's `AGENTS.md`,
+`environments.toml`, plugin manifests and `AGENTS.override.md` as a folder (an empty override file hides AGENTS.md);
+agy's `AGENTS.md`, `GEMINI.md` and two `hooks.json`; grok's `personas`, `roles`, `rules`, `workflows`, `bundles`, all
+six of its instructions names (`Agents.md`, `Claude.md`, `CLAUDE.md`, `CLAUDE.local.md`, `AGENT.md`, `AGENTS.md` — grok
+loads them from `~/.claude` too, so the four Claude Code lacked are made there), `config.toml`, `trusted_folders.toml`,
+`sandbox.toml`, `disabled-hooks`, `requirements.toml`, `pager.toml`, `hooks-paths`, `lsp.json`, `settings.json` — and
+held read-only. codex's single judge writes its `-o` message in a folder of its own under /tmp. (A private top of the
+agent's folder was measured to corrupt a shared WAL database 4 of 4 times and dropped.)
+
+**The review fingerprint sees files hidden by index bits** — task 314 (audit 4's G5). A change to a file marked
+`--assume-unchanged` or `--skip-worktree` moves the fingerprint, the dirty map and the post-panel tree, so a stale
+review no longer reads as fresh; sparse checkouts keep their absent files absent.
+
+**`init` keeps `.gitignore`'s bytes** — task 313 (audit 4's G6). The ignore block is merged as bytes: CRLF, a bare CR at
+the end, and bytes that are not UTF-8 stay as they were; the existing file is an exact prefix of the new one.
+
+**A partial log keeps every cut run** — task 312 (audit 4's G8). A second judge cut at its hard timeout no longer
+replaces the first one's partial log: the new run goes first, the earlier ones follow, written under the task lock; an
+unreadable earlier log sends the new run to a sibling file, named.
+
+**`compact` reads a BOM-led task file** — task 311 (audit 4's G9): `_validate` strips a leading BOM, so gates there are
+counted and none can be lost to compaction.
+
+**A project's wrapper acts on its own project** — task 310 (audit 4's G2). `<project>/.claude/bin/tasks` called from
+outside the project — its parent folder, a sibling — works on that project: until then it made and closed the task in
+the caller's folder, with no verify contract. A `.claude` that is a link to a shared folder keeps the tasks in the
+project; a link to the wrapper file itself, as on PATH, runs where it is called.
+
+**The sandbox keeps the host's code and data read-only** — task 308 (audit 4's G3). Only the running agent's own state
+folder is writable under HOME, and inside it only the state it was measured writing; plugins, settings, instructions,
+hooks, the agent's install, `~/.local` (but playbook's write log) and `~/.cache` stay as they are; missing hook sources
+are made empty; links, hard links and folders a run could move aside refuse the launch.
+
+**The Monitor tool's command is guarded** — task 307 (audit 4's G1): the command guard and the task gate see Monitor's
+shell command, and the state echo counts it.
+
+**The freehand log fences each message** — task 305 (audit 3's G6): a pasted message's code fence can no longer hide
+the gates below it.
+
+**A second single-judge review keeps the first** — task 304 (audit 3's G4): a triage line, a gate or an edit the agent
+wrote among a review's findings in task.md stays after the next review, and every single-judge review's text is appended
+to `judge-single.md`, run by run.
+
+**A second `tasks red` keeps the agent's lines** — task 303 (audit 3's G3): lines written under `## Red receipt` after
+the CLI's own survive a rerun.
+
+**The task guards judge the file's own project** — task 302 (audit 3's G1): from a Claude Code worktree, the main tree's
+task.md is guarded like any other.
+
+**The session-id injection allows nothing** — task 301 (audit 3's G5): a `tasks` segment in a shell command no longer
+answers `allow` for the whole command. Only a single plain call of the project's own wrapper is approved; a chained one,
+or one that runs or writes anything else, goes through Claude Code's own permission check.
+
+**A stub's expansion keeps what was written** — task 299 (audit 2's G6). `tasks work` on a `--stub` task keeps every
+section, note and reference written into the stub, and its `## Risk` with what is under it; an expansion that cannot
+keep it whole (a fence left open, a section twice, a risk line that would read differently once saved) refuses and
+writes nothing.
+
+**A worktree edit needs a task** — task 298 (audit 2's G3): the task gate no longer exempts code under
+`.claude/worktrees/`; a worktree's own `.agent/` and `.claude/` stay exempt.
+
+**The chat capture keeps what follows it** — task 297 (audit 2's G4): an activation replaces only the captured messages,
+so a section written after the block (an `## Owner rulings`) survives it.
+
+**`tasks blocked` keeps earlier records** — task 296 (audit 2's G5): only the CLI's own reason and `Resumed` lines are
+replaced; a gate, a note or a quote written in `## Blocked` stays.
+
+**A missing `## Risk` heading is held to the bar** — task 294. A task whose `## Risk` is unset or whose heading was
+deleted is held to the strictest class's bar (with the seeded policy, a quorum panel) and runs every class's verify
+extras; there is no pre-1.5.0 path any more.
+
+**The command guard reads every spelling** — task 293 (audit 1's G3: `git clean --force -d` and `git push origin +main`
+passed). Force is read in every spelling — long, abbreviated, a `+` refspec, a pathspec, a `-c` override — and a `git
+clean` passes only as a dry run the guard can prove. New refusals: git config the guard cannot read on the command line
+(`git-config-unreadable`: a `-c alias.…`, any `--config-env`, a `GIT_CONFIG_*` word anywhere on the line); a `git
+config` write that makes a later command destructive (`git-config-dangerous`: `remote.<name>.push` / `.mirror`,
+`alias.*`, `clean.requireForce`, `include.path`, or a rename into such a section); and a git option before the
+subcommand that it does not know (`git-option-unreadable`). See docs/configuration.md.
+
+**`## Status` is the CLI's** — task 292 (audit 1's G4): an Edit, Write or MultiEdit that changes a task.md's live `##
+Status`, or adds one, is refused, naming `tasks work done`.
+
+**The batch guard judges the whole file** — task 291 (audit 1's G1): an Edit is judged on the whole file it leaves, so a
+`replace_all` tick of every gate is refused like any other bare batch.
+
+**Review evidence is the CLI's records, not a tick** — task 290 (audit 1's G2): only what the CLI writes — `judge.md`'s
+review rounds and `judge-single.md`'s single-judge review — counts; a ticked gate that names a review no longer closes a
+high-consequence task with no judge.
+
 **A row leaves the test contract only by `tasks red --drop`** — task 287 (PHASE-B.md item 9b, part 8; the owner's
 answers of 2026-10-22 12:07 and 12:19). A recorded row (its key: kind, behavior, test) no longer in the contract and
 not dropped blocks the close, named with its `tasks red <N> --drop <row> --reason "<why>"` — under `No behavior
@@ -13,24 +140,24 @@ the receipt under the task lock and writes in one append, works on a contract `t
 not checked, said. Its first review (grave): a reason with a line break wrote a `## Status` into task.md — such a
 reason is refused, and every line of `## Red receipt` is written as one line.
 
-**The close checks the test contract** — task 286 (PHASE-B.md item 9b, part 7; the owner's answers of 2026-10-22).
-A task with a test contract does not close while a row is certainly wrong — not run, stale, skipped, run badly, red now,
-or a late row not proved on its own base; the rest passes, said. The check comes before verify; a receipt that cannot
-be judged blocks (fail closed); `--force --reason` overrides and the receipt names what. The activation records a
-contract, so deleting it does not turn the check off; a project without git passes, said; `No behavior changes: <why>`
-holds only while no code changed. Plus task 285's last five (a lost start's remedies and late rows, removed code roots,
-a NUL, a `-` value never given to git). Its first review: a late partly-proved row's base judged; a damaged repository blocks (only no `.git` on
-the path is "not a git repository"); a red row deleted from the contract still blocks; `No behavior changes:` as a list
-item, outside fences, every scope read; the block names the way through by cause. Its second review: the check runs again
-after verify and the judges; a removed row is judged by the live rule, by its number's newest record; one snapshot
-(the gate and base.json in the digest); a truncated receipt line blocks.
+**The close checks the test contract** — task 286 (PHASE-B.md item 9b, part 7; the owner's answers of 2026-10-22). A
+task with a test contract does not close while a row is certainly wrong — not run, stale, skipped, run badly, red now,
+or a late row not proved on its own base; the rest passes, said. The check comes before verify; a receipt that cannot be
+judged blocks (fail closed); `--force --reason` overrides and the receipt names what. The activation records a contract,
+so deleting it does not turn the check off; a project without git passes, said; `No behavior changes: <why>` holds only
+while no code changed. Plus task 285's last five (a lost start's remedies and late rows, removed code roots, a NUL, a
+`-` value never given to git). Its first review: a late partly-proved row's base judged; a damaged repository blocks
+(only no `.git` on the path is "not a git repository"); a red row deleted from the contract still blocks; `No behavior
+changes:` as a list item, outside fences, every scope read; the block names the way through by cause. Its second review:
+the check runs again after verify and the judges; a removed row is judged by the live rule, by its number's newest
+record; one snapshot (the gate and base.json in the digest); a truncated receipt line blocks.
 
-**The red receipt says a start that is gone, and what helps each note** — task 285 (PHASE-B.md item 9b, part 6:
-task 284's last review). A pruned activation tree, or a clean start's commit gone after a reset and `git gc`, is said
-as gone, with no refresh (git is asked only once a git question about it failed, or for a refresh line); each note names its remedy — `--check` again, a
-re-run of the row, or none; without base.json the hint skips a removed code root and keeps a start dirty only in docs
-or tests, worked out before the task lock; a design row on the start's code needs no now-tree. The rows' no-colour
-environment is not `verify`'s — a trade-off, said.
+**The red receipt says a start that is gone, and what helps each note** — task 285 (PHASE-B.md item 9b, part 6: task
+284's last review). A pruned activation tree, or a clean start's commit gone after a reset and `git gc`, is said as
+gone, with no refresh (git is asked only once a git question about it failed, or for a refresh line); each note names
+its remedy — `--check` again, a re-run of the row, or none; without base.json the hint skips a removed code root and
+keeps a start dirty only in docs or tests, worked out before the task lock; a design row on the start's code needs no
+now-tree. The rows' no-colour environment is not `verify`'s — a trade-off, said.
 
 **The red receipt reads Twisted trial and coloured output, and judges a reference without base.json** — task 284
 (PHASE-B.md item 9b, part 5: task 283's last review). `PASSED (...)` closes a summary (trial's words from its docs, not
