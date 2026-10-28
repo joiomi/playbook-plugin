@@ -254,6 +254,39 @@ class JudgeRoundKept(unittest.TestCase):
         self.assertIn(b"new verdicts", out)
 
 
+class UnsavedRoundKept(unittest.TestCase):
+    """Row 17 (task 335, post-panel run 2, codex): a panel round whose save into judge.md fails late (the file became
+    unreadable as UTF-8 after the preflight, or cannot be written) is kept whole in a new file beside it, and the
+    command says where — the paid answers are never lost."""
+
+    def setUp(self):
+        sys.path.insert(0, str(PLUGIN))
+        self.addCleanup(sys.path.remove, str(PLUGIN))
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+
+    def test_a_refused_save_keeps_the_round_in_its_own_file(self):
+        from tasks import review
+        judge_md = self.dir / "judge.md"
+        judge = b"# Panel Impl Review \xe2\x80\x94 old\n\ncaf\xe9\n"
+        judge_md.write_bytes(judge)
+        failed, note = review._save_panel_round(judge_md, "# Panel Impl Review — new\n\npaid findings\n", "abc123def456")
+        self.assertTrue(failed)
+        self.assertEqual(judge_md.read_bytes(), judge)
+        kept = self.dir / "judge.unsaved-abc123def456.md"
+        self.assertEqual(kept.read_text(encoding="utf-8"), "# Panel Impl Review — new\n\npaid findings\n")
+        self.assertIn(kept.name, note)
+
+    def test_a_saved_round_writes_judge_md_only(self):
+        from tasks import review
+        judge_md = self.dir / "judge.md"
+        failed, note = review._save_panel_round(judge_md, "# Panel Impl Review — new\n\npaid findings\n", "abc123def456")
+        self.assertFalse(failed)
+        self.assertIn("paid findings", judge_md.read_text(encoding="utf-8"))
+        self.assertEqual(sorted(x.name for x in self.dir.iterdir() if not x.name.endswith(".lock")), ["judge.md"])
+
+
 class WriteRefuses(unittest.TestCase):
     """Rows 1-3 and 7: the primitive itself."""
 
