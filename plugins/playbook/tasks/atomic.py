@@ -26,10 +26,55 @@ Stdlib only; no dependency on any other tasks module, so every module
 
 from __future__ import annotations
 
+import codecs
 import os
+import stat
 import tempfile
 from pathlib import Path
 from typing import Union
+
+
+class NotUtf8Error(Exception):
+    """A text write refused because the file it would replace is not valid in its encoding (task 335, grave B of
+    DESIGN-PLAYBOOK-2.md §7). Read leniently, such a byte became U+FFFD and was written back, so the byte someone wrote
+    was gone. Raised before anything is written: the file stays byte-identical. Not a `ValueError` or an `OSError`, so
+    the callers' `except ValueError` / `except OSError` cannot swallow the refusal; `cli.main` prints it."""
+
+
+def _not_decodable(p: Path, raw: bytes, encoding: str, err: UnicodeDecodeError) -> NotUtf8Error:
+    return NotUtf8Error(
+        f"{p} is not valid {encoding.upper() if encoding.lower().startswith('utf') else encoding} "
+        f"(byte {err.start}: 0x{raw[err.start]:02x}); nothing was written. Convert the file "
+        "(for example `iconv -f cp1252 -t utf-8`) and run the command again.")
+
+
+def _refuse_if_not_decodable(p: Path, encoding: str) -> None:
+    """Refuse a text write over an existing regular file whose bytes do not decode in `encoding`. A missing, unreadable
+    or non-regular target keeps the write's old behavior (no read of a FIFO, no new refusal for a permission)."""
+    if codecs.lookup(encoding).name not in ("utf-8", "utf-8-sig"):
+        return
+    try:
+        if not stat.S_ISREG(os.stat(p).st_mode):
+            return
+        raw = p.read_bytes()
+    except OSError:
+        return
+    try:
+        raw.decode("utf-8")
+    except UnicodeDecodeError as err:
+        raise _not_decodable(p, raw, "utf-8", err) from None
+
+
+def read_text_strict(path: Union[str, "os.PathLike[str]"], encoding: str = "utf-8") -> str:
+    """A record's text read for a rewrite (task 335): its bytes decoded strictly, no newline translation (as
+    `newline=""`), `NotUtf8Error` when they do not decode. For a command that writes elsewhere before it rewrites the
+    record (`tasks compact`'s archive), so it refuses before its first write."""
+    p = Path(path)
+    raw = p.read_bytes()
+    try:
+        return raw.decode(encoding)
+    except UnicodeDecodeError as err:
+        raise _not_decodable(p, raw, encoding, err) from None
 
 
 def atomic_write(
@@ -61,10 +106,15 @@ def atomic_write(
     On any failure the temp file is removed before the exception propagates, so
     an interrupt between write and replace leaves neither a torn target nor a
     stray temp.
+
+    Text over an existing file that is not valid UTF-8 is refused (`NotUtf8Error`, task 335) before any temp file is
+    made: replacing it would lose the bytes that no decoder read. Bytes data is written as before.
     """
     p = Path(path)
     parent = p.parent
     is_bytes = isinstance(data, (bytes, bytearray))
+    if not is_bytes:
+        _refuse_if_not_decodable(p, encoding)
 
     # Capture the target's current mode BEFORE we create the temp, so a rewrite
     # preserves it (see docstring). None means "new file".
@@ -159,10 +209,16 @@ def rewrite(
         try:
             # no newline translation (task 214, T4): a lone CR inside a line stays there — `Path.read_text`'s newline translation made it a
             # line break that every transform then wrote back as one; CRLF still becomes LF, as before
-            with open(p, encoding=encoding, errors="replace", newline="") as fh:
-                text = fh.read().replace("\r\n", "\n")
+            raw = p.read_bytes()
         except FileNotFoundError:
             text = ""
+        else:
+            # strict (task 335): read with errors="replace", a byte that is not UTF-8 became U+FFFD and the transform's
+            # text wrote that back — refuse before the transform runs; the file stays byte-identical
+            try:
+                text = raw.decode(encoding).replace("\r\n", "\n")
+            except UnicodeDecodeError as err:
+                raise _not_decodable(p, raw, encoding, err) from None
         new = transform(text)
         if new is None:
             return None

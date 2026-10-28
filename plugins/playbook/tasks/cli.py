@@ -47,11 +47,15 @@ def main():
     …"); catching it here is what turns that into the message rather than a
     traceback (impl panel r2, opus F1). The raise happens BEFORE any read or
     write, so nothing was changed when it fires."""
+    from tasks.atomic import NotUtf8Error
     from tasks.filelock import LockTimeout
     try:
         return _main()
     except LockTimeout as exc:
         print(f"Blocked: {exc}", file=sys.stderr, flush=True)
+        sys.exit(1)
+    except NotUtf8Error as exc:     # task 335: a record that is not UTF-8 is refused, never rewritten; nothing was written
+        print(f"Refused: {exc}", file=sys.stderr, flush=True)
         sys.exit(1)
 
 

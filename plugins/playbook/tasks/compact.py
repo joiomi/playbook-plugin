@@ -190,8 +190,9 @@ def cmd_compact(cmd_args) -> None:
 
     # newline="" preserves the file's real line endings (read_text would fold
     # CRLF→LF and silently rewrite every line of a CRLF task.md).
-    with task_md.open(encoding="utf-8", errors="replace", newline="") as _fh:
-        text = _fh.read()
+    # strict (task 335): a task.md that is not UTF-8 is refused here, before the archive is written
+    from tasks.atomic import read_text_strict
+    text = read_text_strict(task_md)
     nl = "\r\n" if "\r\n" in text else "\n"
     from tasks.core import _physical_lines
     lines = _physical_lines(text, keepends=True)      # task 214 (T5): never cut a physical line in two
@@ -289,8 +290,8 @@ def _do_move(task_md, archive_path, new_task_text, *, header_for_archive,
     """
     if source_text is not None:
         try:
-            with task_md.open(encoding="utf-8", errors="replace", newline="") as _fh:
-                current = _fh.read()
+            from tasks.atomic import read_text_strict
+            current = read_text_strict(task_md)      # task 335: strict, as the first read
         except OSError as e:
             print(f"Error: could not re-read task.md before the move ({e}). "
                   "Nothing moved.", file=sys.stderr)
