@@ -871,6 +871,8 @@ def cmd_work(cmd_args):
             # avoid reindenting the whole close body — so nothing downstream can
             # read an unbound `task_file` (the original C1 crash).
             task_file = matches[0]
+            from tasks.core import refuse_unreadable_records
+            refuse_unreadable_records(task_file.parent)   # task 335: before verify runs or a receipt is written
             # Task 196 W4: a hand-made task folder in this lane refuses the close, before anything is read or written
             # for it (`--force --reason` overrides, as for the gates).
             if not force and _unknown_dirs_bounce(project_path, agent_dir):
@@ -1947,8 +1949,9 @@ def cmd_work(cmd_args):
                   + " — name one by its number. Nothing changed.", file=sys.stderr)
             sys.exit(1)
         if matches:
-            from tasks.core import _is_done, _is_stub_file
+            from tasks.core import _is_done, _is_stub_file, refuse_unreadable_records
             tf = matches[0]
+            refuse_unreadable_records(tf.parent)          # task 335: before any note or write of the activation
             done = _is_done(tf)
             if done and "--reopen" not in cmd_args:
                 # Task 140 (owner Q6): the CLI refuses this before its session GC
@@ -1989,6 +1992,8 @@ def cmd_work(cmd_args):
             print(f"Task {task_num} not found", file=sys.stderr)
             sys.exit(1)
 
+    from tasks.core import refuse_unreadable_records
+    refuse_unreadable_records(task_file.parent)           # task 335: whatever branch found it, before the first write
     # F11: `tasks work` accepts a bare number, a `NNN-slug`, or a bare slug
     # (`tasks list` shows the folder name, so an agent naturally copies it).
     # Whatever was given, the session pointer MUST be the canonical numeric —

@@ -30,7 +30,7 @@ import re
 import sys
 from pathlib import Path
 
-from tasks.atomic import atomic_write
+from tasks.atomic import NotUtf8Error, atomic_write
 from tasks.core import (_atx_h2_text, _closed_fence_line_indices,
                         _indent_columns, _iter_fenced_flags, resolve_agent_dir)
 from tasks.shared import find_project_root
@@ -192,6 +192,8 @@ def cmd_compact(cmd_args) -> None:
     # CRLF→LF and silently rewrite every line of a CRLF task.md).
     # strict (task 335): a task.md that is not UTF-8 is refused here, before the archive is written
     from tasks.atomic import read_text_strict
+    from tasks.core import refuse_unreadable_records
+    refuse_unreadable_records(task_md.parent)
     text = read_text_strict(task_md)
     nl = "\r\n" if "\r\n" in text else "\n"
     from tasks.core import _physical_lines
@@ -312,7 +314,7 @@ def _do_move(task_md, archive_path, new_task_text, *, header_for_archive,
         with archive_path.open("a", encoding="utf-8", newline="") as fh:
             fh.write(header + archive_add)
         _atomic_write(task_md, new_task_text)
-    except OSError as e:
+    except (OSError, NotUtf8Error) as e:     # task 335: a refusal rolls the archive back too
         try:
             if existed:
                 with open(archive_path, "rb+") as fh:

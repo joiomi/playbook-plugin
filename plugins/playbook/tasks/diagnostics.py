@@ -104,6 +104,9 @@ def cmd_audit(cmd_args):
 
     print("Running pre-panel audit...", flush=True)
     receipt_refused = False
+    if task_file:                       # task 335: refused before the sweeps and before audit-log.md
+        from tasks.core import refuse_unreadable_records
+        refuse_unreadable_records(task_file.parent)
     audit = run_audit(project_path)
     for r in audit["results"]:
         n = len([ln for ln in r["output"].splitlines() if ln.strip()])

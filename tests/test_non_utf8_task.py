@@ -78,8 +78,8 @@ COMPACT_BYTES = (
 )
 
 
-class CliRefuses(unittest.TestCase):
-    """Rows 4-5: the commands that write a task record say `Refused:` and change nothing."""
+class _CliProject(unittest.TestCase):
+    """A git project with one task folder, and the CLI run in it."""
 
     def setUp(self):
         self._tmp = tempfile.TemporaryDirectory()
@@ -105,6 +105,10 @@ class CliRefuses(unittest.TestCase):
         self.assertIn(f"byte {body.index(BAD)}", r.stderr)
         self.assertEqual((self.task_dir / "task.md").read_bytes(), body)
 
+
+class CliRefuses(_CliProject):
+    """Rows 4-5: the commands that write a task record say `Refused:` and change nothing."""
+
     def test_audit_refuses(self):
         (self.task_dir / "task.md").write_bytes(TASK_BYTES)
         for _ in range(2):                     # a second run refuses the same way
@@ -114,6 +118,102 @@ class CliRefuses(unittest.TestCase):
         (self.task_dir / "task.md").write_bytes(COMPACT_BYTES)
         self._assert_refused(self.run_tasks("compact", "001"), COMPACT_BYTES)
         self.assertFalse((self.task_dir / "task-archive.md").exists())
+
+
+# Rows 8-12 (task 335, impl round 1): a command that writes a second file, runs verify or pays judges refuses at
+# its start, before any of that — the primitive refused only at its own write, after audit-log.md, red-receipt.jsonl,
+# an archive or a paid panel.
+AUDIT_BYTES = (
+    b"# 001 - x\n\n## Status\nin_progress\n\n## Risk\nreversible\n\n## Work Plan\n- [x] caf\xe9 gate done\n\n"
+    b"## Pre-Panel Audit\n\n### 2026-10-15T10:00:01+03:00 \xc2\xb7 PASS \xc2\xb7 commit " + b"a" * 40 +
+    b"\n    - [CLEAN] conflict-markers \xe2\x80\x94 an older receipt\n"
+)
+RED_BYTES = (                     # `pending`: the first activation records base.json, which `tasks red` needs
+    b"# 001 - x\n\n## Status\npending\n\n## Risk\nreversible\n\n## Work Plan\n- [ ] caf\xe9 gate\n\n"
+    b"## Test contract\n\n| # | Kind | Behavior | Test that proves it |\n|---|------|----------|---------------------|\n"
+    b"| 1 | normal | true | `true` |\n"
+)
+
+
+class CommandsRefuseFirst(_CliProject):
+
+    def test_audit_with_an_older_receipt_writes_no_log(self):
+        (self.task_dir / "task.md").write_bytes(AUDIT_BYTES)
+        self._assert_refused(self.run_tasks("audit", "001"), AUDIT_BYTES)
+        self.assertFalse((self.task_dir / "audit-log.md").exists())
+
+    def test_red_refuses_before_any_row(self):
+        # activated while valid (that records base.json, which `tasks red` needs), then the byte lands
+        (self.task_dir / "task.md").write_bytes(RED_BYTES.replace(BAD, b"e"))
+        self.assertEqual(self.run_tasks("work", "001").returncode, 0)
+        self.assertTrue((self.task_dir / "base.json").exists())
+        bad = (self.task_dir / "task.md").read_bytes().replace(b"cafe gate", b"caf\xe9 gate")
+        (self.task_dir / "task.md").write_bytes(bad)
+        self._assert_refused(self.run_tasks("red", "001"), bad)
+        self.assertFalse((self.task_dir / "red-receipt.jsonl").exists())
+
+    def test_close_refuses_before_verify(self):
+        (self.project / ".agent" / "config.json").write_text(
+            '{"verify": {"_always": ["touch verify-ran"]}}', encoding="utf-8")
+        valid = TASK_BYTES.replace(BAD, b"e")
+        (self.task_dir / "task.md").write_bytes(valid)
+        self.assertEqual(self.run_tasks("work", "001").returncode, 0)
+        (self.task_dir / "task.md").write_bytes(TASK_BYTES)
+        self._assert_refused(self.run_tasks("work", "done"), TASK_BYTES)
+        self.assertFalse((self.project / "verify-ran").exists())
+
+    def test_activation_refuses_before_its_note(self):
+        (self.task_dir / "task.md").write_bytes(TASK_BYTES)        # all gates checked: the re-adopt branch
+        r = self.run_tasks("work", "001")
+        self._assert_refused(r, TASK_BYTES)
+        self.assertNotIn("re-adopting", r.stdout + r.stderr)
+
+    def test_panel_refuses_before_any_seat(self):
+        """A judge.md that is not UTF-8: refused before a seat is launched (no seat log), judge.md byte-identical.
+        PATH holds only python and git, so the old code's seats fail without spending anything."""
+        (self.task_dir / "task.md").write_bytes(TASK_BYTES.replace(BAD, b"e"))
+        judge = b"# Panel Impl Review \xe2\x80\x94 old\n\ncaf\xe9\n"
+        (self.task_dir / "judge.md").write_bytes(judge)
+        bin_dir = Path(self._tmp.name) / "bin"
+        bin_dir.mkdir()
+        import shutil
+        for tool in (sys.executable, shutil.which("git"), shutil.which("bash")):
+            os.symlink(tool, bin_dir / Path(tool).name)
+        env = dict(os.environ, PYTHONPATH=str(PLUGIN), PLAYBOOK_SESSION_ID=SID, PATH=str(bin_dir),
+                   HOME=str(Path(self._tmp.name) / "home"))
+        env.pop("BASH_ENV", None)
+        r = subprocess.run([sys.executable, "-m", "tasks.cli", "panel-review", "001", "--mode", "impl"],
+                           cwd=self.project, env=env, text=True, capture_output=True, timeout=300)
+        self.assertNotIn("Traceback", r.stderr, r.stderr)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("Refused:", r.stderr)
+        self.assertIn(f"byte {judge.index(BAD)}", r.stderr)
+        self.assertEqual((self.task_dir / "judge.md").read_bytes(), judge)
+        self.assertEqual(sorted(x.name for x in self.task_dir.iterdir()), ["judge.md", "task.md"])
+
+
+class JudgeRoundKept(unittest.TestCase):
+    """Row 12: a paid round is never dropped by the refusal — an archive that is not UTF-8 keeps every round in
+    judge.md, untrimmed, as an archive that cannot be written did before."""
+
+    def setUp(self):
+        sys.path.insert(0, str(PLUGIN))
+        self.addCleanup(sys.path.remove, str(PLUGIN))
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.dir = Path(self._tmp.name)
+
+    def test_a_bad_archive_keeps_the_round_in_judge_md(self):
+        from tasks.core import stack_judge_round
+        judge_md, archive = self.dir / "judge.md", self.dir / "judge-archive.md"
+        judge_md.write_text("# Panel Impl Review — round one\n\nold verdicts\n", encoding="utf-8")
+        archive_bytes = b"# Archive\n\ncaf\xe9\n"
+        archive.write_bytes(archive_bytes)
+        stack_judge_round(judge_md, "# Panel Impl Review — round two\n\nnew paid verdicts\n", max_rounds=1)
+        text = judge_md.read_text(encoding="utf-8")
+        self.assertIn("new paid verdicts", text)
+        self.assertIn("old verdicts", text)
+        self.assertEqual(archive.read_bytes(), archive_bytes)
 
 
 class WriteRefuses(unittest.TestCase):

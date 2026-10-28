@@ -13,7 +13,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from tasks.atomic import atomic_write
+from tasks.atomic import NotUtf8Error, atomic_write
 
 VERSION = "1.6.9"
 
@@ -3990,6 +3990,26 @@ def _archive_judge_overflow(archive_path: Path,
     return len(kept)
 
 
+# The records of a task that its commands rewrite (task 335).
+TASK_RECORD_NAMES = ("task.md", "judge.md", JUDGE_ARCHIVE_NAME, "task-archive.md", "judge-single.md")
+
+
+def refuse_unreadable_records(task_dir) -> None:
+    """Refuse a command on a task whose records are not all valid UTF-8, before it writes or spends anything (task 335,
+    impl round 1). The write primitive refuses too (`atomic.NotUtf8Error`), but only at its own write: after a command
+    has written a second file (audit-log.md, red-receipt.jsonl, an archive), run verify, or paid a panel. A missing or
+    non-regular record is not read."""
+    from tasks.atomic import read_text_strict
+    for name in TASK_RECORD_NAMES:
+        p = Path(task_dir) / name
+        try:
+            if not p.is_file():
+                continue
+        except OSError:
+            continue
+        read_text_strict(p)
+
+
 def stack_judge_round(judge_md: Path, round_text: str,
                       max_rounds: int = JUDGE_MD_MAX_ROUNDS) -> None:
     """Prepend a panel round to judge.md, newest first — a re-run must never
@@ -4028,7 +4048,9 @@ def stack_judge_round(judge_md: Path, round_text: str,
         if judge_md.exists():
             # Impl panel round 1, I-6 (PRE-EXISTING): a judge.md that cannot be READ is never replaced — the error
             # propagates and both files stay as they are (an empty read used to let the write erase its history).
-            old_text = judge_md.read_text(encoding="utf-8", errors="replace")
+            # strict (task 335): a judge.md that is not UTF-8 is refused before the archive is touched
+            from tasks.atomic import read_text_strict
+            old_text = read_text_strict(judge_md)
             pre = judge_preamble(old_text).rstrip()   # never lstrip: an indented `# Panel …` must stay indented (II-1)
             old_blocks = split_judge_blocks(old_text, preamble=False)
             if old_blocks:
@@ -4058,7 +4080,7 @@ def stack_judge_round(judge_md: Path, round_text: str,
                     archive_backup = archive_path.read_bytes()
                 archived_total = _archive_judge_overflow(archive_path, overflow)
                 archived_ok = True
-            except OSError:
+            except (OSError, NotUtf8Error):     # task 335: an archive that is not UTF-8 is refused — keep the rounds here
                 archived_ok = False
         if overflow and not archived_ok:
             # F1: archiving failed — DO NOT drop the paid round. Keep everything in
@@ -4075,7 +4097,7 @@ def stack_judge_round(judge_md: Path, round_text: str,
                         "round(s) preserved there in total ...]\n")
         try:
             _atomic_write(judge_md, out)
-        except OSError:
+        except (OSError, NotUtf8Error):
             # F3: the primary write failed after the archive was already committed —
             # roll the archive back so a retry does not stack the same overflow twice.
             if archived_ok:

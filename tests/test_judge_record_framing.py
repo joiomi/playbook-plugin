@@ -347,19 +347,24 @@ class ThePlanPanelsCases(_Dir):
         self.stack(v2_round("impl", "PASS", [("codex:x", "kept")]))
         jm = self.d / "judge.md"
         before = jm.read_bytes()
-        real = Path.read_text
+        real, real_bytes = Path.read_text, Path.read_bytes
 
         def failing(path, *a, **k):
             if Path(path).name == "judge.md":
                 raise OSError("simulated read failure")
             return real(path, *a, **k)
 
-        Path.read_text = failing
+        def failing_bytes(path, *a, **k):   # task 335: judge.md is read strictly, as bytes (atomic.read_text_strict)
+            if Path(path).name == "judge.md":
+                raise OSError("simulated read failure")
+            return real_bytes(path, *a, **k)
+
+        Path.read_text, Path.read_bytes = failing, failing_bytes
         try:
             with self.assertRaises(OSError):
                 core.stack_judge_round(jm, v2_round("impl", "PASS", [("codex:x", "new")], rid="777777777777"))
         finally:
-            Path.read_text = real
+            Path.read_text, Path.read_bytes = real, real_bytes
         self.assertEqual(jm.read_bytes(), before)
 
     def test_a_quoted_header_field_is_not_the_headers_without_a_bar(self):          # P-5

@@ -44,7 +44,7 @@ class NotUtf8Error(Exception):
 def _not_decodable(p: Path, raw: bytes, encoding: str, err: UnicodeDecodeError) -> NotUtf8Error:
     return NotUtf8Error(
         f"{p} is not valid {encoding.upper() if encoding.lower().startswith('utf') else encoding} "
-        f"(byte {err.start}: 0x{raw[err.start]:02x}); nothing was written. Convert the file "
+        f"(byte {err.start}: 0x{raw[err.start]:02x}); this file was not written. Convert it "
         "(for example `iconv -f cp1252 -t utf-8`) and run the command again.")
 
 

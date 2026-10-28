@@ -1857,6 +1857,8 @@ def _cmd_panel_review(cmd_args):
             print(f"Task {task_num} not found", file=sys.stderr)
             sys.exit(1)
         task_file = matches[0]
+        from tasks.core import refuse_unreadable_records
+        refuse_unreadable_records(task_file.parent)   # task 335: before any seat is paid for, or judge.md is touched
         task_path = str(task_file.relative_to(project_path))
         # P6 nudge: mechanically-detectable issues shouldn't cost judge
         # tokens — and 'an audit ran once' is not freshness: the note also
@@ -2617,10 +2619,11 @@ def _cmd_panel_review(cmd_args):
     # crash the run before the exit code.
     from tasks.core import stack_judge_round
     _panel_save_failed = False
+    from tasks.atomic import NotUtf8Error
     try:
         stack_judge_round(judge_md, "\n".join(lines))
         _saved_note = f"\nSaved: {judge_md.relative_to(project_path)}"
-    except OSError as _e:
+    except (OSError, NotUtf8Error) as _e:    # task 335: a refusal is an unsaved round, not a lost one
         _panel_save_failed = True
         _saved_note = f"\n(could not write {judge_md.name}: {_e})"
     if _prid:
@@ -3335,6 +3338,8 @@ def _cmd_single_review(cmd, cmd_args):
         sys.exit(1)
 
     task_file = matches[0]
+    from tasks.core import refuse_unreadable_records
+    refuse_unreadable_records(task_file.parent)       # task 335: before the judge is paid for
     task_path = str(task_file.relative_to(project_path))
 
     from tasks.template import plan_review_prompt, impl_review_prompt

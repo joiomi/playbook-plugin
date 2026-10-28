@@ -2505,6 +2505,8 @@ def _cmd_red(cmd_args: "list[str]") -> None:
         print(f"Error: tasks red: no task {args[0] if args else ''}", file=sys.stderr)
         raise SystemExit(2)
     task_file = d / "task.md"
+    from tasks.core import refuse_unreadable_records
+    refuse_unreadable_records(d)        # task 335: before any row runs or red-receipt.jsonl is written
     rows, why = parse_contract(read_task_text(task_file))
     if rows is None:
         _refuse(f"{why} — `tasks red` runs the contract's rows")
