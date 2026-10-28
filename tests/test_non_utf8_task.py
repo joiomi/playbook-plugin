@@ -192,6 +192,32 @@ class CommandsRefuseFirst(_CliProject):
         self.assertEqual(sorted(x.name for x in self.task_dir.iterdir()), ["judge.md", "task.md"])
 
 
+class TasklessPanel(_CliProject):
+    """Row 15 (task 335, post-panel run 1, codex): a taskless consultation (`panel-review --bare --prompt`) writes the
+    project's `.agent/judge.md`; when that is not UTF-8 it is refused before any seat, as a task's panel is."""
+
+    def test_a_consultation_refuses_before_any_seat(self):
+        agent = self.project / ".agent"
+        judge = b"# Panel Consultation \xe2\x80\x94 old\n\ncaf\xe9\n"
+        (agent / "judge.md").write_bytes(judge)
+        bin_dir = Path(self._tmp.name) / "bin"
+        bin_dir.mkdir()
+        import shutil
+        for tool in (sys.executable, shutil.which("git"), shutil.which("bash")):
+            os.symlink(tool, bin_dir / Path(tool).name)
+        env = dict(os.environ, PYTHONPATH=str(PLUGIN), PLAYBOOK_SESSION_ID=SID, PATH=str(bin_dir),
+                   HOME=str(Path(self._tmp.name) / "home"))
+        env.pop("BASH_ENV", None)
+        before = sorted(x.name for x in agent.iterdir())
+        r = subprocess.run([sys.executable, "-m", "tasks.cli", "panel-review", "--bare", "--prompt", "a question"],
+                           cwd=self.project, env=env, text=True, capture_output=True, timeout=300)
+        self.assertNotIn("Traceback", r.stderr, r.stderr)
+        self.assertEqual(r.returncode, 1, r.stdout + r.stderr)
+        self.assertIn("Refused:", r.stderr)
+        self.assertIn(f"byte {judge.index(BAD)}", r.stderr)
+        self.assertEqual((agent / "judge.md").read_bytes(), judge)
+
+
 class JudgeRoundKept(unittest.TestCase):
     """Row 12: a paid round is never dropped by the refusal — an archive that is not UTF-8 keeps every round in
     judge.md, untrimmed, as an archive that cannot be written did before."""
@@ -214,6 +240,18 @@ class JudgeRoundKept(unittest.TestCase):
         self.assertIn("new paid verdicts", text)
         self.assertIn("old verdicts", text)
         self.assertEqual(archive.read_bytes(), archive_bytes)
+
+    def test_a_crlf_judge_md_is_read_as_before(self):
+        """Row 16 (post-panel run 1, Minor): the strict read translates newlines as `read_text` did, so a CRLF
+        judge.md is rewritten with LF only, as before task 335 (the archive's dedup key reads the same text)."""
+        from tasks.core import stack_judge_round
+        judge_md = self.dir / "judge.md"
+        judge_md.write_bytes(b"# Panel Impl Review \xe2\x80\x94 round one\r\n\r\nold verdicts\r\n")
+        stack_judge_round(judge_md, "# Panel Impl Review — round two\n\nnew verdicts\n")
+        out = judge_md.read_bytes()
+        self.assertNotIn(b"\r", out)
+        self.assertIn(b"old verdicts", out)
+        self.assertIn(b"new verdicts", out)
 
 
 class WriteRefuses(unittest.TestCase):

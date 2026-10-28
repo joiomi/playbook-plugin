@@ -4050,7 +4050,9 @@ def stack_judge_round(judge_md: Path, round_text: str,
             # propagates and both files stay as they are (an empty read used to let the write erase its history).
             # strict (task 335): a judge.md that is not UTF-8 is refused before the archive is touched
             from tasks.atomic import read_text_strict
-            old_text = read_text_strict(judge_md)
+            # newlines translated as `read_text` did (post-panel run 1, Minor): the rewrite stays LF and the archive's
+            # dedup keys read the same text
+            old_text = read_text_strict(judge_md).replace("\r\n", "\n").replace("\r", "\n")
             pre = judge_preamble(old_text).rstrip()   # never lstrip: an indented `# Panel …` must stay indented (II-1)
             old_blocks = split_judge_blocks(old_text, preamble=False)
             if old_blocks:

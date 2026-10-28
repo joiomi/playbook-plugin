@@ -1980,6 +1980,13 @@ def _cmd_panel_review(cmd_args):
         agent_dir = resolve_agent_dir(project_path)
         agent_dir.mkdir(exist_ok=True)
         judge_md = agent_dir / "judge.md"
+        # task 335 (post-panel run 1, codex): a taskless consultation writes the project's judge.md and its archive —
+        # refused before any seat is paid for when one of them is not UTF-8, as a task's records are
+        from tasks.atomic import read_text_strict
+        from tasks.core import JUDGE_ARCHIVE_NAME
+        for _rec in (judge_md, agent_dir / JUDGE_ARCHIVE_NAME):
+            if _rec.is_file():
+                read_text_strict(_rec)
 
     # Discover available judges via adapter classes — each adapter declares
     # its own binary_name() and panel_variants(). Adding a new provider is
