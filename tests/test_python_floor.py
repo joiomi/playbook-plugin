@@ -298,7 +298,7 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
     # -- task 194 (#46): the task gate keeps its polarity below the floor — it fails closed: no call but a shell
     #    command is let through (what authorizes an edit runs on python3: the task's status, Guard 0, the batch
     #    check), and a shell command keeps only the guard that needs none (the judge's; task 197 removed the
-    #    task-dir trigger — a hand-made folder is caught after the call); no session id is injected. The state echo is advisory:
+    #    task-dir trigger — a hand-made folder is refused at the close, task 339); no session id is injected. The state echo is advisory:
     #    it says so, writes nothing and counts nothing — and marks the count it did not make, so the stop hook
     #    holds the turn instead of reading old counts. --
     def _working_old_python(self):
@@ -368,7 +368,7 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
         r = self._gate(path, bash(".claude/bin/tasks status"))
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertNotIn(b"updatedInput", r.stdout, "a session id was injected below the floor")
-        # task 197: the Bash pre-run task-dir check is gone (a hand-made folder is caught after the call, by the watch),
+        # task 197: the Bash pre-run task-dir check is gone (a hand-made folder is refused at the close — task 339),
         # so below the floor a `mkdir` or a brace is a shell command like any other — let through, no helper run
         outside = str(self.tmp / "elsewhere" / ".agent" / "tasks" / "001-x")
         r = self._gate(path, bash(f"mkdir -p {outside}"))

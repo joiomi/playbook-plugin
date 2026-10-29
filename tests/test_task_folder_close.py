@@ -69,7 +69,7 @@ class _Project(unittest.TestCase):
         return env
 
     def fire(self, event, payload):
-        """Every hook hooks.json runs for `event` and this tool: (blocked, stderr)."""
+        """Every hook hooks.json runs for `event` and this tool: (blocked, stderr, how many ran)."""
         hooks = json.loads(HOOKS_JSON.read_text(encoding="utf-8"))["hooks"].get(event, [])
         tool = payload.get("tool_name", "")
         blocked, errs = False, []
@@ -82,7 +82,7 @@ class _Project(unittest.TestCase):
                                    input=json.dumps(payload), text=True, capture_output=True, timeout=60)
                 blocked = blocked or r.returncode == 2
                 errs.append(r.stderr)
-        return blocked, "\n".join(errs)
+        return blocked, "\n".join(errs), len(errs)
 
     def _payload(self, event, tool, tool_input, tuid):
         return {"session_id": SID, "cwd": str(self.proj), "hook_event_name": event, "tool_name": tool,
@@ -97,7 +97,7 @@ class NoWatch(_Project):
 
     def test_a_hand_made_folder_holds_no_session(self):
         cmd = {"command": "mkdir -p .agent/tasks/901-x", "description": "t"}
-        b, e = self.fire("PreToolUse", self._payload("PreToolUse", "Bash", cmd, "toolu_01MK"))
+        b, e, _ = self.fire("PreToolUse", self._payload("PreToolUse", "Bash", cmd, "toolu_01MK"))
         self.assertFalse(b, e)
         self._task(self.lane, "901-x")                          # the call's effect: a task folder made by hand
         self.fire("PostToolUse", dict(self._payload("PostToolUse", "Bash", cmd, "toolu_01MK"),
@@ -107,7 +107,8 @@ class NoWatch(_Project):
                ("Write", {"file_path": str(self.proj / "NOTES.md"), "content": "x\n"}),
                ("Bash", {"command": "ls", "description": "t"})]
         for i, (tool, ti) in enumerate(nxt):
-            b, e = self.fire("PreToolUse", self._payload("PreToolUse", tool, ti, f"toolu_01N{i}"))
+            b, e, ran = self.fire("PreToolUse", self._payload("PreToolUse", tool, ti, f"toolu_01N{i}"))
+            self.assertGreater(ran, 0, f"no hook is wired for {tool}: the check would prove nothing")   # impl r1, sonnet
             self.assertFalse(b, f"{tool} held after a hand-made folder: {e}")
         sd = self.lane / "sessions" / SID
         named = [p.name for p in sd.rglob("*") if p.is_file() and "901-x" in p.read_text(errors="replace")] \
@@ -150,8 +151,9 @@ class TheSessionStart(_Project):
         if os.access(self.lane, os.W_OK):
             self.skipTest("a lane without write permission is still writable here (root)")
         r = self._start()
+        # the exit status and the missing registry are the proof (the hook sends the enrolment's own output to
+        # /dev/null, so no traceback could show here — impl round 1, opus)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertNotIn("Traceback", r.stdout + r.stderr)
         self.assertFalse((self.lane / "task-registry").exists())
 
 
