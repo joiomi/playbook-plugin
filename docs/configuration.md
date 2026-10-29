@@ -125,43 +125,6 @@ Each entry becomes a `## <title>` section with a single `- [ ] <text>` gate, app
 
 Rules, all loud: the key is **opt-in** (absent means task generation is byte-identical to before — `init` seeds none); title and text are collapsed to a single line so a config value can never mint a phantom section or gate; an entry that is malformed, or whose title collides with a section the task already has, is skipped with a printed warning — never silently written, never silently dropped. Like `merge_verify`, this is project policy: commit the file so every clone generates the same tasks.
 
-## `.agent/config.json` — `fingerprint_exclude` (project policy)
-
-Panels stamp the tree-state fingerprint they reviewed; close compares it and
-records `FRESH`/`STALE` in the receipt, and — **when policy requires a panel
-for that close** (`panel_required_for`) — a close held to the high-consequence
-bar (**assertive, irreversible, or an unset/`unclassified` `## Risk`**) resting
-on a stale panel BLOCKS (see below). An unset risk is held to the
-strictest listed class (task 294), so under the seeded default
-`panel_required_for: ["assertive","irreversible"]` that covers assertive,
-irreversible and `unclassified`. The fingerprint already ignores `.agent/`
-— workflow bookkeeping is not code. If your project has **owner-declared
-bookkeeping outside `.agent/`** that standing gates write after the last panel
-(the canonical case: a `journal/` directory), declare it:
-
-```json
-{
-  "fingerprint_exclude": ["journal/"]
-}
-```
-
-Entries are git pathspec strings, appended to the exclusion set for both the
-panel stamp and the close comparison. The list itself is hashed into the
-fingerprint (task 051): changing it after a panel reads STALE, and the close
-then fails closed on the changed exclude set — a fresh panel is required — so an
-exclude cannot be added post-panel to hide a path that was clean at the panel. Malformed entries are skipped with a
-printed warning, never silently. Exclude only true bookkeeping: anything
-excluded here can change after a panel without anyone being told, so a path
-that can carry claims or code does NOT belong in this list — and since task
-060 that is enforced for code: if an exclude covers a **source** path (anything
-behavioral by file class that is not bookkeeping-shaped `.md`/`.rst`/`.log`,
-e.g. a `.py`, a script, a `.json`, `.txt` or lock file, an extension-less file — in the
-outer tree or in any `code_roots` root), a high-consequence close blocks with
-`EXCLUDE-COVERS-CODE` naming the paths, the panel stamp warns and records no
-descriptor, and tail certification refuses. `journal/*.md` stays fine; a
-`journal/helper.py` does not. Commit the file —
-stamp and close must agree across clones.
-
 ## `.agent/config.json` — `code_roots` (project policy)
 
 The tree-state fingerprint is computed from the OUTER git repository. Some
@@ -189,12 +152,10 @@ working diff (including untracked-file content; since task 314 these git reads g
 through a copy of the index with the assume-unchanged and skip-worktree bits cleared
 — skip-worktree too, except on a file a sparse checkout leaves out (in cone mode,
 one the cone does not hold; in the deprecated non-cone mode, any absent one) — so a
-change (or a deletion) under either bit is seen, as are the dirty map tail
-certification is built from and the post-panel tree) — the same material the outer
+change (or a deletion) under either bit is seen, as is the panel's snapshot) — the same material the outer
 tree already hashes — plus, since task 060, the root's **resolved identity**
 (its real path relative to the project), so repointing a symlinked root at a
-different checkout with the same `HEAD` also moves the fingerprint and is
-refused by tail certification. A code-only edit inside a listed root moves the
+different checkout with the same `HEAD` also moves the fingerprint. A code-only edit inside a listed root moves the
 fingerprint, so the freshness gate sees it.
 
 Rules, all loud: the key is **opt-in** — with `code_roots` absent (or `[]`) the
@@ -210,14 +171,9 @@ path that does not exist yet, or a repo git cannot read contributes a stable
 the fingerprint. Commit the file — the panel stamp and the close comparison must
 agree across clones.
 
-The same exclusion set applies inside every nested root as in the outer tree:
-`.agent/` is always excluded (workflow bookkeeping is not code), and any
-[`fingerprint_exclude`](#agentconfigjson--fingerprint_exclude-project-policy)
-pathspecs you declare are honored in each nested root too. So a
-`fingerprint_exclude: ["journal/"]` blinds a `journal/` directory inside a
-`code_roots` repo as well as in the outer one — deliberate (the exclusion is a
-project-wide bookkeeping declaration), but worth knowing before you exclude a
-path that also exists under a nested root.
+The same exclusion applies inside every nested root as in the outer tree: `.agent/` only (workflow bookkeeping is
+not code). Task 343 removed the owner's `fingerprint_exclude` list: a file your tests or standing gates write into the
+tree belongs in `.gitignore`, which every fingerprint already leaves out.
 
 ## `.agent/config.json` — `audit` (pre-panel sweeps)
 
@@ -386,171 +342,77 @@ used to count.
 Setting `## Risk` to one word clears it. `## Risk Routing` in the light template
 is a gate checklist, not the classification field, and does not trigger this.
 
-### The freshness gate (`--stale-panel-ok`)
+### The freshness gate (FRESH / STALE)
 
-The gate fires only when policy requires a panel for the close
-(`panel_required_for`). When that holds and the close is held to the
-high-consequence bar — `## Risk` is `assertive` or `irreversible`, **or it is
-left unset/`unclassified`** (held to that same bar everywhere else) — and the
-newest impl round's stamp no longer matches the tree, `tasks work done` blocks:
-the panel's verdict predates the code being closed — a claim (assertive), an
-unrecoverable act (irreversible), or work whose risk was never classified,
-signed off by a panel that predates the code, is a decision about code that was
-never reviewed. (Blocking only assertive/irreversible would make blanking
-`## Risk` strictly more lenient on freshness than honest classification.) Since task
-294 an unset risk requires a panel whenever `panel_required_for` lists any class
-(the strictest listed class's bar), so under the seeded default its freshness
-block engages as an assertive task's does. Two exits, both on the record —
+The gate fires only when policy requires a panel for the close (`panel_required_for`). The close asks one question
+(task 343, PLAN-PLAYBOOK-2.md 4.1 a): does judge.md's newest impl round still describe the code being closed?
 
-- re-run `tasks panel-review <N> --mode impl` (fresh evidence), or
-- `tasks work done --stale-panel-ok --reason "..."` — closes, and the reason
-  lands in the receipt's freshness clause (`STALE, accepted: "..."`).
+- **FRESH** — the round's `**Tree-state:**` stamp equals the tree's fingerprint now, or only the task's own records were
+  committed since (below), and the round's tamper guard was not degraded.
+- **STALE** — otherwise, with its cause in words: the code (a doc, a test or the mind map too) changed since the round;
+  the round has no tree stamp; git cannot fingerprint the tree now (a corrupt index, a missing `HEAD`, an
+  unresolvable toplevel, a failed `status`/`diff` — never read as FRESH); or the round's tamper guard was degraded
+  (it could not verify that no judge wrote the tree).
 
-`--stale-panel-ok` suppresses only this gate; verify failures, gate bounces,
-and the panel-evidence requirement are untouched. `--force --reason` remains the
-blunt whole-policy hatch. A `reversible` risk always stays advisory (console
-note + receipt clause, no block), as does any close for which policy does not
-require a panel.
+An unstamped round in a project that is not a git repository could never have been stamped: the close says "not
+judged" and is not held. A stamped round whose repository git no longer finds reads STALE.
 
-Two more blocks share this gate since task 060, both on a high-consequence
-close that policy holds to a panel: **UNREADABLE** — the stamped round's tree
-cannot be fingerprinted at close — git could not produce the material (a corrupt
-index, a missing `HEAD`, an unresolvable toplevel, a failed `status`/`diff`), so
-freshness cannot be judged and the close blocks naming git rather than reading
-a broken tree as FRESH; and **NO-STAMP** — the panel round
-carries no fingerprint stamp although the project is a git repo (a non-git
-project keeps the advisory record). The same manual exits apply.
+When the close is held to the high-consequence bar — `## Risk` is `assertive` or `irreversible`, **or it is left
+unset/`unclassified`** (held to that same bar everywhere else; blocking only the two would make blanking `## Risk`
+more lenient than classifying it) — and judge.md's newest round is an impl PASS that would carry it, a STALE round
+blocks `tasks work done`, which names the cause and the ways out:
 
-**What the stamp means** (task 085). The panel fingerprints the tree *before*
-it spawns the judges, and stamps that value. If the tree moves while the judges
-run (you commit or edit during the review), the round keeps the pre-review
-stamp, prints a warning, records `**Tree moved during review:** yes` and carries
-no tail-certification descriptor — so the close reads STALE instead of
-certifying code no judge was shown. The round's `**Commit:**` is read at the
-same moment. Since task 231 a review whose judges read a fixed copy of the tree
-(docs/architecture.md) stamps the copy's sealed fingerprint and records the
-snapshot taken before the spawn: the live tree may change while the judges run —
-what changed is simply after the panel, and the close reads it as STALE — and
-"moved" means the copy itself changed. If git cannot fingerprint the tree before the review, the round
-carries no stamp (`**Tree-state unavailable:**`) and a high-consequence close
-reads NO-STAMP; it never falls back to the post-review tree.
+- another impl round: `tasks panel-review <N> --mode impl` — or, once the round cap below is reached, a round with
+  the owner's word (`--owner-ok --reason "…"`);
+- `tasks work done --force --reason "…"` — the blunt whole-policy override, its reason in the receipt.
 
-**Committing the task's own record does not stale the panel** (task 085). The
-fingerprint already ignores `.agent/`, but a commit moves the outer `HEAD`,
-which the fingerprint does include — so committing the task record after its
-panel used to read STALE with nothing to review. The close now accepts that
-case as FRESH, and the receipt says `records-only delta`, when all of these
-hold: every path the commits touch is a task record (`.agent[/<lane>]/tasks/`,
-session pointers, the journal, the chat log — NOT `.agent/config.json` or
-`models.json`), the round's descriptor matches its stamp, the exclude set is unchanged,
-`git diff <panel commit> HEAD` outside the excluded paths is empty, and the
-fingerprint recomputed with `HEAD` set back to the panel's commit equals the
-stamp (so the working tree and every `code_roots` repo are exactly what the
-panel saw). Any other difference, or any git error, is still STALE. Only the
-outer `HEAD` gets this treatment; a commit inside a `code_roots` repo still
-reads STALE.
+A `reversible` risk stays advisory (a console note and the receipt clause), as does any close for which policy does
+not require a panel. The receipt of every close with an impl round says FRESH or STALE and the cause. The gate's risk
+is the stricter of `## Risk` and the risk recorded with the task's impl panels (their reservations in
+`post-panel-reviews.jsonl`): lowering `## Risk` after a panel frees nothing, and a run ledger that exists and cannot
+be read, or has a corrupt line, makes that recorded risk unknown — the close then takes `unclassified`.
 
-The stamp compares a tree-state fingerprint of the **outer** git repository. If
-your project keeps code in a gitignored **nested checkout** (this workspace's
-`playbook-plugin/`), a code-only edit there is invisible to the outer fingerprint
-and would read silently FRESH — declare those repos in
-[`code_roots`](#agentconfigjson--code_roots-project-policy) so the freshness gate
-sees them.
+Nothing reviews after the round on the close's behalf: the post-panel judge as close evidence, tail certification,
+`--stale-panel-ok`, `stale_panel_requires_post_d6` and `guard_paths` went with task 343. So write the docs and the
+mind map before the round — the templates put `## Pre-review` before the review section — and treat a change after
+it as what it is: another round, or the owner's override. `tasks work done` refuses an option it does not read.
 
-#### Tail certification (a docs/test tail need not re-run the whole panel)
+**What the stamp means** (task 085). The panel fingerprints the tree *before* it spawns the judges, and stamps that
+value. If the tree moves while the judges run (you commit or edit during the review), the round keeps the pre-review
+stamp, prints a warning and records `**Tree moved during review:** yes` — so the close reads STALE instead of trusting
+code no judge was shown. The round's `**Commit:**` is read at the same moment. Since task 231 a review whose judges
+read a fixed copy of the tree (docs/architecture.md) stamps the copy's sealed fingerprint and records the snapshot
+taken before the spawn: the live tree may change while the judges run — what changed is simply after the panel, and
+the close reads it as STALE — and "moved" means the copy itself changed. If git cannot fingerprint the tree before the
+review, the round carries no stamp (`**Tree-state unavailable:**`) and a high-consequence close reads it STALE; it
+never falls back to the post-review tree.
 
-The late rounds of a long assertive task are usually docs/comment/test-only —
-and re-running a full multi-model panel for each such tail burns vendor quota,
-so those closes used to be waved through with `--stale-panel-ok` on every round.
-Tail certification (owner decision A, 2026-08-27) replaces that rubber stamp
-with a real, cheap check. When the panel is STALE and would block, `tasks work
-done` computes the exact delta since the panel's tree state (F0), across the
-outer tree and every `code_roots` scope. If **every** changed path is in a
-**non-behavioral file class** — `*.md` under `docs/` or named
-`README*`/`CHANGELOG*`/`MIND_MAP*`, `*.json` under `docs/` (the guarantee
-ledger), any `*.md` at the project root (`CLAUDE.md`, `PLAN.md`, …; owner
-decision H2, 2026-09-25, widening H's root `CLAUDE.md` — the outer project
-root only: a nested `code_roots` checkout's own root `*.md`, and any `*.md`
-below the root, keep the rules before it), anything under `tests/`, and task records
-under `.agent/` (a `.py` under a `tests/` segment counts, by decision A — the
-test tree is non-behavioral; production source never does) — the **default
-single judge** re-reviews just that delta against the panel's verdict and
-returns a structured verdict token carrying a per-invocation id, read from the
-final line only (so reviewed content cannot forge it). A PASS satisfies freshness
-and the close is recorded as `STALE, but TAIL-CERTIFIED`.
+**Committing the task's own record does not stale the panel** (task 085). The fingerprint already ignores `.agent/`,
+but a commit moves the outer `HEAD`, which the fingerprint does include — so committing the task record after its
+panel used to read STALE with nothing to review. The close accepts that case as FRESH, and the receipt says "only the
+task's own records changed since the round", when all of these hold: every path the commits touch is a task record
+(`.agent[/<lane>]/tasks/`, session pointers, the journal, the chat log — NOT `.agent/config.json` or `models.json`),
+the round's snapshot matches its stamp, `git diff <panel commit> HEAD` outside `.agent` is empty, and the fingerprint
+recomputed with `HEAD` set back to the panel's commit equals the stamp (so the working tree and every `code_roots`
+repo are exactly what the panel saw). Any other difference — the mind map and every other doc included — or any git
+error, is still STALE. Only the outer `HEAD` gets this treatment; a commit inside a `code_roots` repo still reads STALE.
 
-The safety property is that **any behavioral (code) delta still forces a fresh
-full panel** — a single changed line in a `.py` (even a comment), a `config.json`
-edit, a `.md` below the root that is neither under `docs/` nor a recognized doc
-name, or a rename that moves
-code into `docs/` (both endpoints are classified, so the deleted source is seen).
-The mechanism fails closed on every ambiguity: a missing/mismatched panel
-descriptor, a `code_roots` or `fingerprint_exclude` set that changed since the
-panel, a git error, a stale tree with no attributable delta, a non-PASS verdict,
-or a tree/scope that mutates during the judge call (re-validated by a compare-
-and-swap). Tail certification narrows an assertive freshness check from a
-multi-model quorum panel to a **single** judge for the docs/test tail — an
-owner-accepted tradeoff (decision A); a very large docs/ledger tail that would
-exceed the judge's transport limit falls back to a full panel. `--stale-panel-ok
---reason` and `--force --reason` remain the manual exits; tail certification is
-the automatic one for the docs/test tail.
+The stamp compares a tree-state fingerprint of the **outer** git repository. If your project keeps code in a
+gitignored **nested checkout** (this workspace's `playbook-plugin/`), a code-only edit there is invisible to the outer
+fingerprint and would read silently FRESH — declare those repos in
+[`code_roots`](#agentconfigjson--code_roots-project-policy) so the freshness gate sees them.
 
-### Binding a stale close to a post-D6 PASS (`stale_panel_requires_post_d6`)
+A submodule (gitlink) move is listed whatever a local `diff.ignoreSubmodules` or `.gitmodules` `ignore=` says
+(`--ignore-submodules=none`), by the freshness fingerprint and the records-only check alike (task 202).
 
-Off unless set. `.agent/config.json` `"stale_panel_requires_post_d6": "<YYYY-MM-DD>"` turns on a stricter
-exit from the freshness gate, for an `assertive`, `irreversible` or unclassified task whose impl panel was
-reserved on or after that date (local time): `--stale-panel-ok` and `--force` no longer override the gate on a
-reason alone — a stale panel, a degraded tamper guard, an exclude that hides code, a missing or unreadable stamp.
-Removing the key later does not free a task whose panel ran under it. (Since task 209 the same binding applies in
-every project wherever [the review stop rule](#the-review-stop-rule-review_rounds-guard_paths) needs the post-panel
-judge, and a plain-STALE close it sends to no judge after the last round is not bound by it.) The close goes through only when
+### The review round cap (`review_rounds`)
 
-- the newest post-D6 single-judge run (`tasks impl-review <N>` after the newest impl panel) is finished and a **PASS** that
-  recorded the tree it reviewed, under the same `.agent/config.json`, and since then only `.agent/` records
-  and `MIND_MAP*.md` changed — a test, a doc or a root `*.md` after it goes through tail certification (a plain
-  `tasks work done`, which then certifies the delta since the tree that PASS reviewed), code through another
-  `impl-review`; or
-- `tasks work done --owner-ok --reason "…"` is given — the owner's decision, written to the receipt and to the
-  enforcement journal (an agent can type it: it is an accountability marker, not an authentication).
-
-A task whose impl panel predates the date keeps the old rule; the date in force is the earlier of the config's
-and the one recorded with the panel, so moving or removing it later changes nothing for that task. With the rule
-on, a carrying panel that no reservation dates (a deleted run ledger) refuses. A value that is not a date refuses
-every stale close until it is fixed. The binding is checked again inside the lock the close commits under. Post-D6 runs made before 1.5.47 recorded no tree and cannot bind a close. Tail
-certification saves its judge's output as `tail-cert.log` in the task directory; when no judge could be started
-(the default judge's adapter cannot be built, or its program is not installed) the file holds the reason under a first line that says `NO JUDGE
-RAN`, and no spend record is written (task 178). When it does not certify, the
-close says why. Two refusals come before any certification: a code path in the delta, and a panel snapshot that
-can no longer be compared — since 1.6.2 (task 202) reported as "tail certification unavailable — <its cause> — fresh
-panel required": the snapshot or the round's stamp missing or not matching, a scope moved, without a commit or a
-dirty-file list, the scope set or the exclude set changed (both named), an owner exclude over source code, which git
-call failed, code that passed through an owner exclude, or — for a stale tree where no file differs from the reviewed
-one — whether HEAD moved and which files that move changed (from a post-D6 PASS's tree that is still the same, the
-bound close `--stale-panel-ok` is named). The re-check after a judge's PASS names which of its conditions discarded it.
-The certifying judge's diff is asked for without colour, a textconv driver or a user's prefixes, and sits between
-two lines that carry the run's nonce, which no content can forge. A scope's commit in the snapshot must be a full
-object id before git reads it: a value that is a git option (`--output=…` made git write a file and lose sight
-of the commits it should have listed, in 1.6.1 too) is refused — the snapshot itself is the agent's record and
-is not authenticated. A submodule move is listed whatever a local `diff.ignoreSubmodules` or a `.gitmodules`
-`ignore=` says (`--ignore-submodules=none`), by tail certification, the freshness fingerprint, the records-only
-exemption and the post-D6 delta alike (1.6.1 hid it: tail certification certified over it, the fingerprint
-read FRESH, and a bump committed with a task record read as records-only). For a documentation-only delta the close says which of
-three things happened: no judge ran — the delta could not be put before one (its size against the 98,304-byte
-payload one judge can be sent, or the file that could not be read), the tamper snapshot could not be taken, or
-the judge's adapter could not be resolved or built, or its program is not installed; the judge returned FAIL; or there is no usable verdict, with
-the reason (the call to the judge timed out or failed — the close shows what came back and does not guess
-whether a judge process ran — its answer has no verdict line, or it was discarded because the tree changed
-while it ran). Each needs a fresh panel.
-
-### The review stop rule (`review_rounds`, `guard_paths`)
-
-The owner's rule D6 (2026-09-25) and his ruling of 2026-10-13 18:37, made the plugin's default by his answers of
-2026-10-15 (task 209, PHASE-B.md item 1). On in every project; the two keys only change it:
+The owner's rule D6 (2026-09-25), made the plugin's default by his answers of 2026-10-15 (task 209, PHASE-B.md item 1).
+On in every project; the key only changes it:
 
 ```json
 {
-  "review_rounds": {"reversible": 1, "assertive": 2, "irreversible": 2},
-  "guard_paths": ["hooks/", "scripts/*-hook", "src/auth/"]
+  "review_rounds": {"reversible": 1, "assertive": 2, "irreversible": 2}
 }
 ```
 
@@ -559,52 +421,17 @@ The owner's rule D6 (2026-09-25) and his ruling of 2026-10-13 18:37, made the pl
   below-quorum round and a plan round are not rounds) and refuses one past the cap of the task's risk — exit 2,
   before any judge is called or anything is written. The defaults are D6's; an unset or unknown risk takes the
   larger of the assertive and irreversible caps. Where the cap is 2 or more, one round more is allowed when the
-  cap's last round counted a Critical — a `**Critical**` finding a judge wrote that is not tagged `[SETTLED]` (a
-  `[PRE-EXISTING]` one counts: a panel has no delta); a cap of 1 has no extension (the owner's words). Past that only `--owner-ok --reason "…"`, recorded in the panel's reservation.
-  `review_rounds` sets a cap per risk (a positive integer; anything else keeps the default, with a warning). Plan
-  panels are not capped.
-- **After a panel, the judge only where it matters.** A close of a task whose newest impl round that met its
-  quorum (in `judge.md` or `judge-archive.md`) is followed by a change (a STALE tree — whatever plan or below-quorum round was written on top since)
-  needs the post-panel single judge's PASS on the current tree (`tasks impl-review <N>`, then `tasks work done
-  --stale-panel-ok --reason "…"`) or `--owner-ok --reason "…"` when a changed file — code, test, doc or record — is
-  under `guard_paths`, on a task of any risk; when the task is irreversible or unclassified and its code changed, in
-  every project (`panel_required_for` plays no part: the owner's "fără nicio configurare"); or when the change cannot
-  be listed and the answer depends on it — so also, in a git repository, when the freshness verdict is not a plain
-  STALE (a degraded tamper guard, an exclude over code, a missing or unreadable stamp: no delta is trusted), and
-  when the reviewed round itself is unstamped whatever the freshness gate says. That holds before the last round
-  too and binds `--force` as well — the binding of the section above, whatever its date says. When the reviewed
-  round is not judge.md's newest impl round (a below-quorum round sits on it, or it was moved to the archive), no
-  post-panel run can be bound to it: every stale close of the task is refused until an impl panel that meets its
-  quorum, or the owner. A run ledger that cannot be read, or has corrupt lines, makes the judge required. A docs or tests tail is still tried by tail certification first (a plain `tasks work done`) — except a
-  change the rule sends to the post-panel judge, which tail certification does not take until a post-D6 PASS is the
-  base, nor ever a file under `guard_paths`; after a bound PASS a guarded `MIND_MAP*.md` is no free drift either.
-- **Otherwise** — on a plain STALE whose delta could be listed — after the last round the cap allows,
-  `--stale-panel-ok --reason "…"` closes — even where
-  `stale_panel_requires_post_d6` is set — and the receipt and the enforcement journal name what no judge read:
-  `stop rule (D6): 2 of 2 impl rounds used (assertive); no judge read after the last panel (N file(s)): …`. Before
-  the last round the project's own rule stands (the opt-in binding, else a reason). A reversible task's close names
-  them too. A post-panel run still holds such a close when the ledger is corrupt, the newest run has not finished,
-  or the newest run COUNTED a Critical (grave, by the owner's definition; a FAIL with only Important findings does
-  not). A refused close says which exit the rule leaves.
-- `guard_paths` — the project's code that guards: patterns matched against the changed paths as the close names
-  them (project-relative; a `code_roots` scope's start with its name). A pattern matches the path itself, anything
-  below it, or as an `fnmatch` glob (`*` crosses `/`); both sides are normalised (`./`, `//`, a leading or trailing
-  `/`), and a pattern that names nothing in the project is warned about at the close. Absent or empty: nothing is
-  listed, and after a panel only an irreversible or unclassified task's code gets the judge. A value that is not a
-  list of non-empty strings is read as every path.
-- What each impl panel ran under — the risk, the caps, the guard list — is recorded with its reservation; the close
-  takes the stricter risk of them all and today's, the larger cap and every guard list, so lowering `## Risk`, a cap or the list after
-  the panel frees nothing. The decision is made again at the commit, inside the task lock: a change of the judge
-  requirement or of the cap state refuses the close, and under `--force` (which skips the tree check) so does a
-  tree that moved — even after a FRESH panel — or a different list of changed files; a post-D6 run that counted a
-  Critical meanwhile refuses it too.
-- The post-panel judge runs at most twice after a panel; a third run needs `tasks impl-review <N> --owner-ok
-  --reason "…"` (until task 209 a Critical in run 2 opened run 3 by itself).
-- Judges have a third severity: at most three `**Minor**` findings below the counted ones, never counted and
-  stopping nothing; the `CAP:` line counts the Critical and Important ones only.
+  cap's last round counted a Critical — a `**Critical**` finding a judge wrote that is not tagged `[SETTLED]`; a cap
+  of 1 has no extension (the owner's words). Past that only `--owner-ok --reason "…"`, recorded in the panel's
+  reservation. `review_rounds` sets a cap per risk (a positive integer; anything else keeps the default, with a
+  warning). Plan panels are not capped.
+- What each impl panel ran under — the risk and the caps — is recorded with its reservation; the close takes the
+  stricter risk of them all and today's, so lowering `## Risk` after the panel frees nothing.
+- Judges have a third severity: at most three `**Minor**` findings below the counted ones, never counted and stopping
+  nothing; the `CAP:` line counts the Critical and Important ones only.
 - Limits: the CLI sees a Critical a judge wrote, not one the agent accepted (D6's word); `--owner-ok` is a marker an
   agent can type, not an authentication; a task with no impl panel is out of the rule's reach (nothing to be stale
-  against); the guard list is the project's to keep right.
+  against).
 
 ### The verify-contract guard (a change to `verify` is made visible)
 

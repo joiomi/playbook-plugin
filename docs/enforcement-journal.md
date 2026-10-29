@@ -68,11 +68,10 @@ folder as `path`);
 ## Family 2 — review spend (`hook` = `review`, `decision` = `record`)
 
 Emitted for **every judge invocation** — by the review runner (`tasks/review.py`)
-for each panel seat, the single judge and the tail-cert judge, and by `tasks intent`
+for each panel seat and the single judge, and by `tasks intent`
 (`tasks/intent.py`) for each blind extraction (task 120) — via
-`pb_journal.append_review`, on its completion or timeout. A tail-certification judge
-that could not be started — its adapter could not be built, or its program is not
-installed, so nothing was launched — is no invocation and leaves no record (task 178). The one exception is a
+`pb_journal.append_review`, on its completion or timeout. A judge that could not be started is no invocation and
+leaves no record (task 178; task 343 removed the tail-certification judge it was written for). The one exception is a
 **tamper hard-stop**: if the working tree changed while the judges ran (a judge or
 any other writer — the guard cannot tell which), the review emits its tamper banner and stops, recording **no** spend — the journal write
 must never precede that banner (a hostile-tree hang inside it could suppress the
@@ -82,7 +81,7 @@ Additional fields:
 
 | key           | type          | meaning                                                            |
 |---------------|---------------|--------------------------------------------------------------------|
-| `kind`        | string        | `panel` \| `single` \| `tail-cert` \| `intent` (one per `tasks intent` extraction; `round` 0; left out of `tasks dashboard`'s per-seat stats and drift advice, which measure reviews) |
+| `kind`        | string        | `panel` \| `single` \| `intent` (one per `tasks intent` extraction; `tail-cert` until task 343; `round` 0; left out of `tasks dashboard`'s per-seat stats and drift advice, which measure reviews) |
 | `seat`        | string        | the judge spec as `model:effort` (e.g. `claude:opus:high`, `codex:gpt-5.6-terra:medium`; an agy id carries its effort: `agy:gemini-3.8-flash-high`) |
 | `task`        | string        | task number (`"042"`) or `"-"` for a taskless / `--prompt` review  |
 | `round`       | int           | review iteration (see the round note below); `0` = unknown         |
@@ -134,7 +133,7 @@ the failure matches one; otherwise `exit N: <first line of the failure output>`,
 the output's first line (a spawn error such as `(error: claude CLI not found)`).
 For an `exit N`, the first line of the stderr tail wins over the stdout tail (a
 progress line is not the reason); a timeout without a limit keeps the judge's
-own text (`(error: tail-cert judge timed out)`).
+own text (`(error: … timed out)`).
 It comes from a CLI's stderr, so it is sanitized: control characters are dropped,
 `"` becomes `'` and `\` becomes `/`, and token-shaped runs (an `sk-`/`xai-`/`ghp_`
 style key, or a 32+ run of letters and digits with no `_` or `/` — hex or
@@ -175,7 +174,7 @@ count is `unknown`, never clamped into a number.
 The **claude** judge asks for `claude -p --output-format json` since task 232 (PHASE-B
 item 6; until then it ran in plain text and all its seats were `unknown` — 747 of 747
 records in this workspace). The judge call alone asks for it, on the panel seat and on
-the single-judge path (tail certification and the post-panel judge included); a
+the single-judge path; a
 subagent's call stays plain text. claude prints ONE object, `type: result`, at the end:
 the review is `result`; the counts are copied from `modelUsage` when it names exactly one
 model (a budget stop zeroes the top-level `usage` but keeps them there), else from the
@@ -227,8 +226,8 @@ completed message text, not protocol frames.
 `round` counts existing panel rounds + 1, summed across BOTH `judge.md` and its
 overflow sibling `judge-archive.md` (judge.md retains only the newest 5 rounds
 and archives the rest, so counting judge.md alone would cap the round at 6). For
-a **panel** it is the iteration this panel becomes; for **single** and
-**tail-cert** it is an approximate spend-correlation hint (those do not add a
+a **panel** it is the iteration this panel becomes; for **single** it is an approximate spend-correlation hint (it does
+not add a
 `judge.md` round), not an exact iteration index. `0` means it could not be
 determined.
 
@@ -307,7 +306,7 @@ the journal (32 MiB at most) did not reach (since task 257 the live file stays n
 every position newer than the horizon into the next one — [Rotation](#rotation--archives-carried-positions-the-lock-task-257)). A broken assistant line and an entry with no `message.id` count as
 `unreadable`, never as a call (one unreadable per call, however many entries carry it). `ino` is text (an inode number can pass the integer cap). The task is read inside the lock; a session the hook cannot resolve records nothing (its span stays for a reader that knows the session). A seed is not written while its file's last newline cannot be read (task 265: it fell at the size, inside a half-written line); the next read seeds. A file's first read that finds no call writes one zero-call record — a read position, so later scans find it. A close or `tasks work` that cannot take the lock writes an `unknown` marker for the task it leaves and says so: never a silent gap. The session's end records too (task 246: `session-end-hook` runs the recorder before it can remove the session dir, so a turn interrupted with no Stop — Esc, or a session ended mid-turn — is still read; a busy lock there leaves an `unknown` marker when something is unread — at every end reason, a `/clear` included, since the SessionStart that follows points the session at the new transcript and no later reader names the old one; with the lock free there, what is still unread after the read — a half-written last line that may be a call, a call the host finished after the read let the lock go, a span the journal refused, an end that cannot be read, a subagent file that appeared after the read (task 268; marked once it holds a line, even its opening prompt alone — a marker there says unread, not that a call was lost) — gets the same marker, decided against where that read left each file (task 265: not against the journal's newest `to`, which a span with no call does not move — a normal end with a prompt or an `/exit` entry after the last call is no gap; a transcript resumed and ended again with the same half-written tail gets one more marker each time, as at a busy lock); a transcript replaced in place (another inode or first 4 KiB), or whose last complete line ends elsewhere than its newest record's `to`, counts as unread, by the recorder's own identity check and restart rule (tasks 247, 252: the recorder stops at the last newline); a half-written last line counts as unread unless it names a user entry at its top level (before its `"message":` key — a tool call's input can hold the same type, a top-level value can read "message") — it may be a call the host is still writing, or was killed writing, which no reader will count (task 252); a file with no record whose only line is such a user entry does not; the marker errs toward `unknown`, never toward a hidden gap: it is decided without the lock, so a holder recording the same span at that moment both counts and marks it; a journal scan that did not reach a transcript's record counts it as unread — and the hook's journal line says what it recorded, or that the journal refused a span). Still not counted (bounds): a brand-new file in a journal past the scan bound gets a seed; a recorder that its 3 s limit kills after taking the lock leaves only the hook's journal line; a `claude` started from another session's shell is counted under the outer session's task (as at Stop); a transcript resumed later (`claude --resume`) after a busy-lock end is read on from its last record, so that end's `unknown` marker overstates the loss (task 247). The host gives SessionEnd hooks the largest timeout they declare (5 s here; 1.5 s only when none declares one — measured in Claude Code's own code, task 246). No conversation text is written: only the model's name. Bounds: a span after the
 close's own read (the rest of that turn) is not the closure's; a transcript never read again (a crash with no
-SessionEnd, never continued) keeps its unread tail; a judge's, tail-cert's or the monitor's session records nothing, and nor does a fresh multi-user clone (per-user lanes, no `.agent/current_user`: the lane is unresolvable, so nothing is written at the root — task 256; since task 263 the recorder refuses such a root lane itself, whoever calls it)
+SessionEnd, never continued) keeps its unread tail; a judge's or the monitor's session records nothing, and nor does a fresh multi-user clone (per-user lanes, no `.agent/current_user`: the lane is unresolvable, so nothing is written at the root — task 256; since task 263 the recorder refuses such a root lane itself, whoever calls it)
 (task 232 counts the judges' usage). A real record — task 244's timing run, on a copy of a 22 MB transcript tail:
 
 ```json
@@ -533,8 +532,8 @@ fixed). The reader reads a closed file, not its `.gz`, when both exist, and a re
 closed file or the new one. That work runs before the duration is taken, so a run that rotated says so in its `ms`.
 
 **Not recorded:** a hook the host kills at its time limit (it runs no exit trap); the monitor's own session
-(`PLAYBOOK_ROLE=monitor`: its hooks exit before anything); a review's session (`PLAYBOOK_SESSION_ID` `judge` or
-`tail-cert`: no writer writes a line — a review must not write the project); a nested run (`PLAYBOOK_HOOK_NESTED=1`:
+(`PLAYBOOK_ROLE=monitor`: its hooks exit before anything); a review's session (`PLAYBOOK_SESSION_ID`
+`judge`: no writer writes a line — a review must not write the project); a nested run (`PLAYBOOK_HOOK_NESTED=1`:
 codex's Stop runs the stop hook as a subprocess, and codex-stop's own line says the run); a hook that finds no
 playbook project. **Bounds:** codex runs `command_guard.py` directly, so its duration starts when python has started
 and loaded the guard; every other hook's duration starts at its first line — bash's own start and a
@@ -574,9 +573,9 @@ journal's lines (60,000 lines in about half a second, measured).
 | `seats` | per judge seat: runs, ok, failed, seconds — summed over that seat's runs, not wall time — tokens in / out / cache_read / cache_write from the runs whose usage is known, how many were unknown, the runs by kind |
 | `agent` | the main agent's tokens (task 244), from this task's `agent-usage` records between its first `work` and its `done`: per model (a subagent's as `<model> (subagent)`) calls, in, out, cache_read, cache_write, thinking (a part of out), unreadable; `unknown` spans not counted, `dropped` exact duplicates of a span already counted (overlapping spans count: another file read in a file's place); null when the closure has no record (no recorder ran) — a closure written before task 244 has no such key |
 | `verify` | the recorded verify runs (the close's, `tasks verify`): runs, ran, reused, failed, seconds |
-| `rounds` | panels (mode, outcome, critical, important, owner_ok — the run ledger's), post-panel runs (verdict, critical, important, owner_ok), single-judge calls and tail certifications counted one per review record (a single-judge record within 120 s of a post-panel row is that run), the runs the ledger marks failed |
+| `rounds` | panels (mode, outcome, critical, important, owner_ok — the run ledger's), single-judge calls counted one per review record, the runs the ledger marks failed (task 343: the post-panel runs and the tail certifications went) |
 | `owner` | his prompts — the closure's first one too, logged before the `work` record that opens the window: the prompt that opened the turn in which the task was activated (a prompt that switches tasks counts for both) — the background notifications, his options dialogs answered and cancelled, their questions and answers (counted from the DIALOG entries, matched by their `<!-- dialog:<id> -->` marker), the time he took to answer, the entries' ids |
-| `close` | `freshness` (FRESH / STALE / TAIL-CERTIFIED / NO-STAMP / UNREADABLE / …, read at its fixed place in the writer's text, so a reason that names a verdict is not that verdict), `accepted_reason`, `forced_reason`, `owner_ok`, `bound` (a post-panel PASS the close was bound to), `stop_rule`, `post_panel` (runs, last verdict, every owner-ok), the commands' pass / fail counts, `risk` — read whole from the receipt: the panel line split only where the writer puts a field (`; owner-ok: "`, `; bound to post-D6 PASS `, `; stop rule (D6): `), the receipt found outside closed fences (an unclosed fence above does not hide it); the task's `hook=close` records fill only a gap (their text is cut at 200 bytes) |
+| `close` | `freshness` (FRESH / STALE / NOT-JUDGED — task 343's verdicts —, read at its fixed place in the writer's text, so a cause or a reason that names a verdict is not that verdict), `forced_reason`, the commands' pass / fail counts, `risk` — read whole from the receipt, found outside closed fences (an unclosed fence above does not hide it) |
 | `late_records` | the task's review / verify records written after the close's `done` and before the next `work` (`tasks numbers` recounts them after the last `done`) |
 
 Example — the live check of task 235 (a scratch session: prompts, a Read, an options dialog answered after 8 s, a failed
@@ -655,8 +654,6 @@ it equals the session's span (a test holds this over 400 built timelines).
   closure (the newest receipt), and its own is not written.
 - The review rounds (`rounds`) are bounded by time: the run ledger holds only `ts`, so two lives in one second share
   their rounds.
-- A reason that itself holds one of the receipt's separators (`; owner-ok: "`, `; bound to post-D6 PASS `,
-  `; stop rule (D6): `) is split there.
 - The prompt that switches from one task to another counts in both tasks' `owner`, so a sum of prompts over tasks
   counts each switch twice; the entries' `ids` tell them apart.
 - A task closed before this existed has no `numbers.json`; `tasks numbers` composes what the records hold.

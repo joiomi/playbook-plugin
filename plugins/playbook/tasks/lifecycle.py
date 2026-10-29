@@ -993,8 +993,8 @@ def cmd_work(cmd_args):
                           file=sys.stderr, flush=True)
                 if verify_failed and not force:
                     # Task 073 (C13): a failed verify blocks the close regardless,
-                    # so say so NOW — before the freshness gate could spend a paid
-                    # tail-certification judge on a close that cannot succeed.
+                    # so say so NOW — before the freshness gate's verdict is read for a
+                    # close that cannot succeed.
                     print(f"\nBlocked: cannot close task {prev_task} — declared verification "
                           "failed — fix it, or override with --force --reason.",
                           file=sys.stderr, flush=True)
@@ -1161,9 +1161,6 @@ def cmd_work(cmd_args):
                 # escape that exists for an actively-edited repo could not get
                 # through it (impl panel r3, opus F1). The forced close's reason is
                 # already recorded in the receipt.
-                # Task 149 (impl panel r1, codex ×2): a close bound to a post-D6 PASS
-                # is re-checked at the commit — --force included, and the config
-                # too, which the fingerprint cannot see.
                 if _now_fp and not force:
                     _commit_fp = tree_state_fingerprint(project_path)
                     # An UNREADABLE fingerprint at the commit must block too (058

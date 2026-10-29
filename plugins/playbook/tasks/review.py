@@ -514,7 +514,7 @@ def _live_review_line(why: str) -> None:
     print(f"  Judges read the LIVE tree — {why}. Write nothing in the project until this review ends.", flush=True)
 
 
-def _open_review_view(project_path, task_file, *, run_id: str, task_num: str = "", expected=None):
+def _open_review_view(project_path, task_file, *, run_id: str, task_num: str = ""):
     """Task 231 (PHASE-B item 7; the owner 2026-10-17: "Copie pe aceeași cale (Recomandat)"): decide FIRST whether
     the judges can read a fixed copy of the tree, and if so make and seal it (`tasks/review_view.py`). Returns
     `(view, fingerprint, snapshot, cfg)`; `view` is None when no copy is possible — then the reason is printed and
@@ -524,9 +524,8 @@ def _open_review_view(project_path, task_file, *, run_id: str, task_num: str = "
     reads the live tree and says why, before any ready line (task 231's impl round 2) — `review_view.py`'s docstring
     says the same.
 
-    `expected`: None for a panel and a whole-task single judge — the stamp and the snapshot are taken here from the
-    live tree and the copy must equal the snapshot's base trees; for the post-panel judge, a callable returning
-    `(fingerprint, trees, heads, snapshot)` — its delta's `cur` trees (plan panel P3)."""
+    The stamp and the snapshot are taken here from the live tree, and the copy must equal the snapshot's base trees
+    (task 343: the post-panel judge's own trees went with it)."""
     from tasks import review_view as _rv
     from tasks.core import build_panel_snapshot, load_config, tree_state_fingerprint
     cfg = load_config(Path(project_path))
@@ -539,32 +538,26 @@ def _open_review_view(project_path, task_file, *, run_id: str, task_num: str = "
     # (below, impl round 2) — no ready line has been printed either way, so the agent is still waiting.
     last = None
     for _attempt in range(_rv.COPY_ATTEMPTS):
-        exclude = None
         fp, at_copy = "", False
         try:
-            if expected is not None:
-                got = expected()
-                fp, trees, heads, snap = got[:4]
-                exclude = got[4] if len(got) > 4 else None
-            else:
-                fp = tree_state_fingerprint(project_path)
-                snap = build_panel_snapshot(project_path, fp) if fp else None
-                scopes = (snap or {}).get("scopes") or {}
-                trees = {k: (v or {}).get("base") for k, v in scopes.items()}
-                heads = {k: (v or {}).get("commit") for k, v in scopes.items()}
+            fp = tree_state_fingerprint(project_path)
+            snap = build_panel_snapshot(project_path, fp) if fp else None
+            scopes = (snap or {}).get("scopes") or {}
+            trees = {k: (v or {}).get("base") for k, v in scopes.items()}
+            heads = {k: (v or {}).get("commit") for k, v in scopes.items()}
             if not fp or snap is None or not trees or not all(trees.values()):
                 raise _rv.Moved("the tree could not be fingerprinted and snapshotted")
             at_copy = True
             view = _rv.make(project_path, cfg, run_id=f"{run_id}-a{_attempt}", fingerprint=fp, trees=trees,
                             heads=heads, task_file=task_file,
-                            exclude=exclude if exclude is not None else snap.get("exclude"), attempts=1, snapshot=snap)
+                            exclude=snap.get("exclude"), attempts=1, snapshot=snap)
         except (_rv.Moved, _rv.Unavailable) as e:
             last = e
             # impl round 2 (opus): a seal that fails while the live tree did NOT move is structural (line endings a
             # copy reads differently, an unreadable file) — refusing would refuse every review for good. No ready
             # line has been printed, so the agent is still waiting: read the live tree, saying why.
             if not at_copy:
-                continue        # the stamp, the snapshot or the post-panel delta's checks: the tree moved
+                continue        # the stamp or the snapshot: the tree moved
             try:
                 still = bool(fp) and tree_state_fingerprint(project_path) == fp
             except Exception:   # noqa: BLE001
@@ -1306,7 +1299,7 @@ def _scope_changes(before: dict, after: dict, *, label: str = "",
     # `degraded` marks the GUARD as having been unable to run — the state the
     # round header records and the close gate keys on. A concurrent commit is a
     # caution but NOT a degraded guard (059 impl-panel r2, opus F2: marking it
-    # degraded made tail certification unreachable after any background commit).
+    # degraded would read every round STALE after any background commit).
     degraded = False
     committed_paths = committed_paths or set()
     b_porc, a_porc = before.get("porcelain"), after.get("porcelain")
@@ -2562,8 +2555,8 @@ def _cmd_panel_review(cmd_args):
     # for THIS round, on one line the close-gate reader can key on.
     # `degraded` marks the GUARD, not merely "something was noticed": a
     # concurrent commit is a caution but leaves the guard fully working, and
-    # marking such a round degraded made tail certification unreachable after
-    # any background commit (059 impl-panel r2, opus F2).
+    # marking such a round degraded would read it STALE after any background
+    # commit (059 impl-panel r2, opus F2).
     lines.append("**Tamper guard:** " + _tamper_mark_text(_tamper_full) + "\n")
     # Task 085 R2: stamp the tree as it was when the judges were SPAWNED. A
     # concurrent commit during the review (a caution on a contained host) used to

@@ -14,7 +14,7 @@ covered ignored files and does not now. Their mountpoints are made in the copy.
 
 The seal, by content: the copy is kept only when its fingerprint (`core.tree_state_fingerprint` with the LIVE config)
 equals the stamp the review took from the live tree, each scope's working-tree object (`worktree_tree`) equals
-the tree the review recorded (a panel's snapshot `base`, the post-panel judge's delta `cur`), and each scope's HEAD is
+the tree the review recorded (its snapshot's `base`), and each scope's HEAD is
 the recorded commit. A tree that moved while the copy was made is tried again, `COPY_ATTEMPTS` times, then refused
 (`Moved`) — the caller spends nothing and does not fall back to the live tree for a tree that moved (plan panel P8). A
 copy that cannot be made or sealed while the live tree did NOT move (line endings a copy reads differently, an

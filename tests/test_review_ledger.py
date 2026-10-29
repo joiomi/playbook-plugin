@@ -487,7 +487,7 @@ class EndToEnd(unittest.TestCase):
         self.assertIn("HEAD-CLAMPED", self.single_calls[-1])
 
     def test_the_settled_block_comes_first_in_both_contexts(self):
-        # PB-POST-D6-PROTOCOL says both builders deliver the SETTLED block FIRST; the tests
+        # PB-SETTLED-BLOCK says both builders deliver the SETTLED block FIRST; the tests
         # asserted that it is there, not where (task 170's binding audit; task 172). What
         # it must precede: the mind map and the task record (task 343: no delta).
         def first_of(context, *marks):

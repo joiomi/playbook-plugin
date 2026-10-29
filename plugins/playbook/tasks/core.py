@@ -2119,52 +2119,6 @@ def _safe_hash_regular(path: "Path", cap: int) -> "tuple[str, object, int]":
         os.close(fd)
 
 
-def _safe_read_regular(path: "Path", cap: int) -> "bytes | None":
-    """Read up to `cap` bytes of a path AS A REGULAR FILE, or None if it is not a
-    plain regular file now (symlink/FIFO/device/dir/deleted), is larger than the
-    cap, or errors — the same O_NONBLOCK|O_NOFOLLOW + fstat-regular primitive as
-    `_safe_hash_regular`, but returning the bytes. Used to materialize a
-    certifiable doc's CONTENT for the tail-cert judge WITHOUT following a symlink
-    (an untracked `docs/leak.md → /tmp/secret` must never be read — impl-panel r2
-    codex:sol#1) or blocking on a FIFO (r2 grok#1). None → the caller fails
-    closed."""
-    import stat as _stat
-    # An explicit lstat/is_symlink refusal BEFORE os.open (impl-panel r7 grok#2):
-    # O_NOFOLLOW may be absent (getattr → 0), and the fstat-regular check below is
-    # not enough alone to stop following a symlink into an external secret.
-    try:
-        if _stat.S_ISLNK(os.lstat(path).st_mode):
-            return None
-    except OSError:
-        return None
-    flags = (os.O_RDONLY | getattr(os, "O_NONBLOCK", 0)
-             | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
-    try:
-        fd = os.open(path, flags)
-    except OSError:
-        return None
-    try:
-        st = os.fstat(fd)
-        if not _stat.S_ISREG(st.st_mode) or st.st_size > cap:
-            return None
-        buf = bytearray()
-        remaining = cap + 1
-        while remaining > 0:
-            try:
-                chunk = os.read(fd, min(65536, remaining))
-            except (BlockingIOError, OSError):
-                return None
-            if not chunk:
-                break
-            buf += chunk
-            remaining -= len(chunk)
-        if len(buf) > cap:
-            return None                 # grew past the cap mid-read
-        return bytes(buf)
-    finally:
-        os.close(fd)
-
-
 def in_git_repo(path: Path) -> bool:
     """Is `path` inside a git repository? — the ONE probe (task 059, impl-panel
     r2 sonnet #2: the close carried a naive duplicate that ignored ceilings, the
@@ -2224,7 +2178,7 @@ def _git_toplevel(repo_path: Path) -> "Path | None":
     exactly one trailing `\n` then one `\r` (a CR-terminated line), never `.strip()`
     (a space-suffixed path). Shared by `_repo_fingerprint_material` and
     `_dirty_path_content_map` (impl-panel r1 opus: the dirty-map had the same
-    bug, so a subdir project's tail-cert delta under-enumerated)."""
+    bug, so a subdir project's delta under-enumerated)."""
     try:
         r = subprocess.run(["git", "rev-parse", "--show-toplevel"],
                            cwd=repo_path, capture_output=True, timeout=60)
@@ -2243,7 +2197,7 @@ def _git_toplevel(repo_path: Path) -> "Path | None":
 def _toplevel_prefix(repo_path: Path, toplevel: Path) -> "str | None":
     """`repo_path` relative to the repo toplevel as a posix string (`.` when the
     project IS the toplevel). Task 060 (impl-panel r2 codex-high #1): git names
-    paths toplevel-relative, but the tail-cert file-class table must see
+    paths toplevel-relative, but the file-class table must see
     PROJECT-relative paths — a project rooted at `<repo>/tests/product` saw
     `tests/product/app.py`, whose `tests/` segment classified production code as
     non-behavioral."""
@@ -2263,13 +2217,6 @@ def _project_relative(rel: str, prefix: str) -> str:
     if rel.startswith(prefix + "/"):
         return rel[len(prefix) + 1:]
     return rel
-
-
-def _printable_path(rel: str) -> str:
-    """A path for console/receipt text: surrogate-escaped raw bytes from a
-    non-UTF-8 filename become backslash-u escapes (`\\udcXX`) instead of crashing the strict
-    UTF-8 receipt write (impl-panel r2 codex-high #4)."""
-    return rel.encode("utf-8", "backslashreplace").decode("utf-8")
 
 
 def _index_bits_cleared(repo_path: Path, env: dict) -> bool:
@@ -2707,14 +2654,10 @@ def tree_state_fingerprint(project_path: Path, *, outer_head_override: "str | No
     return hashlib.sha256(_blob).hexdigest()[:12]
 
 
-# ── Tail certification (task 036, owner decision A ratified 2026-08-27) ───────
-# After a quorum-PASS impl panel at tree F0, a close whose ONLY post-panel delta
-# is in non-behavioral file-classes may satisfy panel freshness via a single-judge
-# tail certification instead of blocking / burning a fresh full panel. Any
-# code-path delta (file-class, incl. a code comment) still needs a fresh panel.
-# The whole mechanism FAILS CLOSED: anything unknown/ambiguous/erroring requires
-# the full panel. `classify_delta_paths` is the file-class table — the FIRST line
-# of that safety property: a source file must never be mistaken for a doc.
+# ── The file-class table (task 036; tail certification, its first user, went with task 343) ──────────────────────
+# `classify_delta_paths` tells code from docs, tests and records — today for `tasks red`'s "no behavior changes" check
+# (red._code_changed). It FAILS CLOSED: anything unknown or ambiguous is code, so a source file is never mistaken for
+# a doc.
 
 _DOC_BASENAME_PREFIXES = ("README", "CHANGELOG", "MIND_MAP")
 
@@ -2971,14 +2914,13 @@ def build_panel_snapshot(project_path: Path, tree_fp: str, *, cfg: "dict | None"
         dm = _dirty_path_content_map(repo, exclude)
         if not commit or dm is None:
             return None                      # fail closed: no trustworthy F0 state
-        # Task 060: the scope's resolved identity rides in the descriptor so a
-        # repoint between F0 and the close is refused by tail_cert_delta.
+        # Task 060: the scope's resolved identity rides in the descriptor (tail certification refused a repoint
+        # between F0 and the close; task 343 removed it — kept, the snapshot's shape is the same in every round).
         scopes_out[name] = {"commit": commit, "dirty": dm,
                             "identity": _scope_identity(Path(project_path), repo)}
-        # Task 108 (post-D6 protocol, part b): a reconstructible tree of this
-        # scope's WORKING state, built in a temporary index — the post-D6 single
-        # judge reviews base → current working tree. Best-effort: None when it
-        # cannot be built; the descriptor itself (tail-cert's F0) is unaffected.
+        # Task 108: a reconstructible tree of this scope's WORKING state, built in a temporary index — the tree a
+        # review's fixed copy must equal (review_view.make). Best-effort: None when it cannot be built (the review
+        # then reads the live tree, said); the rest of the descriptor is unaffected.
         try:
             from tasks.review_view import worktree_tree_why as _wt
             _b, _why = _wt(repo, exclude)
@@ -3003,36 +2945,6 @@ def format_panel_snapshot_line(snapshot: dict) -> str:
             + json.dumps(snapshot, separators=(",", ":"), sort_keys=True))
 
 
-def _parse_name_status_z(raw: bytes) -> "set[str]":
-    """Parse `git diff --name-status -z -M` output into the set of ALL paths
-    touched — BOTH endpoints of a rename/copy (plan-panel finding A: `--name-only`
-    collapses a rename to its destination, so a `git mv src.py docs/x.md` would
-    hide the production-code deletion and certify as docs-only). With `-z` each
-    record is `STATUS\\0PATH\\0`, and a rename/copy is `R<score>\\0OLD\\0NEW\\0`."""
-    toks = raw.split(b"\0")
-    out: "set[str]" = set()
-    i, n = 0, len(toks)
-    while i < n:
-        status = toks[i]
-        if not status:
-            i += 1
-            continue
-        i += 1
-        take = 2 if status[:1] in (b"R", b"C") else 1
-        for _ in range(take):
-            if i < n:
-                if toks[i]:
-                    out.add(os.fsdecode(toks[i]))
-                i += 1
-    return out
-
-
-def _is_object_id(value) -> bool:
-    """A full git object id (40 hex, or 64 under sha256) — what a snapshot's `commit` must be before git reads it:
-    a judge.md the agent can edit could hold `--output=<path>`, an option (task 202, impl round 1, R1-1)."""
-    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", value) is not None
-
-
 # Paths a records-only commit may touch (task 085 round 3, U4): a task's own
 # record directory, the session pointers, the enforcement journal, the chat log —
 # and the project's owner rulings list (task 227, plan panel P8: a ruling commit
@@ -3052,8 +2964,7 @@ def records_only_delta(project_path: Path, snapshot: "dict | None",
     empty; and the fingerprint recomputed with the outer HEAD set back to F0 must
     EQUAL the round's stamp — so the working tree, the untracked content and every
     `code_roots` scope are byte-for-byte what the panel reviewed. Any doubt, git
-    error or missing piece → False (the close falls through to the unchanged
-    STALE / tail-cert path, whose finding A still fails closed)."""
+    error or missing piece → False (the close reads the round STALE)."""
     try:
         if not isinstance(snapshot, dict) or not round_tree_fp:
             return False
@@ -3133,7 +3044,7 @@ _ROUND_TREE_RE = re.compile(r"^\*\*Tree-state:\*\* ([0-9a-f]{6,64})", re.MULTILI
 # output block can neither forge nor clear it.
 _ROUND_TAMPER_RE = re.compile(r"^\*\*Tamper guard:\*\* (clean|degraded)(?:\s*[—-]+\s*(.*))?$",
                               re.MULTILINE)
-# The tail-cert F0 descriptor rides on one line inside the round (finding F).
+# The panel's F0 descriptor (its snapshot) rides on one line inside the round (finding F).
 _ROUND_SNAPSHOT_RE = re.compile(r"^\*\*Panel-snapshot:\*\* (\{.*\})[ \t]*$",   # at a line start (task 200)
                                 re.MULTILINE)
 JUDGE_MD_MAX_ROUNDS = 5
@@ -3191,7 +3102,7 @@ def parse_judge_rounds(text: str) -> "list[dict]":
                 snapshot = None
         gm = _ROUND_TAMPER_RE.search(_head)
         # Task 108: a unique id per panel round (header-only, like the snapshot),
-        # so two panels on the SAME tree are two keys for the post-D6 run cap.
+        # so two panels on the SAME tree are two keys (stop_rule counts rounds by it).
         rim = re.search(r"^\*\*Round-id:\*\* ([0-9a-f]{8,32})[ \t]*$", _head, re.MULTILINE)
         rounds.append({
             "round_id": rim.group(1) if rim else "",

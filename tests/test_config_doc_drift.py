@@ -43,7 +43,6 @@ HONORED_KEYS = frozenset({
     "code_roots",                 # core.py  _code_roots (nested-repo fingerprint)
     "command_guard",              # command_guard.py:248
     "dangerous_commands",         # command_guard.py:253
-    "fingerprint_exclude",        # core.py (merge fingerprint)
     "judge_budget_usd",           # core.py:520
     "judge_verify",               # review.py:825
     "merge_verify",               # core.py / merge-verify.py
