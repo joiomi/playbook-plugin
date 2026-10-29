@@ -63,6 +63,24 @@ class VerifyEnvScrub(unittest.TestCase):
                 f"scripts/verify env() leaked {k} into the child suite env — "
                 "a dogfooding host's value would distort the reading")
 
+    def test_verify_env_drops_git_repository_variables(self):
+        """Task 336 (grave C): started from a git hook or `git rebase -x`, verify inherits git's repository
+        variables; a child test that makes a temporary repository would then commit into the real one."""
+        names = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR",
+                 "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE")     # the ceiling is set on purpose (task 143)
+        saved = {k: os.environ.get(k) for k in names}
+        try:
+            for k in names:
+                os.environ[k] = "/somewhere/" + k.lower()
+            env = _load_verify().env()
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.assertEqual([k for k in names if k in env], [])
+
     def test_verify_env_turns_off_git_background_maintenance(self):
         """Task 143 (retro 134 (c)): a test repo's auto-maintenance can still be writing
         while TemporaryDirectory removes it (the py3.12 CI flake of the 1.5.46 release).

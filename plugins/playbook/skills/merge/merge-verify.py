@@ -60,6 +60,21 @@ GREEN, FAILED, BLOCKED, SKIPPED = 0, 1, 2, 3
 _BASH_RESOLVER = None
 
 
+# Git's repository variables (task 336, grave C): a `tasks verify` or a close started from a git hook (`pre-commit`) or
+# `git rebase -x` inherits them, and a suite that makes temporary repositories then commits into the real one (audit 5:
+# 6,225 processes, the machine out of memory). The verify command runs without the seven that name WHERE a repository
+# is; every other variable passes, `GIT_CEILING_DIRECTORIES` included — it only stops git from climbing up, so a
+# caller's ceiling keeps a suite's temporary repositories from finding an outer one. `tasks/verify_memory._GIT_ENV_DROP`
+# is this list plus the ceiling, which it drops so its own reads find the project (tests/test_verify_git_env.py).
+GIT_REPOSITORY_VARIABLES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR",
+                            "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE")
+
+
+def _child_env():
+    """The verify command's environment: the caller's, without git's repository variables."""
+    return {k: v for k, v in os.environ.items() if k not in GIT_REPOSITORY_VARIABLES}
+
+
 def _bash_resolver():
     """The one bash resolver, path-loaded so this skill stays standalone.
 
@@ -205,7 +220,7 @@ def run_command_capture(command, project_root=".", timeout_secs=None):
     script = _write_script(command)
     try:
         proc = subprocess.run(
-            [bash, script], cwd=project_root or ".",
+            [bash, script], cwd=project_root or ".", env=_child_env(),
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
             text=True, errors="replace", timeout=timeout_secs,
         )
@@ -270,7 +285,7 @@ def main(argv=None):
     script = _write_script(command)
     try:
         print(f"merge-verify: running — {command}", flush=True)
-        rc = subprocess.call([bash, script], cwd=root or ".")
+        rc = subprocess.call([bash, script], cwd=root or ".", env=_child_env())
     finally:
         try:
             os.unlink(script)

@@ -114,6 +114,12 @@ def env() -> dict:
     for k in ("BASH_ENV", "PLAYBOOK_SESSION_ID", "PLAYBOOK_ROLE",
               "PLAYBOOK_EVAL_CONFIG", "PLAYBOOK_SANDBOXED"):
         e.pop(k, None)
+    # Task 336 (grave C): git's repository variables, which a git hook or `git rebase -x` exports — a child test that
+    # makes a temporary repository would commit into this one (audit 5: 6,225 processes). The seven that name where a
+    # repository is (merge-verify.py's GIT_REPOSITORY_VARIABLES); the ceiling below is set on purpose.
+    for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY", "GIT_COMMON_DIR",
+              "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_NAMESPACE"):
+        e.pop(k, None)
     # Task 143 (retro 134): no git background maintenance in a test repo — it could
     # still be writing while TemporaryDirectory removed the repo (the py3.12 CI flake
     # of the 1.5.46 release). Appended to whatever GIT_CONFIG_* entries are set.
