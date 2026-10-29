@@ -2410,7 +2410,7 @@ def cmd_blocked(cmd_args):
         print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     print(f"Task {active} marked BLOCKED — {' '.join(reason.split())}")
-    print("You can end your turn; the Stop hook won't block a blocked task. "
+    print("You can end your turn; the Stop hook leaves no memento for a blocked task. "
           f"Resume with: tasks work {active}")
 
 

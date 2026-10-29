@@ -1555,9 +1555,9 @@ _shell_log_spool() {
 #
 # A hook's first line is `_PB_HJ_T0=$EPOCHREALTIME`; once the lib is sourced it calls `pb_hook_begin <name>`, and its
 # own exit actions go through `pb_on_exit` (a second `trap … EXIT` would replace the runner). The runner keeps the hook's
-# exit status exactly: it turns `set +e`, every step is `|| true`, each action sees the hook's status as `$?` (the stop
-# hook writes its turn-end mark only after an allowed stop — plan panel 2026-10-16, all five judges) and it ends with
-# `exit` of that status. A journal failure never changes a decision. A hook killed by the host writes nothing.
+# exit status exactly: it turns `set +e`, every step is `|| true`, each action sees the hook's status as `$?` (plan
+# panel 2026-10-16, all five judges: the stop hook's turn-end mark read it, until task 340 removed the mark) and it
+# ends with `exit` of that status. A journal failure never changes a decision. A hook killed by the host writes nothing.
 _PB_HJ_LIMIT=20971520           # past 20 MB the file is closed: renamed, compressed, kept (the owner, 2026-10-16 18:04)
 _PB_HJ_LINE_MAX=2048            # one append of at most this many bytes, the newline included (PIPE_BUF is 4096; a
                                 # line with every field at its cap measured 1,122 bytes with task 234's five keys)

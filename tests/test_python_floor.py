@@ -281,7 +281,7 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
             self.assertIn(FLOOR_MSG, err, f"the stop hook was silent about the floor: {err!r}")
             self.assertTrue(held(r), f"an open gate was let through below the floor: {err!r}")
             r = self._hook_old_python("stop-hook", b'{"hook_event_name":"Stop","stop_hook_active":true}')
-            self.assertEqual(r.returncode, 0, "the one-shot valve did not end the re-issued stop below the floor")
+            self.assertEqual(r.returncode, 0, "a re-issued stop below the floor did not end (the stop never blocks)")
         finally:
             self.oldpath = saved
         calls = log.read_text(encoding="utf-8").splitlines()

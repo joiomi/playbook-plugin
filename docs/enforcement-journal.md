@@ -461,7 +461,7 @@ difference of one second either way is rounding, not sleep; across a different `
 starts from zero).
 
 **How it is written.** The bash hooks set `_PB_HJ_T0=$EPOCHREALTIME` on their first line and call `pb_hook_begin`
-once the library is sourced; their own exit actions (the shell log's line, the stop hook's turn-end mark) go through
+once the library is sourced; their own exit actions (the shell log's line; the stop hook's turn-end mark until task 340) go through
 `pb_on_exit`. One EXIT trap runs those actions, each seeing the hook's own exit status as `$?`, then writes the line,
 and ends with that same status: a journal failure never changes a decision. The python hooks use
 `pb_journal.HookRun`/`run_hook`; `command-guard-hook` hands its start time to `command_guard.py` before its `exec`, and

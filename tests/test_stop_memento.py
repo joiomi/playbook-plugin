@@ -117,6 +117,18 @@ class TheMemento(_Project):
         self.write_task("## Work Plan\n- [ ] ăîșț — non-ASCII\n")
         self.assertIn("ăîșț", self.memento(self.stop()))
 
+    def test_the_cut_never_splits_an_escape_or_a_letter(self):
+        """Impl round 1 (all five judges): the text was cut AFTER escaping, so a cut between the two characters of
+        `\\"` left a lone backslash that swallowed the closing quote. A long run of each character that needs escaping
+        or is several bytes, at both parities of the cut, must still give one valid JSON object."""
+        for unit in ('"', "\\", "\t", "ă", "—"):
+            for lead in ("", "x"):
+                with self.subTest(unit=unit, lead=lead):
+                    self.write_task(f"## Work Plan\n- [ ] {lead}{unit * 1000}\n")
+                    msg = self.memento(self.stop())
+                    self.assertIn("task 001", msg)
+                    self.assertLess(len(msg), 1000)
+
     def test_a_reissued_stop_is_no_different(self):
         msg = self.memento(self.stop(active=True))
         self.assertIn("2 open gate", msg)

@@ -35,15 +35,14 @@ source "$HOOK_DIR/gate-echo-lib.sh"
 pb_hook_begin stop           # one line per run in journal/hooks.jsonl (task 222)
 
 # pb_memento TEXT DETAIL — the stop's answer when work is left (task 340): one JSON object on stdout, Claude Code's
-# `systemMessage`, shown to the person; the stop ends (exit 0). `_json_str` escapes it, the control bytes left are
-# dropped and the text is cut at 400 characters (counted in a UTF-8 locale where there is one), so the object stays
-# one valid line whatever a gate's title holds.
+# `systemMessage`, shown to the person; the stop ends (exit 0). The text goes through the hook journal's own cutter
+# (`_pb_hj_text`, in bytes): control characters become spaces, it is JSON-escaped, and it is cut at 600 bytes on a
+# whole UTF-8 character and a whole escape — so the object stays one valid line whatever a gate's title holds (impl
+# round 1, all five judges: a cut made after the escape, by characters, could split `\"` and leave a lone backslash).
 pb_memento() {
-    local s
-    s=$(_json_str "$1")
-    s="${s//[[:cntrl:]]/}"
-    s=$(LC_ALL=C.UTF-8; printf '%s' "${s:0:400}")
-    printf '{"systemMessage":"%s"}\n' "$s"
+    local LC_ALL=C v
+    _pb_hj_text "$1" 600
+    printf '{"systemMessage":"%s"}\n' "$v"
     PB_HJ_DECISION=allow; PB_HJ_DETAIL="memento: $2"
     exit 0
 }
