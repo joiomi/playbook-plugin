@@ -316,6 +316,7 @@ class AlwaysFull(_Project):
             out = self.echo(payload=read, env=env)
             self.assertIn("# Working on task [001]", out)
             self.assertNotIn("💭", out)        # task 341: no nudge, in eval mode either (its `nudges` flag is gone)
+            self.assertNotIn("nudges=", out)   # nor the flag in the eval marker (impl round 1, opus)
 
     def test_a_subagent_call_prints_in_full_and_leaves_the_main_memory(self):
         self.work()
