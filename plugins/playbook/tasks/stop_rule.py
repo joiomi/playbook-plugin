@@ -13,7 +13,7 @@ The owner's rule D6 (2026-09-25) and his ruling of 2026-10-13 18:37, made the pl
 
 A round is an impl panel round that met its quorum (`PANEL VERDICT: PASS` in its header) in judge.md or
 judge-archive.md; a below-quorum round and a plan round are not rounds. A Critical is a `**Critical**` finding
-marker (`post_d6._FINDING_RE`, matched after one leading `> ` is stripped) in a judge's text — after the round's
+marker (`_FINDING_RE`, matched after one leading `> ` is stripped) in a judge's text — after the round's
 first `═` bar, and in a round 1.6.2 wrote (format 2) only on a quoted line, the judges' lines being the quoted
 ones — that is not tagged `[SETTLED]`; a `[PRE-EXISTING]` one counts (a panel is given no delta to place it
 outside of, as `parse_verdict` counts it without one).
@@ -24,6 +24,20 @@ import posixpath
 import re
 import sys
 from pathlib import Path
+
+# A finding starts at the line start or right after a sentence end on the same
+# line (grok glues its preamble to the first finding: "…constatările.**Important**").
+_FINDING_RE = re.compile(
+    r"(?:^|(?<=[.!?:)]))[ \t]*(?:[-*+]\s+|\d+[.)]\s+)?\*\*\s*\[?\s*(Critical|Important)\b",
+    re.IGNORECASE)
+
+
+# The tag counts only RIGHT AFTER the severity marker (inside or just after the
+# bold), never a literal "[SETTLED]" later in the finding's prose — a `[file: …]`
+# field may stand between the two (task 201: judges reorder fixed markers).
+_TAG_AFTER_RE = re.compile(
+    r"\]?\s*(?:\*\*)?\s*(?:\[file:[^\]\n]*\]\s*(?:\*\*)?\s*)?"
+    r"\[(SETTLED-CONTRADICTED|SETTLED|PRE-EXISTING)\]", re.IGNORECASE)
 
 ROUNDS_KEY = "review_rounds"
 GUARD_KEY = "guard_paths"
@@ -156,7 +170,6 @@ _QUOTE = re.compile(r"^>[ \t]?")
 def round_findings(rnd: dict) -> "dict[str, int]":
     """The Critical and Important findings the judges of one panel round wrote (not `[SETTLED]`), each judge's line
     counted as written — the stop rule's count (`round_criticals`) and the run ledger's (task 232) from one reading."""
-    from tasks.post_d6 import _FINDING_RE, _TAG_AFTER_RE
     counts = {"critical": 0, "important": 0}
     body = rnd.get("body") or ""
     bar = _BAR.search(body)
@@ -246,8 +259,8 @@ def panel_record(task_dir: Path) -> "dict | None":
     S2: the newest one alone let a below-quorum round, or a second panel after `## Risk` was lowered, replace what
     the reviewed one recorded): the stricter risk of them all, the union of their guard lists, the larger cap per
     risk. None when no reservation recorded any of it (panels from before task 209)."""
-    from tasks import post_d6
-    recs = [r for r in post_d6.read_runs(Path(task_dir))
+    from tasks import review_ledger
+    recs = [r for r in review_ledger.read_runs(Path(task_dir))
             if r.get("kind") == "panel" and r.get("mode") in (None, "impl")
             and any(k in r for k in ("risk", "guard_paths", "rounds_cap"))]
     if not recs:
@@ -285,7 +298,7 @@ def ledger_untrusted(task_dir: Path) -> str:
     """Why the run ledger cannot be trusted as the record of what the panels ran under (impl round 3, T3: a read
     error made `read_runs` return nothing, so the recorded guard list and risk vanished): it exists but cannot be
     read, or has corrupt lines. "" for an absent or clean ledger."""
-    from tasks import post_d6
+    from tasks import review_ledger as post_d6
     p = Path(task_dir) / post_d6.RUNS_NAME
     if not os.path.lexists(p):
         return ""

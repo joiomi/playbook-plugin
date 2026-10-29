@@ -638,7 +638,7 @@ def _guard(cmd: str, cfg: dict) -> "tuple[bool, str]":
 
 @contextlib.contextmanager
 def _no_git_overrides():
-    """The CLI's own git — here and in what it calls (`post_d6.worktree_tree_why`) — in the repository it names,
+    """The CLI's own git — here and in what it calls (`review_view.worktree_tree_why`) — in the repository it names,
     whatever GIT_DIR / GIT_WORK_TREE the caller exported (impl round 2, agy and opus)."""
     saved = {k: os.environ.pop(k) for k in _GIT_OVERRIDES if k in os.environ}
     try:
@@ -656,8 +656,8 @@ def _norm_scope(name: str) -> str:
 
 
 def _scopes(project: Path, cfg: dict) -> "dict[str, Path]":
-    from tasks.core import _tail_cert_scopes
-    return {_norm_scope(n): p for n, p in _tail_cert_scopes(project, cfg).items()}
+    from tasks.core import review_scopes
+    return {_norm_scope(n): p for n, p in review_scopes(project, cfg).items()}
 
 
 # ---------------------------------------------------------------------------- the start (base.json, v2)

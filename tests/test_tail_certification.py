@@ -905,7 +905,7 @@ class ASubmoduleMoveIsNeverHidden(unittest.TestCase):
         from unittest import mock
         from tasks import post_d6
         self._move()
-        with mock.patch.object(core, "_tail_cert_scopes", lambda p, c: {"": self.d}):
+        with mock.patch.object(core, "review_scopes", lambda p, c: {"": self.d}):
             parts, why = post_d6.delta_parts(self.d, self.snap)
         self.assertIsNotNone(parts, why)
         self.assertIn("lib", parts["files"])

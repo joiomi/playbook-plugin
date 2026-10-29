@@ -992,7 +992,7 @@ class ThePatchFileAndTheList(unittest.TestCase):
         base = post_d6.worktree_tree(d, [])
         (d / "a.py").write_text("a = 2\n", encoding="utf-8")
         snap = {"scopes": {"": {"base": base, "identity": core._scope_identity(d, d)}}, "exclude": []}
-        with mock.patch("tasks.core._tail_cert_scopes", lambda p, c: {"": d}), \
+        with mock.patch("tasks.core.review_scopes", lambda p, c: {"": d}), \
                 mock.patch.object(post_d6, "_name_status_entries", lambda *a, **k: None):
             text, note = post_d6.delta_text(d, snap, 100_000)
             self.assertEqual(post_d6.delta_text(d, snap, 100_000, files_out=set())[0], None)
@@ -1013,7 +1013,7 @@ class TheDeltaCarriesNoColour(unittest.TestCase):
         base = post_d6.worktree_tree(d, [])
         (d / "a.py").write_text("x = 2\n" * 400, encoding="utf-8")
         snap = {"scopes": {"": {"base": base, "identity": core._scope_identity(d, d)}}, "exclude": []}
-        with mock.patch("tasks.core._tail_cert_scopes", lambda p, c: {"": d}):
+        with mock.patch("tasks.core.review_scopes", lambda p, c: {"": d}):
             text, note = post_d6.delta_text(d, snap, 1_500)      # cut: the stat goes out
         self.assertTrue(note, "the delta was not cut, so no stat went out")
         self.assertIn("a.py |", text)                               # the stat line itself
@@ -1037,7 +1037,7 @@ class TheDeltaFilesList(unittest.TestCase):
             (d / f"module_{i:03d}.py").write_text(f"v = {i + 1}\n", encoding="utf-8")
         snap = {"scopes": {"": {"base": base, "identity": core._scope_identity(d, d)}}, "exclude": []}
         files: set = set()
-        with mock.patch("tasks.core._tail_cert_scopes", lambda p, c: {"": d}):
+        with mock.patch("tasks.core.review_scopes", lambda p, c: {"": d}):
             text, note = post_d6.delta_text(d, snap, 20_000, files_out=files)
         self.assertTrue(note, "not cut")
         self.assertLessEqual(len(text), 20_000)
@@ -1058,7 +1058,7 @@ class TheDeltaFilesList(unittest.TestCase):
         _git(d, "mv", "old_name.py", "new_name.py")
         snap = {"scopes": {"": {"base": base, "identity": core._scope_identity(d, d)}}, "exclude": []}
         files: set = set()
-        with mock.patch("tasks.core._tail_cert_scopes", lambda p, c: {"": d}):
+        with mock.patch("tasks.core.review_scopes", lambda p, c: {"": d}):
             text, note = post_d6.delta_text(d, snap, 100_000, files_out=files)
         self.assertEqual(files, {"old_name.py", "new_name.py"})
         self.assertIn("DELTA FILES (2): new_name.py, old_name.py", text)
@@ -1132,7 +1132,7 @@ class NamesThatAreNotText(unittest.TestCase):
             (d / n).write_text("v = 2\n" * 300, encoding="utf-8")
         snap = {"scopes": {"": {"base": base, "identity": core._scope_identity(d, d)}}, "exclude": []}
         files: set = set()
-        with mock.patch("tasks.core._tail_cert_scopes", lambda p, c: {"": d}):
+        with mock.patch("tasks.core.review_scopes", lambda p, c: {"": d}):
             text, note = post_d6.delta_text(d, snap, cap, files_out=files)
         return text, note, files
 

@@ -6,7 +6,7 @@ per project whatever the lane, shared like `.agent/config.json` (plan panel P2) 
 with its number, its date, his exact words and how long it holds (`permanent`, or `until <what ends it>`). Nothing ever
 rewrites an entry: `tasks ruling end <N> "<why>"` appends a closing entry. Every write appends at the end, so the
 committed text is always a byte prefix of the file — `tasks audit` checks that (`rulings-append-only`). Every judge's
-SETTLED block lists the rulings in force (`post_d6.settled_block`); `tasks bootstrap` prints them. A write holds
+SETTLED block lists the rulings in force (`settled_block`, below); `tasks bootstrap` prints them. A write holds
 `<project>/.agent/rulings.lock` (ignored by init). `Words:` is the rest of its line — the CLI adds no quotes and
 strips none but the argument's surrounding whitespace. A list that is a link or not a regular file is never read.
 
@@ -38,7 +38,7 @@ from pathlib import Path
 FILE_NAME = "rulings.md"
 LOCK_NAME = "rulings.lock"
 WORDS_MAX = 1500
-LINE_MAX = 2000         # a whole entry's line in the SETTLED block — always under post_d6.PROJECT_CAP (impl round 1)
+LINE_MAX = 2000         # a whole entry's line in the SETTLED block — always under PROJECT_CAP (impl round 1)
 # every character `str.splitlines` breaks on (U+001C-1E too: a reader's cut must not split the owner's words — round 1)
 _NOT_ONE_LINE = "\n\r\x0b\x0c\x1c\x1d\x1e\x85" + chr(0x2028) + chr(0x2029)
 HEADER = ("# Owner rulings\n"
@@ -321,3 +321,167 @@ def cmd_ruling(cmd_args: "list[str]") -> None:
     except RulingsError as e:
         print(f"Error: {e} — {path_for(project)} unchanged", file=sys.stderr)
         raise SystemExit(1)
+
+
+# ── the SETTLED block (moved from post_d6.py by task 343; PLAN-PLAYBOOK-2.md 4.1 a keeps it) ─────────
+
+SETTLED_CAP = 8000
+
+
+SETTLED_HEADER = (
+    "SETTLED — an owner ruling closes a design choice, never a correctness defect. "
+    "Do not raise a settled item again. Report one only if the code contradicts a "
+    "ruling, or a ruling hides a correctness defect — and then tag that finding "
+    "[SETTLED-CONTRADICTED] (it counts against PASS). A finding that re-raises a "
+    "settled item without that must be tagged [SETTLED]; it does not count against PASS."
+)
+
+
+_OWNER_HEAD_RE = re.compile(r"^## Owner rulings[ \t]*$")
+
+
+_H2_RE = re.compile(r"^#{1,2} ")
+
+
+# REJECT in the triage VERDICT position: a bullet that starts with it, or whose
+# bold title is followed (after punctuation) by it — not a mention in prose.
+_REJECT_LINE_RE = re.compile(
+    r"^\s*[-*+]\s+(?:(?:\*\*.+?\*\*[\s.:;,—–-]*)?REJECT\b"      # after the bullet or the bold title
+    r"|\*\*[^*]*?[—–-]\s*REJECT\b)")                             # at the end INSIDE the bold title
+
+
+def extract_owner_rulings(task_text: str) -> "list[str]":
+    """Lines of the LAST unfenced `## Owner rulings` section, verbatim (right-
+    stripped); the `<!-- pin -->` marker, blank lines and blockquote guidance are
+    dropped. A heading inside a code fence is an example, not a section."""
+    from tasks.core import _iter_fenced_flags, _physical_lines
+    lines = _physical_lines(task_text)       # task 214: a heading inside a line is not the rulings section
+    fenced = _iter_fenced_flags(lines, unclosed_is_live=False)
+    start = None
+    for i, ln in enumerate(lines):
+        if not fenced[i] and _OWNER_HEAD_RE.match(ln.rstrip("\r")):       # a CRLF heading too (task 214, T7)
+            start = i
+    if start is None:
+        return []
+    out: "list[str]" = []
+    for i in range(start + 1, len(lines)):
+        ln = lines[i]
+        if not fenced[i] and _H2_RE.match(ln.rstrip("\r")):
+            break
+        s = ln.rstrip()
+        if not s.strip() or s.strip() == "<!-- pin -->" or s.lstrip().startswith(">"):
+            continue
+        out.append(s)
+    return out
+
+
+def extract_rejected_findings(task_dir: Path) -> "list[str]":
+    """Triage bullets whose VERDICT is `REJECT` (upper case, whole word, right
+    after the bullet or after its bold title — `ACCEPT`, `REJECTED` and a mention
+    in prose do not match) from judge.md and judge-archive.md, file order,
+    de-duplicated. A judge's lines in a round 1.6.2 wrote are quoted (`> `, task 200, #3), so none of them is a
+    bullet at a line start; text 1.6.1 wrote, where a judge's own output is not told apart from agent triage, keeps
+    being read as before (task 186's rule 10) with its bound: SETTLED only lowers the count for a finding the NEXT
+    judge itself tags [SETTLED], and a contradicted ruling still counts (the owner, 2026-09-29, task 108)."""
+    out: "list[str]" = []
+    seen = set()
+    for name in ("judge.md", "judge-archive.md"):
+        p = Path(task_dir) / name
+        try:
+            text = p.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for ln in text.splitlines():
+            if _REJECT_LINE_RE.match(ln):
+                s = ln.strip()
+                if s not in seen:
+                    seen.add(s)
+                    out.append(s)
+    return out
+
+
+PROJECT_CAP = 4000      # task 227: the project's rulings take at most this much of the SETTLED block, whole entries
+
+
+def _project_rulings_part(project: "Path | None", cap: int = PROJECT_CAP) -> "list[str]":
+    """The SETTLED lines for the project's owner rulings in force (`.agent/rulings.md`, task 227), or [] when there
+    are none. Whole entries only, in order, within `cap` characters; the rest are named, never cut. A list that cannot
+    be read arrives as its raw text (within `cap`, whole lines) under "cannot be read" — its words still reach the
+    judge (plan panel P9)."""
+    if project is None:
+        return []
+    path = path_for(project)
+    if not path.is_file():
+        return []
+    try:
+        force = in_force(read(project))
+    except RulingsError as e:
+        try:
+            # never a link's target (impl round 1: it would reach every judge); LF lines only
+            raw = [] if path.is_symlink() else path.read_text(encoding="utf-8", errors="replace").split("\n")
+        except OSError:
+            raw = []
+        out = [f"Project rulings (`.agent/rulings.md`) — the list cannot be read ({e}); its text, unparsed:"]
+        used = len(out[0]) + 1
+        for i, ln in enumerate(raw):
+            if used + len(ln) + 1 > cap:
+                out.append(f"[... {len(raw) - i} more line(s) of the list — read `.agent/rulings.md` ...]")
+                break
+            out.append(ln)
+            used += len(ln) + 1
+        return out
+    if not force:
+        return []
+    out = ["Project rulings in force (`.agent/rulings.md`):"]
+    used = len(out[0]) + 1
+    for i, r in enumerate(force):
+        ln = "- " + r.line()
+        if used + len(ln) + 1 > cap:
+            out.append(f"[... {len(force) - i} more in force — read `.agent/rulings.md` ...]")
+            break
+        out.append(ln)
+        used += len(ln) + 1
+    return out
+
+
+def settled_block(task_file: "Path | None", cap: int = SETTLED_CAP, *, project_path: "Path | None" = None) -> str:
+    """The `=== SETTLED ===` context part, or "" when nothing is settled: the project's owner rulings in force first
+    (task 227 — read from `project_path`, or from the project a task.md sits in; a taskless review gets them too), then
+    the task's own `## Owner rulings`, then the REJECT lines of its triage. Past `cap` the block is cut on a line
+    boundary and says how many lines it left out."""
+    text = ""
+    if task_file is not None:
+        try:
+            from tasks.core import read_task_text
+            text = read_task_text(Path(task_file))       # task 214 (U5): a lone CR stays inside its line
+        except OSError:
+            text = ""
+    if project_path is None and task_file is not None:
+        project_path = project_of_task(task_file)
+    project = _project_rulings_part(project_path)
+    rulings = extract_owner_rulings(text)
+    rejects = extract_rejected_findings(Path(task_file).parent) if task_file is not None else []
+    if not project and not rulings and not rejects:
+        return ""
+    parts = ["=== SETTLED (owner rulings + findings already rejected in triage) ===",
+             SETTLED_HEADER, ""]
+    if project:
+        parts += [*project, ""]
+    if rulings:
+        parts += ["Owner rulings (task.md `## Owner rulings`):", *rulings, ""]
+    if rejects:
+        parts += ["Findings already REJECTED in earlier triage (judge.md / judge-archive.md):",
+                  *rejects, ""]
+    block = "\n".join(parts).rstrip() + "\n"
+    if len(block) > cap:
+        lines = block.split("\n")                     # LF only: a U+001C inside a ruling is no line end (round 1)
+        kept, used = [], 0
+        room = cap - 80                                   # the notice's own line
+        for ln in lines:
+            if used + len(ln) + 1 > room:
+                break
+            kept.append(ln)
+            used += len(ln) + 1
+        block = ("\n".join(kept).rstrip() + f"\n[... {len(lines) - len(kept)} more line(s) left out at the "
+                 f"{cap:,}-character cap ...]\n")
+    return block

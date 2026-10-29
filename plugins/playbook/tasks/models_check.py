@@ -141,7 +141,7 @@ _SEAT_CAP_RE = re.compile(r"^[\s*_`>]*(?:(?:[-*+]|\d+[.)])\s+[\s*_`]*)?CAP:\s*(\
 _SEAT_TRAILER_RE = re.compile(r"\s*(-{3,}|\*{3,}|_{3,}|`{3,}|~{3,})\s*")
 # A finding as the prompt asks for one ("Start every finding with its severity in bold"): at the start of a line,
 # alone or after a list mark — a plan that echoes the severities mid-sentence is no finding (impl round 1) — in the
-# stop rule's forms: any case, a `[` or a `:` (impl round 2, opus; `post_d6._FINDING_RE`) — the bold holding the
+# stop rule's forms: any case, a `[` or a `:` (impl round 2, opus; `stop_rule._FINDING_RE`) — the bold holding the
 # severity alone, so `**Important context**` over a plan is no finding (post-panel run 1, codex).
 _SEAT_FINDING_RE = re.compile(
     r"^\s*(?:[-*+]\s+|\d+[.)]\s+)?\*\*\s*\[?\s*(Critical|Important|Minor)\s*\]?\s*:?\s*\*\*",

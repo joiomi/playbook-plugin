@@ -3,7 +3,7 @@
 The owner, 2026-10-16 09:42 (task 218): "Ține minte ultima verde (Recomandat)" — when exactly the same code already
 passed the project's verify contract through the CLI, the close does not run it again.
 
-The code key, per scope the panel fingerprints (`core._tail_cert_scopes`: the outer tree and each `code_roots` repo):
+The code key, per scope the panel fingerprints (`core.review_scopes`: the outer tree and each `code_roots` repo):
 a code root's HEAD commit (what an outer gitlink points at), and every path `git ls-files --cached --others
 --exclude-standard` lists — tracked or not, for a tracked one its index mode and blob (a staged change counts: `git diff
 --check` reads the index), its mode, the sha256 of its RAW working bytes (a link: its target and the mode and bytes of the
@@ -173,13 +173,13 @@ def _scope_digest(repo: Path, inner: "set[str]", own_repo: bool) -> "str | None"
 def code_key(project: "Path | str") -> "str | None":
     """The key of the code as it stands now, or None when it cannot be trusted. Never raises."""
     try:
-        from tasks.core import _tail_cert_scopes, load_config
+        from tasks.core import review_scopes, load_config
         project = Path(project)
         try:
             cfg = load_config(project)
         except Exception:                                         # noqa: BLE001
             cfg = {}
-        scopes = _tail_cert_scopes(project, cfg)
+        scopes = review_scopes(project, cfg)
         h = hashlib.sha256(f"v{VERSION}\n".encode("utf-8"))
         for name, repo in sorted(scopes.items()):
             base = Path(repo).resolve()

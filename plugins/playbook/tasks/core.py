@@ -2394,7 +2394,7 @@ class _SeeingIndexBits:
         self.tmpd = tempfile.mkdtemp(prefix="pb-index-")
         try:
             idx = Path(self.tmpd) / "index"
-            # copy2: the stat cache and the index's own mtime kept (git's racy-clean rule, post_d6.worktree_tree)
+            # copy2: the stat cache and the index's own mtime kept (git's racy-clean rule, review_view.worktree_tree)
             shutil.copy2(real, idx)
             env = dict(os.environ, GIT_INDEX_FILE=str(idx))
             env.pop("GIT_WORK_TREE", None)
@@ -2662,7 +2662,7 @@ def owner_exclude_covers_behavioral(project_path: Path,
         return (False, [])
     hits: "list[str]" = []
     try:
-        scopes = _tail_cert_scopes(Path(project_path), cfg)
+        scopes = review_scopes(Path(project_path), cfg)
     except Exception:
         return (True, ["<scopes>: could not enumerate fingerprint scopes"])
     for name, repo in scopes.items():
@@ -3047,7 +3047,7 @@ def _dirty_path_content_map(repo_path: Path,
     return out
 
 
-def _tail_cert_scopes(project_path: Path, cfg: dict) -> "dict[str, Path]":
+def review_scopes(project_path: Path, cfg: dict) -> "dict[str, Path]":
     """The validated scope set the fingerprint folds in: `""` (the outer tree)
     plus each containment-checked `code_roots` nested repo. Keyed by the SAME
     scope name recorded in the descriptor, so the close can compare scope-SETS
@@ -3091,7 +3091,7 @@ def build_panel_snapshot(project_path: Path, tree_fp: str, *, cfg: "dict | None"
             cfg = {}
     exclude = _fingerprint_exclude_pathspecs(cfg)
     scopes_out: "dict[str, dict]" = {}
-    for name, repo in _tail_cert_scopes(Path(project_path), cfg).items():
+    for name, repo in review_scopes(Path(project_path), cfg).items():
         commit = _git_head_commit(repo)
         dm = _dirty_path_content_map(repo, exclude)
         if not commit or dm is None:
@@ -3105,7 +3105,7 @@ def build_panel_snapshot(project_path: Path, tree_fp: str, *, cfg: "dict | None"
         # judge reviews base → current working tree. Best-effort: None when it
         # cannot be built; the descriptor itself (tail-cert's F0) is unaffected.
         try:
-            from tasks.post_d6 import worktree_tree_why as _wt
+            from tasks.review_view import worktree_tree_why as _wt
             _b, _why = _wt(repo, exclude)
             scopes_out[name]["base"] = _b
             if not _b:
@@ -3382,7 +3382,7 @@ def tail_cert_delta_why(project_path: Path, snapshot: "dict | None", round_tree_
         cfg = load_config(Path(project_path))
     except Exception:
         cfg = {}
-    live_scopes = _tail_cert_scopes(Path(project_path), cfg)
+    live_scopes = review_scopes(Path(project_path), cfg)
     if set(live_scopes.keys()) != set(snap_scopes.keys()):
         # finding C: scope-set must match exactly
         return no("the scope set changed since the reviewed tree (then: "

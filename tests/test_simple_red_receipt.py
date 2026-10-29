@@ -187,7 +187,8 @@ class Run(_Project):
         r = self.red()
         recs = self.records()
         self.assertTrue(recs and recs[-1].get("moved") is True, recs)
-        self.assertIn("fingerprint_exclude", r.stdout)          # row 33: what the row writes may be left out
+        self.assertIn(".gitignore", r.stdout)       # row 33: what the row writes may be left out (task 343: no key)
+        self.assertNotIn("fingerprint_exclude", r.stdout)
         self.config(red_run="cd code && python3 -m unittest {test}")
         self.set_rows([("1", "normal", "f returns 2", "`test 1 = 1`")])
         self.red()

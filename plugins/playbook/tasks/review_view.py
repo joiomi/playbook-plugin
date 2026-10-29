@@ -13,7 +13,7 @@ them read-only from the live tree at their own path (`live_binds`), so the judge
 covered ignored files and does not now. Their mountpoints are made in the copy.
 
 The seal, by content: the copy is kept only when its fingerprint (`core.tree_state_fingerprint` with the LIVE config)
-equals the stamp the review took from the live tree, each scope's working-tree object (`post_d6.worktree_tree`) equals
+equals the stamp the review took from the live tree, each scope's working-tree object (`worktree_tree`) equals
 the tree the review recorded (a panel's snapshot `base`, the post-panel judge's delta `cur`), and each scope's HEAD is
 the recorded commit. A tree that moved while the copy was made is tried again, `COPY_ATTEMPTS` times, then refused
 (`Moved`) — the caller spends nothing and does not fall back to the live tree for a tree that moved (plan panel P8). A
@@ -37,9 +37,11 @@ from __future__ import annotations
 import errno
 import fcntl
 import os
+import re
 import shutil
 import stat
 import subprocess
+import tempfile
 from pathlib import Path
 
 VIEWS_DIRNAME = "review-views"
@@ -83,8 +85,8 @@ def views_dir(project: "Path | str", task_file: "Path | str | None" = None) -> P
 
 
 def _scopes(project: Path, cfg: dict) -> "dict[str, Path]":
-    from tasks.core import _tail_cert_scopes
-    return _tail_cert_scopes(project, cfg)
+    from tasks.core import review_scopes
+    return review_scopes(project, cfg)
 
 
 def _listed(scope: Path) -> "list[str]":
@@ -288,7 +290,7 @@ def _clone_scope(src: Path, dst: Path) -> None:
     if not idx.is_absolute():
         idx = src / idx
     if idx.is_file():
-        shutil.copy2(idx, gd / "index")     # copy2: its own mtime kept (git's racy-clean rule, post_d6.worktree_tree)
+        shutil.copy2(idx, gd / "index")     # copy2: its own mtime kept (git's racy-clean rule, worktree_tree)
     for shared in src_git.glob("sharedindex.*"):
         shutil.copy2(shared, gd / shared.name)
 
@@ -376,7 +378,6 @@ class View:
             return False
         if snapshot is not None and not self._snapshot_is_mine(snapshot, fingerprint, cfg):
             return False
-        from tasks.post_d6 import worktree_tree
         if trees and {_norm(n) for n in trees} != {_norm(n) for n in self.scope_names}:
             return False        # impl round 1 (G4): every copied scope is a recorded one, and only those
         for name, want in (trees or {}).items():
@@ -559,7 +560,6 @@ def make(project: "Path | str", cfg: dict, *, run_id: str, fingerprint: str, tre
     """Make, seal and lock a copy (see the module docstring). `Unavailable` when it cannot be made, `Moved` when the
     tree kept changing. Nothing is left behind on either."""
     from tasks.core import _fingerprint_exclude_pathspecs
-    from tasks.post_d6 import patch_dir_ready
     project = Path(project)
     if exclude is None:
         exclude = _fingerprint_exclude_pathspecs(cfg)
@@ -628,3 +628,90 @@ def _discard(view: "View | None", root: Path, fd: int, lock_path: Path, vd: Path
         os.close(fd)
     except OSError:
         pass
+
+
+# ── the working-state tree (moved from post_d6.py by task 343) ──────────────────────────────────────────────
+
+_GIT_TIMEOUT = 120
+
+
+def _wt_git(repo, args, env=None):
+    return subprocess.run(["git", *args], cwd=str(repo), capture_output=True,
+                          text=True, encoding="utf-8", errors="replace",
+                          env=env, timeout=_GIT_TIMEOUT)
+
+
+def worktree_tree(repo: Path, exclude: "list[str]") -> "str | None":
+    """A tree object of `repo`'s WORKING state — tracked edits (staged or not),
+    deletions and untracked non-ignored files — built in a temporary copy of the
+    index, so `.git/index`, the worktree and `git status` are untouched. `exclude`
+    are pathspecs (the fingerprint's). None on any git error."""
+    return worktree_tree_why(repo, exclude)[0]
+
+
+def worktree_tree_why(repo: Path, exclude: "list[str]") -> "tuple[str | None, str]":
+    """`worktree_tree` plus the reason when it cannot be built (round 2: a base
+    that silently failed looked like "panel predates task 108")."""
+    repo = Path(repo)
+    if not repo.is_dir():
+        return None, "not a directory"
+    try:
+        u = _wt_git(repo, ["ls-files", "-u"])
+        if u.returncode == 0 and u.stdout.strip():
+            return None, "the index has unmerged (conflict) entries — finish the merge/rebase"
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None, "git error"
+    tmpd = tempfile.mkdtemp(prefix="pb-base-")
+    try:
+        r = _wt_git(repo, ["rev-parse", "--git-path", "index"])
+        if r.returncode != 0:
+            return None, "not a git work tree"
+        real = Path(r.stdout.strip())
+        if not real.is_absolute():
+            real = repo / real
+        idx = Path(tmpd) / "index"
+        env = dict(os.environ, GIT_INDEX_FILE=str(idx))
+        env.pop("GIT_WORK_TREE", None)
+        if real.is_file():
+            # copy2: keep the stat cache (no full re-hash) AND the index's own mtime —
+            # git re-hashes a "racily clean" entry only while the index is not newer
+            # than it; a fresh mtime on the copy hid a same-size edit (seen in CI, task 108).
+            shutil.copy2(real, idx)
+        else:
+            head = _wt_git(repo, ["rev-parse", "--verify", "-q", "HEAD"])
+            seed = ["read-tree", "HEAD"] if head.returncode == 0 else ["read-tree", "--empty"]
+            if _wt_git(repo, seed, env=env).returncode != 0:
+                return None, "git read-tree failed"
+        # task 314 (impl round 1, opus, codex): `git add -A` skips a file whose entry is marked assume-unchanged or
+        # skip-worktree, so the tree left out its working bytes — the bits are cleared in this copy first
+        from tasks.core import _index_bits_cleared
+        if not _index_bits_cleared(repo, env):
+            return None, "git could not clear the index bits in the temporary index"
+        # in a sparse checkout `git add` refuses paths outside the cone, a file put back there included (task 314,
+        # impl round 2, codex); `--sparse` stages it, and an absent one keeps its skip-worktree bit, so its committed
+        # content stays in the tree
+        sparse = _wt_git(repo, ["config", "--bool", "core.sparseCheckout"]).stdout.strip() == "true"
+        a = _wt_git(repo, ["add", "-A", *(["--sparse"] if sparse else []), "--", ".", *exclude], env=env)
+        if a.returncode != 0:
+            return None, "git add failed: " + ((a.stderr or "").strip().splitlines() or ["?"])[0][:200]
+        w = _wt_git(repo, ["write-tree"], env=env)
+        tree = w.stdout.strip() if w.returncode == 0 else ""
+        if re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", tree):
+            return tree, ""
+        return None, "git write-tree failed"
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None, "git error"
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+
+def patch_dir_ready(d: Path) -> None:
+    """Make the patch folder; OSError when it, or the journal it is in, is a link — a
+    write through a planted link would go elsewhere (task 192's class)."""
+    d = Path(d)
+    for x in (d.parent, d):
+        if x.is_symlink():
+            raise OSError(f"{x} is a link — not written through")
+    d.mkdir(parents=True, exist_ok=True)
+    if d.is_symlink() or d.parent.is_symlink() or not d.is_dir():
+        raise OSError(f"{d} is not a plain folder")

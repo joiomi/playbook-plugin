@@ -1303,7 +1303,7 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
     out["agent"] = agent_table(agents)
     out["verify"] = verify_table(verifies)
     try:
-        from tasks.post_d6 import read_runs
+        from tasks.review_ledger import read_runs
         runs = read_runs(task_dir)
     except Exception:                       # noqa: BLE001 — a ledger that cannot be read leaves the rounds empty
         runs = []

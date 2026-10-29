@@ -56,9 +56,9 @@ APPROVED = {
     ("tasks/core.py", "shutil.copy2(real, idx)"):
         "task 314: the live index copied into a fresh private temporary folder, so the index bits can be cleared in "
         "the copy for a freshness read; never a record, and the real index is never written",
-    ("tasks/post_d6.py", "shutil.copy2(real, idx)"):
+    ("tasks/review_view.py", "shutil.copy2(real, idx)"):
         "task 108: a copy of the git index into a private mkdtemp dir (the temporary GIT_INDEX_FILE "
-        "for the post-D6 base tree), removed in `finally` — ephemeral, never state",
+        "for the working-state tree; moved from post_d6.py by task 343), removed in `finally` — ephemeral, never state",
     ("tasks/registry.py", 'with os.fdopen(fd, "w", encoding="utf-8") as fh:'):
         "task 195: a new task.md written (O_CREAT|O_EXCL|O_NOFOLLOW, fsync'd) through the creator's held lane "
         "descriptor into its own temporary directory, which nothing else knows until the rename publishes it "
