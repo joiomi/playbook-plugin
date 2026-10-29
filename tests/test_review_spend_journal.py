@@ -317,26 +317,6 @@ class SpendHelpers(unittest.TestCase):
         cli_src = (_PLAYBOOK / "tasks" / "review.py").read_text(encoding="utf-8")
         self.assertIn(f'"--effort", "{review._CLAUDE_JUDGE_EFFORT}"', cli_src)
 
-    def test_tail_cert_seat_resolves_model_effort(self):
-        # Exercise the REAL _tail_cert_seat wiring (the e2e monkeypatches it), so
-        # a regression dropping the effort suffix is caught (impl-panel round 3).
-        with tempfile.TemporaryDirectory() as d:
-            proj = Path(d)
-            (proj / ".agent" / "tasks").mkdir(parents=True)
-            (proj / ".agent" / "models.json").write_text(
-                json.dumps({"default_judge": "opus"}), encoding="utf-8")
-            with _chdir(proj):
-                # resolve_judge_spec expands the "opus" alias to the model id;
-                # the point is the claude :high effort suffix is appended.
-                seat = review._tail_cert_seat(proj)
-                self.assertTrue(seat.startswith("claude:"), seat)
-                self.assertTrue(seat.endswith(":high"), seat)
-            (proj / ".agent" / "models.json").write_text(
-                json.dumps({"default_judge": "codex:gpt-5.6-terra:medium"}),
-                encoding="utf-8")
-            with _chdir(proj):
-                self.assertEqual(review._tail_cert_seat(proj),
-                                 "codex:gpt-5.6-terra:medium")
 
     def test_next_review_round(self):
         with tempfile.TemporaryDirectory() as d:
@@ -566,50 +546,6 @@ class SingleSpendE2E(_E2EBase):
                          "not a dir")
 
 
-class TailCertSpendE2E(_E2EBase):
-    def _run(self, *, tampered=False, raw="TAIL-CERT deadbeef: PASS"):
-        import unittest.mock as mock
-        tf = self.agent / "tasks" / "042-demo" / "task.md"
-        patches = [
-            mock.patch.object(review, "_tail_cert_review_diff",
-                              lambda pp, snap, why=None: "diff --git a b\n+one line\n"),
-            mock.patch.object(review, "_run_tail_cert_judge_raw",
-                              lambda pp, prompt, ts: raw),
-            mock.patch.object(review, "_snapshot_repo_state", lambda pp, t: {}),
-            # Task 059: the callers read the mutations/cautions split; "dirty" is a
-            # MUTATION (a simulated judge write), so the hard stop must still fire.
-            mock.patch.object(review, "_detect_tamper_full",
-                              lambda pp, t, b: ({"mutations": ["dirty"], "cautions": []}
-                                                if tampered else {"mutations": [], "cautions": []})),
-            mock.patch.object(review, "_tail_cert_seat", lambda pp: "claude:opus"),
-        ]
-        for p in patches:
-            p.start()
-            self.addCleanup(p.stop)
-        with _chdir(self.project):
-            return review.run_tail_cert_judge(
-                self.project, {}, ["non-behavioral note"], "panel summary",
-                task_file=tf)
-
-    def test_tail_cert_records_one(self):
-        self._run()
-        recs = [r for r in _read_journal(self.agent)
-                if r["hook"] == "review" and r["kind"] == "tail-cert"]
-        self.assertEqual(len(recs), 1, recs)
-        r = recs[0]
-        self.assertEqual(r["seat"], "claude:opus")
-        self.assertEqual(r["task"], "042")
-        self.assertEqual(r["status"], "ok")
-        self.assertIn("duration_ms", r)
-
-    def test_tail_cert_tamper_records_nothing(self):
-        # A tamper hard-stop returns None (block) and records NO spend — the same
-        # uniform rule the panel/single paths follow (no write before the stop).
-        self.assertIsNone(self._run(tampered=True))
-        self.assertEqual(
-            [r for r in _read_journal(self.agent) if r["hook"] == "review"], [])
-
-
 class TamperRecordsNothing(_E2EBase):
     def test_panel_tamper_no_records(self):
         import unittest.mock as mock
@@ -630,8 +566,6 @@ class TamperRecordsNothing(_E2EBase):
         self.assertEqual(
             [r for r in _read_journal(self.agent) if r["hook"] == "review"], [],
             "a tampered panel must record no spend (write must not precede the banner)")
-
-
 
 
 class StructuredUsageE2E(_E2EBase):
@@ -699,34 +633,6 @@ class StructuredUsageE2E(_E2EBase):
         self.assertIn("1. fine (codex)", jm)
         self.assertNotIn("turn.completed", jm)
 
-    def test_tail_cert_usage_is_per_call_never_stale(self):
-        from provider.usage import JudgeOutput
-        import unittest.mock as mock
-        tf = self.agent / "tasks" / "042-demo" / "task.md"
-        outs = [JudgeOutput("TAIL-CERT deadbeef: PASS", usage=self.GROK_USAGE),
-                "(error: tail-cert judge timed out)"]
-        patches = [
-            mock.patch.object(review, "_tail_cert_review_diff", lambda pp, snap, why=None: "diff --git a b\n+x\n"),
-            mock.patch.object(review, "_run_tail_cert_judge_raw", lambda pp, prompt, ts: outs.pop(0)),
-            mock.patch.object(review, "_snapshot_repo_state", lambda pp, t: {}),
-            mock.patch.object(review, "_detect_tamper_full",
-                              lambda pp, t, b: {"mutations": [], "cautions": []}),
-            mock.patch.object(review, "_tail_cert_seat", lambda pp: "grok:grok-4.6:medium"),
-        ]
-        for p in patches:
-            p.start()
-            self.addCleanup(p.stop)
-        with _chdir(self.project):
-            review.run_tail_cert_judge(self.project, {}, ["n"], "s", task_file=tf)
-            review.run_tail_cert_judge(self.project, {}, ["n"], "s", task_file=tf)
-        recs = [r for r in _read_journal(self.agent) if r["hook"] == "review" and r["kind"] == "tail-cert"]
-        self.assertEqual(len(recs), 2, recs)
-        self.assertEqual(recs[0]["usage"], self.GROK_USAGE)
-        self.assertEqual(recs[1]["usage"], {"status": "unknown"}, "an erroring call must never reuse a prior usage")
-        # task 096 impl r1 (opus): the tail-cert site carries the reason too, and a
-        # timeout keeps the judge's own text rather than a bare "timed out"
-        self.assertNotIn("error", recs[0])
-        self.assertEqual(recs[1]["error"], "(error: tail-cert judge timed out)")
 
     def _single(self, backend, stdout, *, rc=0, timeout_partial=None, stderr=""):
         import shutil
@@ -1035,7 +941,6 @@ class SingleSpendErrorE2E(_E2EBase):
         recs = [r for r in _read_journal(self.agent) if r["hook"] == "review"]
         self.assertEqual(recs[0]["status"], "fail")
         self.assertEqual(recs[0]["error"], "exit 1: unknown option --frobnicate")
-
 
 
 class IntentSpendE2E(_E2EBase):

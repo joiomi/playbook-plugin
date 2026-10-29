@@ -74,7 +74,7 @@ class SessionStartPlatformWarning(unittest.TestCase):
 
     def test_a_judge_session_stays_silent_on_any_platform(self):
         # Task 149: a judge's SessionStart prints nothing — its context is the review prompt.
-        for sid in ("judge", "tail-cert"):
+        for sid in ("judge",):
             with self.subTest(sid=sid):
                 r = self._hook("Darwin", session_id=sid)
                 self.assertEqual(r.returncode, 0, r.stderr)

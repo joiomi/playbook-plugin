@@ -323,7 +323,7 @@ class ThePythonWriter(_Tmp):
             with self.subTest(name):
                 self.pbj.append_hook_run(proj, hook="x", decision="ok")
                 self.assertEqual(list(proj.rglob("hooks.jsonl")), [])
-        for sid in ("judge", "tail-cert"):                  # opus r1: a review writes no line
+        for sid in ("judge",):                              # opus r1: a review writes no line (343: no tail-cert)
             os.environ["PLAYBOOK_SESSION_ID"] = sid
             try:
                 self.pbj.append_hook_run(self.project, hook="x")

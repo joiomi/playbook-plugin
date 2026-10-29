@@ -159,7 +159,7 @@ class TheStaleCloseReadersToo(_Repo):
 
     def test_the_working_tree_object_holds_a_changed_file_under_a_bit(self):
         from tasks.core import _fingerprint_exclude_pathspecs
-        from tasks.post_d6 import worktree_tree
+        from tasks.review_view import worktree_tree
         exclude = _fingerprint_exclude_pathspecs({})
         for bit in ("--assume-unchanged", "--skip-worktree"):
             self.git("update-index", bit, "app.py")
@@ -247,7 +247,7 @@ class InASparseCheckout(_Repo):
 
     def test_a_file_outside_the_cone_put_back_and_changed_is_seen(self):
         from tasks.core import _fingerprint_exclude_pathspecs
-        from tasks.post_d6 import worktree_tree
+        from tasks.review_view import worktree_tree
         exclude = _fingerprint_exclude_pathspecs({})
         reviewed, before = self.fp(), worktree_tree(self.d, exclude)
         (self.d / "outside").mkdir()
@@ -336,7 +336,7 @@ class InASparseCheckout(_Repo):
 
     def test_the_post_panel_tree_keeps_an_absent_file_outside_the_cone(self):
         from tasks.core import _fingerprint_exclude_pathspecs
-        from tasks.post_d6 import worktree_tree
+        from tasks.review_view import worktree_tree
         tree = worktree_tree(self.d, _fingerprint_exclude_pathspecs({}))
         blob = self.git("rev-parse", f"{tree}:outside/b.py").strip()
         self.assertEqual(self.git("cat-file", "-p", blob), "b = 1\n", "an absent file outside the cone read as deleted")

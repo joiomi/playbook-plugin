@@ -258,13 +258,12 @@ class ASeatCountsOnlyWhenItsTextIsAReview(_Project):
         self.assertIn("not a review", r.stdout + r.stderr)
         self.assertNotIn("Saved:", r.stdout)
 
-    def test_the_post_panel_judge_fails_on_a_wait(self):
+    def test_a_single_judge_after_the_panel_fails_on_a_wait(self):
         r = self.tasks("panel-review", "1", "--mode", "impl")
         self.assertIn("PANEL PASS: 3/3", r.stdout, r.stdout + r.stderr)
         (self.p / "README.md").write_text("x\nchanged after the panel\n", encoding="utf-8")
         r = self.tasks("impl-review", "1", env=self.say(sonnet=_WAIT))
-        self.assertIn("post-D6: single-judge run 1", r.stdout + r.stderr)
-        self.assertNotIn("POST-D6 VERDICT: PASS", r.stdout)
+        self.assertNotIn("POST-D6", r.stdout + r.stderr)
         self.assertIn("not a review", r.stdout + r.stderr)
         self.assertNotEqual(r.returncode, 0)
         runs = (next((self.p / ".agent" / "tasks").glob("001-*")) / "post-panel-reviews.jsonl").read_text(encoding="utf-8")

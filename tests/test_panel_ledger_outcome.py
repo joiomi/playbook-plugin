@@ -23,7 +23,7 @@ PLUGIN = _HERE.parent / "plugins" / "playbook"
 sys.path.insert(0, str(PLUGIN))
 
 from provider.adapters.claude import ClaudeAdapter  # noqa: E402
-from tasks import post_d6, review, stop_rule  # noqa: E402
+from tasks import review, review_ledger, stop_rule  # noqa: E402
 
 OPUS = ("1. **Critical** — the close skips verify on a reused key.\n"
         "2. **Important** — the receipt names the wrong command.\n\nCAP: 2/5 reported, exhausted\n")
@@ -77,7 +77,7 @@ class _Panel(unittest.TestCase):
                         review.cmd_panel_review(["042", "--models", "claude:opus,claude:sonnet"])
 
     def _done(self) -> dict:
-        lines = (self.tdir / post_d6.RUNS_NAME).read_text(encoding="utf-8").splitlines()
+        lines = (self.tdir / review_ledger.RUNS_NAME).read_text(encoding="utf-8").splitlines()
         recs = [json.loads(ln) for ln in lines]
         done = [r for r in recs if r.get("status") == "done"]
         self.assertEqual(len(done), 1, recs)
@@ -179,7 +179,7 @@ class ReadersUnchanged(unittest.TestCase):
                  "ts": "2026-10-17T10:30:00+00:00"},
                 {"id": "r2", "panel": "p1", "status": "done", "verdict": "FAIL", "critical": 1, "important": 0,
                  "ts": "2026-10-17T10:35:00+00:00"}]
-        (d / post_d6.RUNS_NAME).write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
+        (d / review_ledger.RUNS_NAME).write_text("".join(json.dumps(r) + "\n" for r in rows), encoding="utf-8")
 
     def test_the_answers_are_the_same(self):
         got = []
@@ -187,11 +187,8 @@ class ReadersUnchanged(unittest.TestCase):
             with tempfile.TemporaryDirectory() as t:
                 d = Path(t)
                 self._ledger(d, with_outcome)
-                runs = post_d6.read_runs(d)
-                got.append((post_d6.gate_run(runs, "p1", None), post_d6.receipt_line(runs, "p1"),
-                            stop_rule.panel_record(d)))
+                got.append(stop_rule.panel_record(d))      # task 343: the post-panel cap and receipt line went
         self.assertEqual(got[0], got[1])
-        self.assertEqual(got[0][0][:2], (False, 3), "run 3 needs the owner: the post-D6 runs alone are counted")
 
 
 if __name__ == "__main__":

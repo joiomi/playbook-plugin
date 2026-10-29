@@ -179,19 +179,19 @@ class TheDialogs(unittest.TestCase):
 class TheReceipt(unittest.TestCase):
     TASK = ("# 007 - x\n\n## Status\ndone\n\n## Verification Receipt\n\n"
             "### 2026-10-17T20:00:00+03:00 · risk assertive · commit abc\n"
-            "- **Panel tree-state:** a vs close b — STALE, accepted: \"docs only\"\n- **Commands:**\n"
+            "- **Panel tree-state:** a vs close b — STALE: the code changed since the round\n- **Commands:**\n"
             "    - [PASS] `x` (verify) — ok\n\n"
             "### 2026-10-18T00:34:11+03:00 · risk assertive · commit def (+3 uncommitted file(s) — …)\n"
             "- **Forced close, reason:** the owner said so\n"
-            "- **Panel tree-state:** c vs close d — STALE, but TAIL-CERTIFIED: non-behavioral tail (delta: PLAN.md)\n"
+            "- **Panel tree-state:** c vs close d — STALE: the code changed since the round (tree-state c → d)\n"
             "- **Commands:**\n    - [PASS] `cd p && v` (verify) — ok\n    - [FAIL] `y` (lint) — no\n")
 
     def test_the_newest_block_is_this_closure(self):
         got = numbers.receipt_close(self.TASK)
         self.assertEqual(got["stamp"], "2026-10-18T00:34:11+03:00")
         self.assertEqual(got["epoch"], 1792272851)
-        self.assertEqual((got["risk"], got["freshness"], got["forced_reason"], got["accepted_reason"]),
-                         ("assertive", "TAIL-CERTIFIED", "the owner said so", None))
+        self.assertEqual((got["risk"], got["freshness"], got["forced_reason"]),
+                         ("assertive", "STALE", "the owner said so"))
         self.assertEqual(got["commands"], {"pass": 1, "fail": 1})
 
     def test_the_newest_stamp_wins_wherever_its_block_sits(self):
@@ -494,20 +494,19 @@ class TheSideTables(unittest.TestCase):
                  "measures": {"critical": 3, "important": 19}, "ts": "2026-10-17T19:47:13+00:00"},
                 {"id": "p2", "kind": "panel", "mode": "impl", "status": "done", "outcome": "void",
                  "ts": "2026-10-17T20:53:47+00:00"},
-                {"id": "s1", "panel": "fp", "status": "done", "verdict": "FAIL", "critical": 0, "important": 2,
+                {"id": "s1", "kind": "single", "status": "done", "outcome": "completed",
                  "ts": "2026-10-17T21:00:00+00:00"},
                 {"id": "old", "kind": "panel", "mode": "plan", "status": "done", "outcome": "completed",
                  "ts": "2026-10-01T00:00:00+00:00"}]
         start = numbers._epoch("2026-10-17T00:00:00Z")
         got = numbers.rounds_table(runs, [{"kind": "single", "round": 4, "_t": start + 10},
-                                          {"kind": "single", "round": 4, "_t": start + 20},
-                                          {"kind": "tail-cert", "round": 5, "_t": start + 30}], start, start + 86400)
+                                          {"kind": "single", "round": 4, "_t": start + 20}], start, start + 86400)
         self.assertEqual(got["panels"], [{"mode": "plan", "outcome": "completed", "critical": 3, "important": 19,
                                           "owner_ok": None},
                                          {"mode": "impl", "outcome": "void", "critical": None, "important": None,
                                           "owner_ok": None}])
-        self.assertEqual(got["post_panel"], [{"verdict": "FAIL", "critical": 0, "important": 2, "owner_ok": None}])
-        self.assertEqual((got["single"], got["tail_cert"]), (2, 1))         # each single-judge call is a run (V6)
+        self.assertEqual(got["single"], 2)         # each single-judge call is a run (V6)
+        self.assertEqual(set(got), {"panels", "single", "failed"})     # task 343: no post-panel runs, no tail-cert
 
     def test_the_owners_prompts_and_dialogs_with_their_wait(self):
         lines = [L(0, "UserPromptSubmit", detail="logged M001"), L(5, "UserPromptSubmit", detail="not logged: a notification"),
@@ -533,8 +532,8 @@ class TheComposition(_Tmp):
             {"ts": iso(close_t - 40), "hook": "review", "task": "007", "kind": "panel", "seat": "s", "round": 1,
              "duration_ms": 20000, "status": "ok", "usage": {"status": "known", "in": 1, "out": 1}},
             {"ts": iso(close_t - 2), "hook": "verify", "task": "007", "rc": 0, "how": "ran", "seconds": 5},
-            {"ts": iso(close_t + 1), "hook": "close", "task": "007", "reason": "stale close owner-ok",
-             "command": 'owner-ok: "the owner\'s word"'},          # as lifecycle writes it: the bound, labelled
+            {"ts": iso(close_t + 1), "hook": "close", "task": "007", "reason": "verify contract",
+             "command": "x"},                                    # the close's own record (task 343: no owner-ok one)
             {"ts": iso(close_t + 60), "hook": "review", "task": "007", "kind": "panel", "seat": "late", "round": 2,
              "duration_ms": 1000}])
         self.write("hooks.jsonl", [
@@ -558,8 +557,7 @@ class TheComposition(_Tmp):
         self.assertEqual(got["seats"]["s"]["runs"], 1)
         self.assertEqual(got["verify"]["runs"], 1)
         self.assertEqual(got["owner"]["prompts"], 2)
-        self.assertEqual(got["close"]["freshness"], "TAIL-CERTIFIED")
-        self.assertEqual(got["close"]["owner_ok"], "the owner's word")
+        self.assertEqual(got["close"]["freshness"], "STALE")
         self.assertEqual(got["late_records"], 1)                  # the review written after the close
         self.assertEqual(got["schema"], numbers.SCHEMA)
 
@@ -617,7 +615,7 @@ class TheComposition(_Tmp):
         (self.jdir / "enforcement.jsonl").write_text("")
         got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
         self.assertIsNone(got["time"])
-        self.assertEqual(got["close"]["freshness"], "TAIL-CERTIFIED")
+        self.assertEqual(got["close"]["freshness"], "STALE")
 
     def test_out_of_time(self):
         lane, td, _ = self.project()
@@ -767,24 +765,15 @@ class TheRealReceipt(unittest.TestCase):
         block = format_verify_receipt(entries, "abc", "assertive", timestamp=ts, **kw)
         return "# 007 - x\n\n## Status\ndone\n\n## Verification Receipt\n\n" + block + "\n"
 
-    def test_an_accepted_reason_followed_by_a_bound_and_a_stop_rule(self):
-        # the writers' own bound and stop-rule forms (task 236's impl round 1: made-up ones passed here)
-        from tasks.stop_rule import receipt_clause
-        clause = receipt_clause({"rounds": 2, "allowed": 2, "risk": "assertive", "can": True, "changed": ["x.md"]})
-        got = numbers.receipt_close(self.task(freshness={"verdict": "STALE", "round_fp": "a", "now_fp": "b",
-                                                         "accepted_reason": 'docs "only"',
-                                                         "bound": "bound to post-D6 PASS r1 on tree t (unchanged since)",
-                                                         "stop_rule": clause}))
-        self.assertEqual((got["freshness"], got["accepted_reason"]), ("STALE", 'docs "only"'))
 
     def test_each_verdicts_own_wording(self):
-        for v, want in (("NO-STAMP", "NO-STAMP"), ("UNREADABLE", "UNREADABLE"), ("FRESH", "FRESH"),
-                        ("TAMPER-GUARD-DEGRADED", "TAMPER-GUARD-DEGRADED"), ("TAIL-CERT-PASS", "TAIL-CERTIFIED"),
-                        ("EXCLUDE-COVERS-CODE", "EXCLUDE-COVERS-CODE"), ("SINGLE-TAMPER-DEGRADED", "SINGLE-TAMPER-DEGRADED"),
-                        ("STALE", "STALE")):
-            with self.subTest(v=v):
-                got = numbers.receipt_close(self.task(freshness={"verdict": v, "round_fp": "a", "now_fp": "b",
-                                                                 "cert_clause": "c", "tamper_degraded_detail": "d"}))
+        for fresh, want in (({"verdict": "FRESH", "round_fp": "a", "now_fp": "a"}, "FRESH"),
+                            ({"verdict": "FRESH", "round_fp": "a", "now_fp": "b", "records_only": True}, "FRESH"),
+                            ({"verdict": "STALE", "round_fp": "a", "now_fp": "b", "cause": "the round has no tree stamp"},
+                             "STALE"),
+                            ({"verdict": "NOT-JUDGED"}, "NOT-JUDGED")):
+            with self.subTest(fresh=fresh):
+                got = numbers.receipt_close(self.task(freshness=fresh))
                 self.assertEqual(got["freshness"], want)
 
     def test_a_failed_command_is_counted(self):
@@ -829,18 +818,15 @@ class RoundOneFindings(unittest.TestCase):
         self.assertEqual(got["by_kind"], {"judges": 50, "agent": 50})
 
     def test_rounds_count_each_call_and_keep_overrides(self):
-        """V6 (agy, codex, grok)."""
+        """V6 (agy, codex, grok); task 343: every single-judge call is one run (no post-panel run to pair with)."""
         t = numbers._epoch("2026-10-17T21:00:00Z")
         runs = [{"id": "p1", "kind": "panel", "mode": "impl", "status": "done", "outcome": "completed",
                  "measures": {"critical": 0, "important": 2}, "owner_ok": "the owner said a third round",
-                 "ts": "2026-10-17T20:00:00+00:00"},
-                {"id": "s1", "panel": "fp", "status": "done", "verdict": "PASS", "critical": 0, "important": 0,
-                 "owner_ok": None, "ts": "2026-10-17T21:00:30+00:00"}]
-        reviews = [{"kind": "single", "round": 4, "_t": t}, {"kind": "single", "round": 4, "_t": t + 3000},
-                   {"kind": "tail-cert", "round": 5, "_t": t + 4000}, {"kind": "tail-cert", "round": 5, "_t": t + 5000}]
+                 "ts": "2026-10-17T20:00:00+00:00"}]
+        reviews = [{"kind": "single", "round": 4, "_t": t}, {"kind": "single", "round": 4, "_t": t + 3000}]
         got = numbers.rounds_table(runs, reviews, t - 7200, t + 7200)
         self.assertEqual(got["panels"][0]["owner_ok"], "the owner said a third round")
-        self.assertEqual((got["single"], got["tail_cert"]), (1, 2))        # the record at t is the post-panel run
+        self.assertEqual(got["single"], 2)
 
     def test_the_closures_first_prompt_is_counted(self):
         """grok (Minor): the prompt that asked for `tasks work N` was logged before the pointer moved."""
@@ -959,21 +945,6 @@ class TheRoutedFindings(unittest.TestCase):
         block = format_verify_receipt([("verify", "x", 0, "ok")], "abc", "assertive", timestamp=ts, **kw)
         return "# 007 - x\n\n## Status\ndone\n\n## Verification Receipt\n\n" + block + "\n"
 
-    def test_w2_owner_ok_stop_rule_and_post_panel_reasons_whole_from_the_receipt(self):
-        from tasks.post_d6 import receipt_line
-        long = "the owner, 2026-10-18 02:30: " + "a reason that runs well past two hundred bytes " * 6
-        post = receipt_line([{"panel": "fp", "verdict": "FAIL", "owner_ok": None},
-                             {"panel": "fp", "verdict": "PASS", "owner_ok": long}], "fp")
-        got = numbers.receipt_close(self.receipt_task(
-            freshness={"verdict": "STALE", "round_fp": "a", "now_fp": "b", "accepted_reason": long,
-                       "bound": f'owner-ok: "{" ".join(long.split())}"',      # as core.bound_stale_close writes it
-                       "stop_rule": "stop rule (D6): 2 of 2 impl rounds used (assertive); no judge read after x"},
-            post_d6=post))
-        self.assertEqual(got["owner_ok"], " ".join(long.split()))
-        self.assertTrue(got["stop_rule"].startswith("stop rule (D6): 2 of 2 impl rounds used"))
-        self.assertEqual(got["post_panel"], {"runs": 2, "verdict": "PASS", "owner_ok": [" ".join(long.split())]})
-        text = "\n".join(numbers.format_closure({"closed_at": "x", "window": {}, "time": None, "close": got}))
-        self.assertEqual(text.count("owner-ok"), 1)                # the label once, the reason whole
 
     def test_w3_a_receipt_quoted_in_a_fence_is_not_the_receipt(self):
         real = self.receipt_task()
@@ -1026,12 +997,6 @@ class TheRoutedFindings(unittest.TestCase):
     def test_the_dialog_marker_is_read_as_the_writer_wrote_it(self):
         log = TheDialogs.LOG.replace("<!-- dialog:toolu_A -->", "<!-- dialog:toolu_Aweird -->")
         self.assertEqual(numbers.dialog_counts(log, "toolu_A weird!")["id"], "M001")
-
-    def test_bound_is_displayed(self):          # the bound as core.bound_stale_close writes it (task 237)
-        text = "\n".join(numbers.format_closure({"closed_at": "x", "window": {}, "time": None,
-                                                "close": {"freshness": "STALE",
-                                                          "bound": "bound to post-D6 PASS z on tree t"}}))
-        self.assertIn("bound to post-D6 PASS z on tree t", text)
 
 
 class TheRoutedCloseFindings(_CliProject):
@@ -1164,22 +1129,6 @@ class TheMutationGaps(_Tmp):
                  L(30, "PostToolUse", tid="z")]
         self.assertEqual(numbers.owner_table(lines, "007", None, start=T0 + 23)["ids"], [])
 
-    def receipt(self, ts="2026-10-17T21:01:40+03:00", accepted="docs only", bound='owner-ok: "the receipt\'s whole word"'):
-        from tasks.core import format_verify_receipt
-        block = format_verify_receipt([("verify", "x", 0, "ok")], "abc", "assertive", timestamp=ts,
-                                      freshness={"verdict": "STALE", "round_fp": "a", "now_fp": "b",
-                                                 "accepted_reason": accepted, "bound": bound})
-        return "# 007 - x\n\n## Status\ndone\n\n## Verification Receipt\n\n" + block + "\n"
-
-    def test_the_receipts_owner_ok_wins_over_the_journals(self):
-        lane, td, _ = TheComposition.project(self)
-        (td / "task.md").write_text(self.receipt(), encoding="utf-8")
-        got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
-        self.assertEqual(got["close"]["owner_ok"], "the receipt's whole word")          # X24
-
-    def test_an_owner_ok_quoted_inside_the_accepted_reason_is_not_the_bound(self):
-        got = numbers.receipt_close(self.receipt(accepted='the note quotes owner-ok: "x" as text'))
-        self.assertEqual(got["owner_ok"], "the receipt's whole word")                    # X30
 
     def test_a_done_record_seconds_after_the_stamp_still_numbers_the_close(self):
         lane, td, close_t = TheComposition.project(self)
@@ -1222,38 +1171,16 @@ class TheRoundOneFindings(_Tmp):
 
     HEAD = "# 007 - x\n\n## Status\ndone\n\n## Verification Receipt\n\n"
 
-    def block(self, ts="2026-10-18T03:00:00+03:00", post_d6="", **fresh):
+    def block(self, ts="2026-10-18T03:00:00+03:00", **fresh):
         from tasks.core import format_verify_receipt
-        fresh = dict({"verdict": "STALE", "round_fp": "a", "now_fp": "b"}, **fresh)
-        return format_verify_receipt([("verify", "x", 0, "ok")], "abc", "assertive", timestamp=ts, freshness=fresh,
-                                     post_d6=post_d6)
+        fresh = dict({"verdict": "STALE", "round_fp": "a", "now_fp": "b", "cause": "the code changed since the round"},
+                     **fresh)
+        return format_verify_receipt([("verify", "x", 0, "ok")], "abc", "assertive", timestamp=ts, freshness=fresh)
 
-    def test_y1_the_panel_line_split_only_at_the_writers_separators(self):
-        from tasks.stop_rule import receipt_clause
-        clause = receipt_clause({"rounds": 2, "allowed": 2, "risk": "assertive", "can": True,
-                                 "changed": ["a.md", "b.py"]})
-        accepted = 'the ruling "Not grave"; W1 routed'
-        reason = 'he said "go"; then stop rule (D6): quoted'           # Y3: the owner-ok text names a stop rule
-        got = numbers.receipt_close(self.HEAD + self.block(accepted_reason=accepted, bound=f'owner-ok: "{reason}"',
-                                                           stop_rule=clause))
-        self.assertEqual((got["accepted_reason"], got["owner_ok"], got["stop_rule"]), (accepted, reason, clause))
-
-    def test_y2_a_post_panel_bound_read_from_the_receipt(self):
-        bound = "bound to post-D6 PASS r7 on tree abc; since then only: PLAN.md"
-        got = numbers.receipt_close(self.HEAD + self.block(accepted_reason="docs", bound=bound))
-        self.assertEqual((got["accepted_reason"], got["bound"], got["owner_ok"], got["stop_rule"]),
-                         ("docs", bound, None, None))
-
-    def test_y1_post_panel_owner_oks_with_a_quoted_phrase(self):
-        from tasks.post_d6 import receipt_line
-        post = receipt_line([{"panel": "fp", "verdict": "FAIL", "owner_ok": 'first "a"; b'},
-                             {"panel": "fp", "verdict": "PASS", "owner_ok": "second"}], "fp")
-        got = numbers.receipt_close(self.HEAD + self.block(accepted_reason="x", post_d6=post))
-        self.assertEqual(got["post_panel"], {"runs": 2, "verdict": "PASS", "owner_ok": ['first "a"; b', "second"]})
 
     def test_y9_an_unclosed_fence_above_does_not_hide_the_receipt(self):
         text = ("# 007 - x\n\n## Status\ndone\n\n## Notes\n```text\nan example never closed\n\n"
-                "## Verification Receipt\n\n" + self.block(accepted_reason="x") + "\n")
+                "## Verification Receipt\n\n" + self.block() + "\n")
         got = numbers.receipt_close(text)
         self.assertEqual((got or {}).get("stamp"), "2026-10-18T03:00:00+03:00")
 
@@ -1269,8 +1196,7 @@ class TheRoundOneFindings(_Tmp):
         t = numbers._iso_epoch(stamp)
         self.write("enforcement.jsonl", [
             {"ts": iso(t - 50), "hook": "tasks", "reason": "work", "task": "007"},
-            {"ts": iso(t), "hook": "close", "task": "007", "reason": "stale close owner-ok",
-             "command": 'owner-ok: "first life"'},
+            {"ts": iso(t), "hook": "close", "task": "007", "reason": "verify contract", "command": "x"},
             {"ts": iso(t), "hook": "tasks", "reason": "done", "task": "007"},
             {"ts": iso(t), "hook": "tasks", "reason": "work", "task": "007"},
             {"ts": iso(t), "hook": "tasks", "reason": "done", "task": "007"}])
@@ -1280,14 +1206,12 @@ class TheRoundOneFindings(_Tmp):
     def test_y5_the_newest_of_two_same_second_closes_takes_none_of_the_first(self):
         lane, td, t = self.two_closes_in_one_second()
         got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
-        self.assertEqual((got["closure_no"], got["close"].get("owner_ok"), got["close"]["forced_reason"]),
-                         (2, None, "second"))
+        self.assertEqual((got["closure_no"], got["close"]["forced_reason"]), (2, "second"))
 
     def test_y5_the_first_of_two_same_second_closes_by_its_stamp(self):
         lane, td, t = self.two_closes_in_one_second()
         got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30, end=t)
-        self.assertEqual((got["closure_no"], got["close"].get("owner_ok"), got["window"]["start"]),
-                         (1, "first life", iso(t - 50)))
+        self.assertEqual((got["closure_no"], got["window"]["start"]), (1, iso(t - 50)))
 
     def test_y6_the_closes_own_sample_brackets_the_closing_gap(self):
         lines = [L(0, "UserPromptSubmit", susp=100, sts=T0, boot="aaaaaaaa"), L(10, "PreToolUse", tool="Bash", tid="c")]
@@ -1356,15 +1280,6 @@ class TheRoundOneFindings(_Tmp):
                    reviews=[(0, 20)])
         self.assertEqual(got["by_kind"], {"agent": 2, "judges": 10})
 
-    def test_y10_a_journal_owner_ok_cut_without_its_quote_loses_its_label(self):
-        lane, td, close_t = TheComposition.project(self)
-        recs = [json.loads(x) for x in (self.jdir / "enforcement.jsonl").read_text().splitlines()]
-        for r in recs:
-            if r.get("reason") == "stale close owner-ok":
-                r["command"] = 'owner-ok: "a long reason that the journal cut at two hundred'
-        self.write("enforcement.jsonl", recs)
-        got = numbers.compose(lane, td, "007", deadline=time.monotonic() + 30)
-        self.assertEqual(got["close"]["owner_ok"], "a long reason that the journal cut at two hundred")
 
     def test_y12_a_turn_an_unlogged_prompt_opened_takes_no_earlier_prompt(self):
         lines = [L(0, "UserPromptSubmit", detail="logged M001", task=""), L(3, "PostToolUse", task=""),
@@ -1466,13 +1381,14 @@ class TheRoundThreeFindings(_Tmp):
         return lane, td, close_t
 
     def test_q1_a_reason_naming_a_verdict_is_not_the_verdict(self):
-        for reason in ("re-sealed after TAMPER-GUARD-DEGRADED", "was TAIL-CERTIFIED before", "the tree — FRESH since",
-                       "EXCLUDE-COVERS-CODE was fixed"):
-            with self.subTest(reason=reason):
-                got = numbers.receipt_close(self.HEAD + self.block(accepted_reason=reason))
+        # a cause or a forced reason that names a verdict is not the verdict (task 236's impl round 2, Q1; task 343's
+        # verdicts)
+        for cause in ("the code changed — FRESH since", "not judged — not a git repository, as said", "STALE twice"):
+            with self.subTest(cause=cause):
+                got = numbers.receipt_close(self.HEAD + self.block(cause=cause))
                 self.assertEqual(got["freshness"], "STALE")
-        got = numbers.receipt_close(self.HEAD + self.block(verdict="NO-STAMP", accepted_reason="after TAIL-CERTIFIED"))
-        self.assertEqual(got["freshness"], "NO-STAMP")
+        got = numbers.receipt_close(self.HEAD + self.block(verdict="FRESH", round_fp="a", now_fp="a"))
+        self.assertEqual(got["freshness"], "FRESH")
 
     def test_q3_two_same_second_lives_keep_their_own_verify_and_late_records(self):
         lane, td, t = self.two_closes_in_one_second()
@@ -1515,11 +1431,6 @@ class TheRoundThreeFindings(_Tmp):
         got = numbers.session_partition(lines, "007", T0 + 40, [], [], start=T0)
         self.assertEqual((got["slept"], got["total"]), (0, 40))
 
-    def test_minor_a_post_panel_bound_is_shown_once(self):
-        text = "\n".join(numbers.format_closure({"closed_at": "x", "window": {}, "time": None,
-                                                "close": {"bound": "bound to post-D6 PASS r1 on tree t"}}))
-        self.assertIn("bound to post-D6 PASS r1 on tree t", text)
-        self.assertNotIn("bound: bound", text)
 
     def test_minor_a_json_false_is_not_exit_zero(self):
         self.assertEqual(numbers.verify_table([{"rc": False, "how": "ran", "seconds": 1}])["failed"], 1)
@@ -1566,9 +1477,10 @@ class TheRoundThreeRoundOne(_Tmp):
     closed_project = TheRoundThreeFindings.closed_project
 
     def test_k2_an_empty_fingerprint_still_names_the_verdict(self):
-        for fresh, want in (({"verdict": "TAMPER-GUARD-DEGRADED", "round_fp": "", "now_fp": "x"}, "TAMPER-GUARD-DEGRADED"),
-                            ({"verdict": "TAMPER-GUARD-DEGRADED", "round_fp": "a", "now_fp": ""}, "TAMPER-GUARD-DEGRADED"),
-                            ({"verdict": "STALE", "round_fp": "", "now_fp": "x"}, "STALE")):
+        for fresh, want in (({"verdict": "STALE", "round_fp": "", "now_fp": "x", "cause": "the round has no tree stamp"},
+                             "STALE"),
+                            ({"verdict": "STALE", "round_fp": "a", "now_fp": "", "cause": "git cannot fingerprint the tree now"},
+                             "STALE")):
             with self.subTest(fresh=fresh):
                 got = numbers.receipt_close(self.HEAD + self.block(**fresh))
                 self.assertEqual(got["freshness"], want)

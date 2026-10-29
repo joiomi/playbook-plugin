@@ -302,6 +302,19 @@ class Stale(_Close):
                 self.assertIn("Blocked: cannot close task 001", out)
                 self.assertFalse(self.done(), out)
 
+    def test_a_risk_lowered_after_the_panel_still_blocks(self):
+        """Row 27: an assertive panel recorded in the run ledger, `## Risk` lowered to reversible after it — the
+        stricter of the two holds the stale close (task 209's P7, kept by task 343)."""
+        self.setup_task()
+        (self.td / "post-panel-reviews.jsonl").write_text(json.dumps(
+            {"id": "p1", "kind": "panel", "mode": "impl", "status": "done", "risk": "assertive"}) + "\n",
+            encoding="utf-8")
+        (self.td / "task.md").write_text(self.task().replace("## Risk\nassertive", "## Risk\nreversible"),
+                                         encoding="utf-8")
+        (self.d / "code.py").write_text("x = 2\n", encoding="utf-8")
+        r, out = self.close()
+        self.assert_blocked_stale(out, CHANGED)
+
     def test_the_receipt_names_the_cause(self):
         """Row 29: a forced no-stamp close's receipt says why it was STALE; a records-only close's says what moved."""
         self.setup_task(stamp=False)

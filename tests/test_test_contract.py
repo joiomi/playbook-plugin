@@ -180,15 +180,6 @@ class Prompts(unittest.TestCase):
             self.assertIn(missing, p, f.__name__)
             self.assertIn(neither + "judge the tests against the Intent.", p, f.__name__)
 
-    def test_the_delta_review_counts_only_the_rows_it_touched(self):
-        # row 15 (plan panel P6): the post-panel judge reads a delta; a row it did not touch was the panel's
-        clause = ("In this post-panel delta review, a contract row counts only if the delta added or changed it, its "
-                  "test, or the code its test covers.")                       # row 20 (impl round 1, codex)
-        for f in IMPL_BUILDERS:
-            self.assertIn(clause, f(TASK, delta=True), f.__name__)
-            self.assertNotIn(clause, f(TASK), f.__name__)
-        for f in PLAN_BUILDERS:
-            self.assertNotIn(clause, f(TASK, delta=True), f.__name__)
 
     def test_every_hostile_sequence_has_its_class(self):
         # row 16 (plan panel P7): lens 3's six sequences, each named by a class of the contract

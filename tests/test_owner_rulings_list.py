@@ -20,7 +20,7 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 _PLAYBOOK = _HERE.parent / "plugins" / "playbook"
 sys.path.insert(0, str(_PLAYBOOK))
-from tasks import post_d6  # noqa: E402
+from tasks import rulings  # noqa: E402
 
 WORDS1 = '"Listă de proiect cu durată (Recomandat)"'
 WORDS2 = '"Da, și în Faza B (Recomandat)"'
@@ -171,7 +171,7 @@ class AddEndList(Project):
         self.list.symlink_to(secret)
         r = self.cli("ruling", "list")
         self.assertEqual(r.returncode, 1)
-        self.assertNotIn("SECRET-TOKEN", post_d6.settled_block(self.task))
+        self.assertNotIn("SECRET-TOKEN", rulings.settled_block(self.task))
 
     @unittest.skipIf(os.geteuid() == 0, "root writes anywhere")
     def test_a_write_that_fails_is_a_refusal_not_a_traceback(self):
@@ -235,7 +235,7 @@ class AddEndList(Project):
         self.assertTrue(self.list.exists())
         self.assertFalse((self.d / ".agent" / "ana" / "rulings.md").exists())
         for t in (ana, bob):
-            self.assertIn(WORDS1, post_d6.settled_block(t / "task.md"))
+            self.assertIn(WORDS1, rulings.settled_block(t / "task.md"))
 
 
 class EveryJudgeGetsTheRulingsInForce(Project):
@@ -245,7 +245,7 @@ class EveryJudgeGetsTheRulingsInForce(Project):
         self.add(WORDS1)
         self.add(WORDS2, "--until", "Phase B ends")
         self.cli("ruling", "end", "1", "replaced")
-        block = post_d6.settled_block(self.task)
+        block = rulings.settled_block(self.task)
         self.assertIn(WORDS2, block)
         self.assertNotIn(WORDS1, block)
         self.assertLess(block.index(WORDS2), block.index("only this task"))
@@ -253,21 +253,21 @@ class EveryJudgeGetsTheRulingsInForce(Project):
     def test_emitted_when_only_the_list_has_something(self):
         """P4: a ruling written once and not copied into the task still reaches the judge."""
         self.task.write_text("# 001 - Probe\n\n## Status\nin_progress\n", encoding="utf-8")
-        self.assertEqual(post_d6.settled_block(self.task), "")
+        self.assertEqual(rulings.settled_block(self.task), "")
         self.add(WORDS1)
-        self.assertIn(WORDS1, post_d6.settled_block(self.task))
+        self.assertIn(WORDS1, rulings.settled_block(self.task))
 
     def test_a_taskless_review_gets_them(self):
         """P3."""
         self.add(WORDS1)
-        self.assertIn(WORDS1, post_d6.settled_block(None, project_path=self.d))
+        self.assertIn(WORDS1, rulings.settled_block(None, project_path=self.d))
 
     def test_the_budgets_keep_whole_entries_and_the_task_part(self):
         """P5: the project part within 4,000 characters, whole entries, the rest named; the task's rulings kept."""
         for i in range(40):
             self.add(f'"ruling number {i:02d} ' + "w" * 180 + '"')
-        block = post_d6.settled_block(self.task)
-        self.assertLessEqual(len(block), post_d6.SETTLED_CAP + 200)
+        block = rulings.settled_block(self.task)
+        self.assertLessEqual(len(block), rulings.SETTLED_CAP + 200)
         self.assertIn("only this task", block)
         shown = [i for i in range(40) if f"ruling number {i:02d} " in block]
         self.assertEqual(shown, list(range(len(shown))))                  # in order, a prefix of the list
@@ -282,15 +282,15 @@ class EveryJudgeGetsTheRulingsInForce(Project):
         odd = "- 2026-10-17: \"keep\x1cthis together\"\n"
         self.task.write_text(TASK + odd + "".join(f"- 2026-10-17: \"filler {i} " + "f" * 150 + "\"\n"
                                                     for i in range(80)), encoding="utf-8")
-        block = post_d6.settled_block(self.task)
+        block = rulings.settled_block(self.task)
         self.assertIn("keep\x1cthis together", block)
 
     def test_the_final_cut_is_on_a_line_and_named(self):
         self.add(WORDS1)
         rejects = "".join(f"- **X{i}** — REJECT: reason {i} " + "r" * 150 + f" end{i}\n" for i in range(80))
         (self.task.parent / "judge.md").write_text("## Triage\n" + rejects, encoding="utf-8")
-        block = post_d6.settled_block(self.task)
-        self.assertLessEqual(len(block), post_d6.SETTLED_CAP + 200)
+        block = rulings.settled_block(self.task)
+        self.assertLessEqual(len(block), rulings.SETTLED_CAP + 200)
         self.assertIn(WORDS1, block)
         self.assertIn("only this task", block)
         self.assertRegex(block, r"\[\.\.\. \d+ more line\(s\) left out at the 8,000-character cap")
@@ -301,13 +301,13 @@ class EveryJudgeGetsTheRulingsInForce(Project):
     def test_an_unreadable_list_arrives_as_its_raw_text(self):
         """P9: its words still reach the judges, named as unreadable."""
         self.list.write_text("# not the header\n- Words: \"keep me\"\n", encoding="utf-8")
-        block = post_d6.settled_block(self.task)
+        block = rulings.settled_block(self.task)
         self.assertIn("cannot be read", block)
         self.assertIn('"keep me"', block)
         self.assertIn("only this task", block)
 
     def test_no_list_changes_nothing(self):
-        self.assertNotIn("Project rulings", post_d6.settled_block(self.task))
+        self.assertNotIn("Project rulings", rulings.settled_block(self.task))
 
     def test_bootstrap_prints_them_and_survives_a_bad_list(self):
         self.add(WORDS1, "--until", "batch 1.6.4")

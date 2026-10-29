@@ -54,9 +54,8 @@ class JudgeSessionStartIsQuiet(unittest.TestCase):
                               capture_output=True, timeout=60)
 
     def test_judge_session_exits_zero_silently_and_writes_nothing(self):
-        # `judge` (panel and single judges) and `tail-cert` (the tail-certification
-        # judge, impl panel r1 codex-high) are the two judge session ids.
-        for sid in ("judge", "tail-cert"):
+        # `judge` (panel and single judges) is the judge session id (task 343: `tail-cert` went with its judge).
+        for sid in ("judge",):
             with self.subTest(sid=sid):
                 before = _snapshot(self.project)
                 r = self._hook(sid)

@@ -8,9 +8,9 @@ and single-judge paths: the paid verdict is KEPT and the round header records
 as impl-panel evidence — so on a host without bwrap (uncontained: the guard is
 the only defense) an assertive/irreversible close would otherwise proceed on a PASS
 whose tamper-freedom was never verified. These tests pin the other half: the
-close treats such a round like a STALE one — block with the same two exits
-(re-run the panel / `--stale-panel-ok --reason`, recorded), advisory for
-`reversible`, and a round WITHOUT the line (pre-059) stays clean.
+close treats such a round as STALE — task 343: one of its causes, blocked with
+the same ways out (another impl round / `--force --reason`, recorded), advisory
+for `reversible`, and a round WITHOUT the line (pre-059) stays clean.
 
 Pure stdlib unittest. Run: python3 -m unittest tests.test_tamper_close_gate
 """
@@ -78,67 +78,39 @@ class ParserReadsTheLine(unittest.TestCase):
 
 
 class GateDecision(unittest.TestCase):
-    KW = dict(risk="assertive", panel_required=True, evidence_carries=True,
-              round_fp="abc", now_fp="abc", force=False, stale_ok=False,
-              stale_reason=None, git_available=True, exclude_covers=None)
+    """The verdict (task 343, plan panel P11): a degraded guard is a STALE cause, not a verdict of its own — the close
+    holds it as it holds any STALE round, and a reversible close is only told."""
 
-    def test_degraded_blocks_a_fresh_assertive_close(self):
-        allowed, why = freshness_gate_decision(**{**self.KW, "tamper_degraded": True})
-        self.assertFalse(allowed)
-        self.assertIn("TAMPER-GUARD-DEGRADED", why)
-        self.assertIn("--stale-panel-ok", why)
+    def fresh(self, guard):
+        from tasks.core import round_freshness
+        rnd = {"tree_state": "a" * 12, "tamper_guard": guard, "tamper_detail": "git status -z failed"}
+        return round_freshness(Path("."), rnd, git_here=True, now_fp="a" * 12)
 
-    def test_degraded_blocks_irreversible_and_unclassified(self):
-        for risk in ("irreversible", "unclassified"):
-            allowed, _ = freshness_gate_decision(**{**self.KW, "risk": risk, "tamper_degraded": True})
-            self.assertFalse(allowed, risk)
+    def test_degraded_reads_stale_with_its_cause(self):
+        f = self.fresh("degraded")
+        self.assertEqual(f["verdict"], "STALE")
+        self.assertEqual(f["cause"], "the round's tamper guard was degraded (git status -z failed)")
 
-    def test_reversible_is_advisory(self):
-        allowed, _ = freshness_gate_decision(**{**self.KW, "risk": "reversible", "tamper_degraded": True})
-        self.assertTrue(allowed)
-
-    def test_override_needs_a_reason(self):
-        allowed, why = freshness_gate_decision(**{**self.KW, "tamper_degraded": True, "stale_ok": True})
-        self.assertFalse(allowed)
-        self.assertIn("--reason", why)
-        allowed, _ = freshness_gate_decision(
-            **{**self.KW, "tamper_degraded": True, "stale_ok": True, "stale_reason": "guard degraded by a known git quirk; diff inspected"})
-        self.assertTrue(allowed)
+    def test_degraded_blocks_every_high_risk_and_tells_a_reversible_one(self):
+        for risk, held in (("assertive", True), ("irreversible", True), ("unclassified", True), ("reversible", False)):
+            allowed, why = freshness_gate_decision(risk=risk, panel_required=True, evidence_carries=True,
+                                                   freshness=self.fresh("degraded"), force=False)
+            self.assertEqual(allowed, not held, risk)
+            if held:
+                self.assertIn("tamper guard was degraded", why)
 
     def test_clean_guard_changes_nothing(self):
-        allowed, _ = freshness_gate_decision(**{**self.KW, "tamper_degraded": False})
-        self.assertTrue(allowed)
-
-
-class ReceiptNamesEveryGatingCondition(unittest.TestCase):
-    """059 impl-panel r3 (sonnet #2): when EXCLUDE-COVERS-CODE / NO-STAMP /
-    UNREADABLE was already the verdict, the tamper degradation the operator was
-    actually blocked on (and accepted) vanished from the receipt."""
-
-    def test_degraded_guard_is_recorded_beside_another_verdict(self):
-        txt = format_verify_receipt([], "abc", "assertive", freshness={
-            "verdict": "EXCLUDE-COVERS-CODE", "paths": ["src/app.py"],
-            "round_fp": "abc", "now_fp": "abc",
-            "tamper_degraded_detail": "content-hash guard degraded: `git status -z` failed",
-            "accepted_reason": "inspected by hand"})
-        self.assertIn("EXCLUDE-COVERS-CODE", txt)
-        self.assertIn("tamper guard was DEGRADED", txt)
-        self.assertIn("git status -z", txt)
-
-    def test_nothing_extra_when_the_guard_was_clean(self):
-        txt = format_verify_receipt([], "abc", "assertive", freshness={
-            "verdict": "STALE", "round_fp": "a", "now_fp": "b"})
-        self.assertNotIn("tamper guard was DEGRADED", txt)
+        self.assertEqual(self.fresh("clean")["verdict"], "FRESH")
+        self.assertEqual(self.fresh(None)["verdict"], "FRESH")
 
 
 class Receipt(unittest.TestCase):
     def test_receipt_names_the_degraded_guard(self):
-        txt = format_verify_receipt([], "abc", "assertive", freshness={
-            "verdict": "TAMPER-GUARD-DEGRADED", "round_fp": "abc", "now_fp": "abc",
-            "detail": "git status -z failed", "accepted_reason": "inspected by hand"})
-        self.assertIn("TAMPER-GUARD-DEGRADED", txt)
-        self.assertIn("git status -z failed", txt)
-        self.assertIn('accepted: "inspected by hand"', txt)
+        txt = format_verify_receipt([], "abc", "assertive", reason="inspected by hand", freshness={
+            "verdict": "STALE", "round_fp": "abc", "now_fp": "abc",
+            "cause": "the round's tamper guard was degraded (git status -z failed)"})
+        self.assertIn("STALE: the round's tamper guard was degraded (git status -z failed)", txt)
+        self.assertIn("inspected by hand", txt)
 
 
 class ClosePath(unittest.TestCase):
@@ -174,12 +146,12 @@ class ClosePath(unittest.TestCase):
         d, td, env = self._setup(risk="assertive")
         r = self._close(d, env)
         self.assertNotIn("Task 001 done.", r.stdout, r.stdout + r.stderr)
-        self.assertIn("TAMPER-GUARD-DEGRADED", r.stdout + r.stderr)
-        r = self._close(d, env, "--stale-panel-ok", "--reason", "git -z quirk on this host; tree inspected")
+        self.assertIn("the round's tamper guard was degraded", r.stdout + r.stderr)
+        r = self._close(d, env, "--force", "--reason", "git -z quirk on this host; tree inspected")
         self.assertIn("Task 001 done.", r.stdout, r.stderr)
         receipt = (td / "task.md").read_text(encoding="utf-8")
-        self.assertIn("TAMPER-GUARD-DEGRADED", receipt)
-        self.assertIn('accepted: "git -z quirk on this host; tree inspected"', receipt)
+        self.assertIn("the round's tamper guard was degraded", receipt)
+        self.assertIn("git -z quirk on this host; tree inspected", receipt)
 
     def test_reversible_degraded_closes_with_an_advisory(self):
         d, td, env = self._setup(risk="reversible")
@@ -235,9 +207,6 @@ class SingleJudgeDegradedAtClose(unittest.TestCase):
             "[tamper guard] degraded — content-hash guard degraded: `git status -z` failed\n\n"
             "1. **Note** — fine.\n")
 
-    def _reader(self):
-        from tasks.core import single_review_tamper_degraded
-        return single_review_tamper_degraded
 
     def _task(self, log_body=None, name="judge.log"):   # the REAL claude log name
         d = _repo()
@@ -250,60 +219,12 @@ class SingleJudgeDegradedAtClose(unittest.TestCase):
             (td / name).write_text(log_body, encoding="utf-8")
         return d, td, tf
 
-    def test_reader_finds_the_marker(self):
-        d, td, tf = self._task(self.MARK)
-        detail = self._reader()(tf)
-        self.assertIsNotNone(detail)
-        self.assertIn("git status -z", detail)
-
-    def test_reader_is_silent_on_a_clean_log(self):
-        d, td, tf = self._task(self.MARK.replace("degraded — content-hash guard degraded: `git status -z` failed", "clean"))
-        self.assertIsNone(self._reader()(tf))
-
-    def test_reader_is_silent_without_a_log(self):
-        d, td, tf = self._task(None)
-        self.assertIsNone(self._reader()(tf))
-
-    def test_reader_reads_the_newest_log(self):
-        import time
-        d, td, tf = self._task(self.MARK, name="judge.log")
-        time.sleep(0.02)
-        (td / "judge-codex.log").write_text(
-            "[context] x\n[tamper guard] clean\n\nfindings\n", encoding="utf-8")
-        self.assertIsNone(self._reader()(tf), "the newest review's receipt is the one that counts")
-
-    def test_reader_covers_every_real_backend_log_name(self):
-        # 059 impl-panel r2 (grok #2): the reader globbed `judge-*.log`, which
-        # MISSES the supported Claude backend's own `judge.log` — and the first
-        # version of these tests planted a name production never writes.
-        from tasks.review import _judge_log_name
-        for backend in ("claude", "codex", "antigravity", "grok", "pi"):
-            with self.subTest(backend=backend):
-                d, td, tf = self._task(self.MARK, name=_judge_log_name(backend))
-                self.assertIsNotNone(self._reader()(tf), _judge_log_name(backend))
 
     def test_name_list_matches_reviews_own_mapping(self):
         from tasks.core import judge_log_names
         from tasks.review import _judge_log_name
         for backend in ("claude", "codex", "antigravity", "grok", "pi"):
             self.assertIn(_judge_log_name(backend), judge_log_names(), backend)
-
-    def test_partial_log_receipt_is_read_too(self):
-        d, td, tf = self._task(self.MARK, name="judge.partial.log")
-        self.assertIsNotNone(self._reader()(tf))
-
-    def test_close_records_the_single_judge_degradation(self):
-        d, td, tf = self._task(self.MARK)
-        env = dict(os.environ, PYTHONPATH=str(PLUGIN), PLAYBOOK_SESSION_ID="pid-059s")
-        r = subprocess.run([sys.executable, "-m", "tasks.cli", "work", "1"],
-                           cwd=d, env=env, capture_output=True, text=True, timeout=60)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        r = subprocess.run([sys.executable, "-m", "tasks.cli", "work", "done"],
-                           cwd=d, env=env, capture_output=True, text=True, timeout=120)
-        self.assertIn("Task 001 done.", r.stdout, r.stdout + r.stderr)
-        self.assertIn("tamper guard", (r.stdout + r.stderr).lower())
-        receipt = tf.read_text(encoding="utf-8")
-        self.assertIn("single-judge review ran with a DEGRADED tamper guard", receipt)
 
 
 if __name__ == "__main__":

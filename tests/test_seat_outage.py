@@ -921,7 +921,7 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
 
     def _refused_rounds(self):
         from tasks import numbers as N
-        from tasks.post_d6 import read_runs
+        from tasks.review_ledger import read_runs
         runs = read_runs(self.d / ".agent" / "tasks" / "042-demo")
         return N.rounds_table(runs, [], 0, 10 ** 12)["panels"]
 

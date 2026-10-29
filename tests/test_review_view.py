@@ -149,13 +149,12 @@ class CopyAndSeal(unittest.TestCase):
 
     def test_each_scopes_tree_in_the_copy_is_the_snapshots_base(self):
         d = _project(self)
-        from tasks import post_d6
         fp, trees, _heads = _snapshot_trees(d)
         view = _rv().make(d, _cfg(d), run_id="t2", fingerprint=fp, trees=trees)
         self.addCleanup(view.remove)
         ex = [":(exclude).agent"]
-        self.assertEqual(post_d6.worktree_tree(view.root, ex), trees[""])
-        self.assertEqual(post_d6.worktree_tree(view.root / "sub", ex), trees["sub"])
+        self.assertEqual(_rv().worktree_tree(view.root, ex), trees[""])
+        self.assertEqual(_rv().worktree_tree(view.root / "sub", ex), trees["sub"])
 
     def test_a_base_from_another_state_is_refused_although_the_fingerprints_agree(self):
         """A→B→A (plan panel P4, codex): a base recorded at B while the stamp and the copy say A."""
@@ -279,12 +278,6 @@ class Refusals(unittest.TestCase):
              mock.patch.object(rv, "MAX_FILES", 3):
             self.assertIn("files", rv.availability(d, _cfg(d)))
 
-    def test_an_exclude_that_hides_code(self):
-        d = _project(self)
-        (d / ".agent" / "config.json").write_text(
-            json.dumps({"code_roots": ["sub"], "fingerprint_exclude": ["src/"]}), encoding="utf-8")
-        with mock.patch.object(S, "view_mount_available", return_value=(True, "")):
-            self.assertIn("fingerprint_exclude", self._reason(d))
 
     def test_no_mount_possible(self):
         d = _project(self)
@@ -747,35 +740,6 @@ class ImplRoundTwoRealBubblewrap(unittest.TestCase):
 class ImplRoundThree(unittest.TestCase):
     """Task 231's impl panel round 3 (the last), red first."""
 
-    def test_r3_a_link_chain_is_followed_in_the_copy_link_by_link(self):
-        from tasks import post_d6
-        root = Path(tempfile.mkdtemp(prefix="rv-chain-"))
-        self.addCleanup(shutil.rmtree, root, True)
-        live, copy = root / "live", root / "copy"
-        for d in (live, copy):
-            d.mkdir()
-            (d / "changed.py").write_text("c\n", encoding="utf-8")
-            (d / "old.py").write_text("o\n", encoding="utf-8")
-        os.symlink("changed.py", copy / "middle")            # the copy's chain: alias → /live/middle → changed.py
-        os.symlink(str(live / "middle"), copy / "alias")
-        os.symlink("old.py", live / "middle")                # retargeted live during the review
-        self.assertEqual(post_d6.real_path(copy, "alias", alias=(str(live), str(copy))), "changed.py")
-
-    def test_pd6_dotdot_after_a_linked_folder_follows_the_link(self):
-        """The post-panel judge's run 1: `..` after a linked component is the TARGET's parent, as the judge reads it."""
-        from tasks import post_d6
-        root = Path(tempfile.mkdtemp(prefix="rv-dotdot-"))
-        self.addCleanup(shutil.rmtree, root, True)
-        live, copy = root / "live", root / "copy"
-        for d in (live, copy):
-            (d / "sub" / "inner").mkdir(parents=True)
-            (d / "other").mkdir()
-            (d / "sub" / "changed.py").write_text("s\n", encoding="utf-8")
-            (d / "other" / "changed.py").write_text("o\n", encoding="utf-8")
-            os.symlink("../sub/inner", d / "other" / "dir")
-        os.symlink(str(live) + "/other/dir/../changed.py", copy / "alias")
-        self.assertEqual(post_d6.real_path(copy, "alias", alias=(str(live), str(copy))), "sub/changed.py")
-        self.assertEqual(post_d6.real_path(copy, "../outside.py", alias=(str(live), str(copy))), "")
 
     def test_pd6_nested_unreadable_folders_are_removed(self):
         d = _project(self)
@@ -989,30 +953,12 @@ class PanelReadsACopy(unittest.TestCase, _PanelHarness):
         stamp = text.split("**Tree-state:** ", 1)[1].split()[0]
         self.assertEqual(C.tree_state_fingerprint(d), stamp)
 
-    def test_a_docs_edit_is_certifiable_and_a_code_edit_is_not(self):
-        d = self.d
-
-        def judge(adapter, *a, **kw):
-            (d / "docs" / "x.md").write_text("doc changed meanwhile\n", encoding="utf-8")
-            return "1. **Note** — fine.\n"
-
-        self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus"])
-        rounds = C.parse_judge_rounds((d / ".agent" / "tasks" / "042-demo" / "judge.md").read_text(encoding="utf-8"))
-        snap = rounds[0]["snapshot"]
-        self.assertIsNotNone(snap, "no Panel-snapshot — tail certification is gone")
-        can, beh, non, _why = C.tail_cert_delta_why(d, snap, rounds[0]["tree_state"])
-        self.assertTrue(can)
-        self.assertEqual(beh, [])
-        self.assertIn("docs/x.md", " ".join(non), "the snapshot was taken after the edit, not before the spawn")
-        (d / "src" / "a.py").write_text("a = 8  # code\n", encoding="utf-8")
-        can, beh, non, _why = C.tail_cert_delta_why(d, snap, rounds[0]["tree_state"])
-        self.assertTrue(beh)
-
 
 @unittest.skipUnless(_mountable(), "no copy can be mounted here")
 class SingleJudgeReadsACopy(unittest.TestCase, _PanelHarness):
-    """The post-panel judge: its copy is the delta's tree (plan panel P3), a live write while it runs voids nothing,
-    and its `[file:]` checks resolve in the copy (P16)."""
+    """The single judge after a panel reads a fixed copy too: a live write while it runs reaches neither the judge nor
+    its tamper guard (task 231; task 343 left `impl-review` a plain single judge, so the post-panel delta, its tree
+    and its `[file:]` checks went)."""
 
     def setUp(self):
         self.d = _project(self)
@@ -1052,96 +998,19 @@ class SingleJudgeReadsACopy(unittest.TestCase, _PanelHarness):
             os.chdir(old)
         return seen, out.getvalue()
 
-    def test_the_post_panel_judge_reads_the_deltas_tree_while_the_agent_writes(self):
+    def test_the_single_judge_reads_its_copy_while_the_agent_writes(self):
+        # task 343: `impl-review` after a panel is a plain single judge — it still reads a fixed copy of the tree
         d = self.d
 
         def during():
             (d / "src" / "a.py").write_text("a = 6  # written while the judge ran\n", encoding="utf-8")
 
         seen, log = self._single("1. **Note** — fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n", during)
-        self.assertTrue(seen and seen[0] is not None, "the post-panel judge read the live tree\n" + log[-3000:])
+        self.assertTrue(seen and seen[0] is not None, "the single judge read the live tree\n" + log[-3000:])
         self.assertEqual(seen[1], "a = 5  # after the panel\n")
-        self.assertIn("POST-D6 VERDICT: PASS", log)
-        self.assertIn("Its PASS binds the tree it reads", log)
+        self.assertNotIn("POST-D6", log)
         self.assertNotIn("TAMPER", log.upper().replace("TAMPER GUARD: CLEAN", ""))
         self.assertEqual([p for p in _rv().views_dir(d).iterdir() if p.is_dir()], [], "the copy was left behind")
-
-    def test_a_write_between_the_delta_and_the_copy_refuses_the_run(self):
-        from tasks import post_d6
-        d = self.d
-        real = post_d6.delta_parts
-
-        def then_write(*a, **kw):
-            out = real(*a, **kw)
-            (d / "src" / "a.py").write_text("a = 9  # after the delta was built\n", encoding="utf-8")
-            return out
-
-        with mock.patch.object(post_d6, "delta_parts", then_write):
-            seen, log = self._single("1. **Note** — fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n", lambda: None)
-        self.assertEqual(seen, [], "a judge ran on a copy that is not the delta's tree")
-        self.assertIn("Refused", log)
-
-    def test_g4_a_code_root_added_after_the_delta_refuses_the_run(self):
-        from tasks import post_d6
-        d = self.d
-        other = _init(d / "extra")
-        (other / "e.py").write_text("e\n", encoding="utf-8")
-        _git("add", "-A", cwd=other)
-        _git("commit", "-qm", "e", cwd=other)
-        with open(d / ".gitignore", "a", encoding="utf-8") as f:
-            f.write("extra/\n")
-        real = post_d6.delta_parts
-
-        def then_add_a_root(*a, **kw):
-            out = real(*a, **kw)
-            (d / ".agent" / "config.json").write_text(json.dumps({"code_roots": ["sub", "extra"]}), encoding="utf-8")
-            return out
-
-        with mock.patch.object(post_d6, "delta_parts", then_add_a_root):
-            seen, log = self._single("1. **Note** — fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n", lambda: None)
-        self.assertEqual(seen, [], "a judge ran though a scope was added after its delta")
-        self.assertIn("Refused", log)
-
-    def test_a_snapshot_of_another_state_is_never_recorded_as_reviewed(self):
-        """A→B→A around the post-panel judge's snapshot: the recorded tree must BE the delta's (impl round 1)."""
-        from tasks import core as tcore
-        d = self.d
-        real = tcore.build_panel_snapshot
-
-        def at_b(project, fp):
-            (d / "src" / "a.py").write_text("a = 7  # state B\n", encoding="utf-8")
-            try:
-                return real(project, fp)
-            finally:
-                (d / "src" / "a.py").write_text("a = 5  # after the panel\n", encoding="utf-8")
-
-        with mock.patch.object(tcore, "build_panel_snapshot", at_b):
-            seen, log = self._single("1. **Note** — fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n", lambda: None)
-        self.assertEqual(seen, [], "a judge ran with a reviewed snapshot of another state")
-        self.assertIn("Refused", log)
-
-    def test_r2_8_an_absolute_link_into_the_project_resolves_in_the_copy(self):
-        d = self.d
-        os.unlink(d / "link.py")
-        os.symlink(str((d / "docs" / "x.md").resolve()), d / "link.py")       # the delta retargets link.py
-        seen, log = self._single(
-            "**Important** [PRE-EXISTING] [file: docs/x.md] — older than the panel.\n\nCAP: 1/5 reported, exhausted\n",
-            lambda: None)
-        self.assertTrue(seen and seen[0] is not None, log[-2000:])
-        self.assertIn("POST-D6 VERDICT: FAIL", log, "the delta's link target was lost by a host-path resolution")
-
-    def test_a_file_field_resolves_in_the_copy_not_the_live_tree(self):
-        d = self.d
-
-        def during():
-            os.unlink(d / "alias.py")
-            os.symlink("src/a.py", d / "alias.py")          # live: now a delta file
-
-        seen, log = self._single(
-            "**Important** [PRE-EXISTING] [file: alias.py] — older than the panel.\n\nCAP: 1/5 reported, exhausted\n",
-            during)
-        self.assertTrue(seen and seen[0] is not None, log[-3000:])
-        self.assertIn("POST-D6 VERDICT: PASS", log, "the field was resolved in the live tree")
 
 
 @unittest.skipUnless(_mountable(), "no copy can be mounted here")

@@ -416,44 +416,6 @@ class SingleDegradedKeepsFindings(_Project):
         self.assertFalse((self.tf.parent / R._judge_log_name("claude")).exists())
 
 
-class TailCertFailsClosed(unittest.TestCase):
-    def _repo_with_snapshot(self):
-        from tasks.core import build_panel_snapshot, tree_state_fingerprint
-        d = _repo()
-        (d / "code.py").write_text("x = 1\n", encoding="utf-8")
-        (d / "docs").mkdir()
-        _commit_all(d)
-        snap = build_panel_snapshot(d, tree_state_fingerprint(d))
-        (d / "docs" / "g.md").write_text("# d\n", encoding="utf-8")
-        return d, snap
-
-    def _raw_pass(self, project_path, prompt, timeout_secs):
-        import re as _re
-        n = _re.search(r"TAIL-CERT ([0-9a-f]+):", prompt).group(1)
-        return f"TAIL-CERT {n}: PASS\n"
-
-    def test_raising_snapshot_returns_none(self):
-        d, snap = self._repo_with_snapshot()
-        with mock.patch.object(R, "_run_tail_cert_judge_raw", side_effect=self._raw_pass), \
-             mock.patch.object(R, "_snapshot_repo_state", side_effect=RuntimeError("boom")):
-            v = R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS")
-        self.assertIsNone(v)
-
-    def test_degraded_guard_returns_none(self):
-        d, snap = self._repo_with_snapshot()
-        degraded = {"mutations": [], "cautions": ["content-hash guard degraded: x"]}
-        with mock.patch.object(R, "_run_tail_cert_judge_raw", side_effect=self._raw_pass), \
-             mock.patch.object(R, "_detect_tamper_full", return_value=degraded):
-            v = R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS")
-        self.assertIsNone(v)
-
-    def test_clean_guard_still_certifies(self):
-        d, snap = self._repo_with_snapshot()
-        with mock.patch.object(R, "_run_tail_cert_judge_raw", side_effect=self._raw_pass):
-            v = R.run_tail_cert_judge(d, snap, ["docs/g.md"], "PANEL PASS")
-        self.assertIsNotNone(v)
-
-
 class TaskDirExemption(unittest.TestCase):
     """W4 (T045 + plan panel P5/codex-high #3): the untracked-task-dir exemption
     fires only when task.md ITSELF is untracked; when task.md is tracked, only

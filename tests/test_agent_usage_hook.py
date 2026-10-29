@@ -17,7 +17,7 @@ Held:
     nothing unread (task 247); "another size" is the end of the last COMPLETE line, and a half-written last line marks
     unless it names a user entry — it may be a call no reader will count (task 252 and its impl round 1);
   * a session with no task records under "-";
-  * a judge, tail-cert or monitor session records nothing (task 232 counts the judges' own usage);
+  * a judge or monitor session records nothing (task 232 counts the judges' own usage);
   * a crash of the recorder exits 0, prints nothing, records nothing, and its journal line says it was skipped;
   * outside a playbook project nothing is created.
 
@@ -133,9 +133,8 @@ class TheWiring(unittest.TestCase):
 
 
 class WhatItLeavesAlone(_Project):
-    def test_a_judge_a_tail_cert_or_a_monitor_session_records_nothing(self):
-        for env in ({"PLAYBOOK_SESSION_ID": "judge"}, {"PLAYBOOK_SESSION_ID": "tail-cert"},
-                    {"PLAYBOOK_ROLE": "monitor"}):
+    def test_a_judge_or_a_monitor_session_records_nothing(self):
+        for env in ({"PLAYBOOK_SESSION_ID": "judge"}, {"PLAYBOOK_ROLE": "monitor"}):
             r = self.run_hook(self.payload(), **env)
             self.assertEqual((r.returncode, r.stdout), (0, ""), (env, r.stderr))
         self.assertEqual(self.records(), [])
@@ -200,9 +199,8 @@ class AtTheSessionsEnd(_Project):
         self.assertEqual([x["calls"] for x in self.records()], [2])
         self.assertTrue(self.sdir.exists())
 
-    def test_a_judge_or_tail_cert_session_end_records_nothing(self):
+    def test_a_judge_session_end_records_nothing(self):
         self.end("exit", PLAYBOOK_SESSION_ID="judge")
-        self.end("exit", PLAYBOOK_SESSION_ID="tail-cert")
         self.assertEqual(self.records(), [])
 
     def test_a_stop_then_the_sessions_end_count_each_call_once(self):

@@ -154,8 +154,7 @@ class TheRunner(_Project):
         """Impl panel r1: a review must not write the project (opus I1), and codex's Stop runs the stop hook as a
         subprocess whose run its own line already says (sonnet I2). The exit actions still run, the status is kept."""
         out = self.root / "acted"
-        for env in ({"PLAYBOOK_SESSION_ID": "judge"}, {"PLAYBOOK_SESSION_ID": "tail-cert"},
-                    {"PLAYBOOK_HOOK_NESTED": "1"}):
+        for env in ({"PLAYBOOK_SESSION_ID": "judge"}, {"PLAYBOOK_HOOK_NESTED": "1"}):
             with self.subTest(env=env):
                 out.unlink(missing_ok=True)
                 r = self.run_hook(self.in_lane(f"pb_on_exit 'touch {out}'\nexit 2"), **env)

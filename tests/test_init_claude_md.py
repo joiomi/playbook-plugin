@@ -200,9 +200,9 @@ class ProjectPartAfterTemplateSections(unittest.TestCase):
 
     def test_hash_line_inside_an_html_comment_does_not_split_a_template_section(self):
         # V4: a closed `<!-- -->` comment is text, like a closed fence
-        x = "# P\n\n## CLI\n\nSTALE ONE\n<!--\n# Example\n-->\nSTALE TWO\n"
+        x = "# P\n\n## CLI\n\nOBSOLETE-MARK ONE\n<!--\n# Example\n-->\nOBSOLETE-MARK TWO\n"
         out = cmm.merge_claude_md(TEMPLATE, x, "P")
-        self.assertNotIn("STALE", out)
+        self.assertNotIn("OBSOLETE-MARK", out)      # (task 343: the template itself says STALE)
         self.assertNotIn("# Example", out)
 
     def test_backtick_in_the_info_string_is_not_a_fence(self):

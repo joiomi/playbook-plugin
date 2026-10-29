@@ -194,7 +194,7 @@ class NoBlockYet(_Project):
         """Row 10 (impl round 1: opus, a pre-existing placement): with no block yet and `## Owner rulings` written
         before the first `---`, the capture goes at the end of `## References`, above the rulings — appended at the end
         it became part of them, and his chat reached the judges as rulings."""
-        from tasks.post_d6 import extract_owner_rulings
+        from tasks.rulings import extract_owner_rulings
         t = self.text()
         i = t.index("\n---\n")
         self.tf.write_text(t[:i] + "\n" + RULINGS + t[i:], encoding="utf-8")
@@ -212,7 +212,7 @@ class NoBlockYet(_Project):
         """Row 13 (impl round 2: grok Important): `## References` is found the way every section writer finds an H2
         (`_atx_h2_text`) — indented, tab-separated, with closing hashes — so the first capture goes into it, above the
         rulings."""
-        from tasks.post_d6 import extract_owner_rulings
+        from tasks.rulings import extract_owner_rulings
         for spelling in ("## References ##", "##\tReferences", " ## References", "##  References"):
             with self.subTest(heading=spelling):
                 self.tf.write_text(TASK.replace("## References", spelling), encoding="utf-8")
@@ -230,7 +230,7 @@ class NoBlockYet(_Project):
     def test_with_no_references_heading_the_capture_stays_above_the_rulings(self):
         """Row 14 (impl round 2: grok Important; opus m): a task with no `## References` heading — the capture still
         goes above a `## Owner rulings` written before the first `---`, never inside it."""
-        from tasks.post_d6 import extract_owner_rulings
+        from tasks.rulings import extract_owner_rulings
         self.tf.write_text(TASK.replace("## References\n- context\n", "") , encoding="utf-8")
         t = self.text()
         i = t.index("\n---\n")

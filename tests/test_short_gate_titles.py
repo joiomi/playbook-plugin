@@ -116,12 +116,25 @@ def sentences(title: str) -> int:
     return len(BREAK_RE.findall(CODE_SPAN_RE.sub("``", title))) + 1
 
 
+def _pre_review_back(text: str) -> str:
+    """Task 343 (plan panel P6) moved `## Pre-review` before the implementation review; the before-213 renders have it
+    right before `## Parked`. Put it back there, so the rest is compared by position as before."""
+    lines = text.split("\n")
+    if "## Pre-review" not in lines or "## Parked" not in lines:
+        return text
+    a = lines.index("## Pre-review")
+    b = next((i for i in range(a + 1, len(lines)) if lines[i].startswith("## ")), len(lines))
+    block, rest = lines[a:b], lines[:a] + lines[b:]
+    at = rest.index("## Parked")
+    return "\n".join(rest[:at] + block + rest[at:])
+
+
 def old_to_new() -> "dict[str, str]":
     """Every template title that changed, old -> new, by position in each before-213 render."""
     out = {}
     for name, ty in OLD_RENDERS.items():
         old = gates((BEFORE / f"render-{name}.md").read_text(encoding="utf-8"))
-        new = gates(template.render_template(1, "X", ty))
+        new = gates(_pre_review_back(template.render_template(1, "X", ty)))
         assert len(old) == len(new), name
         out.update({o: n for o, n in zip(old, new) if o != n})
     return out

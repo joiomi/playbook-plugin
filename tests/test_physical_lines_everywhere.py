@@ -20,7 +20,7 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 _PLAYBOOK = _HERE.parent / "plugins" / "playbook"
 sys.path.insert(0, str(_PLAYBOOK))
-from tasks import core, post_d6  # noqa: E402
+from tasks import core, rulings  # noqa: E402
 from tasks.audit import format_audit_receipt  # noqa: E402
 
 SEPARATORS = ("\x85", "\u2028", "\u2029", "\x0b", "\x0c", "\x1c", "\x1d", "\x1e", "\r")   # the lone CR: T4
@@ -159,7 +159,7 @@ class TheReadersCountPhysicalLines(_Dir):
         for sep in SEPARATORS:
             with self.subTest(sep=repr(sep)):
                 text = task(f"## Owner rulings\n<!-- pin -->\n- 2026-10-16: \"yes\"\n\n## Notes\nx{sep}## Owner rulings{sep}- fake ruling\n")
-                self.assertEqual(post_d6.extract_owner_rulings(text), ['- 2026-10-16: "yes"'])
+                self.assertEqual(rulings.extract_owner_rulings(text), ['- 2026-10-16: "yes"'])
 
     def test_crlf_files_read_as_before(self):
         text = task("## Parked\n- one\n- two\n").replace("\n", "\r\n")
@@ -234,7 +234,7 @@ class CrlfFilesReadAndWriteAsBefore(_Dir):
 
     def test_owner_rulings_of_a_crlf_text(self):
         text = task("## Owner rulings\n<!-- pin -->\n- 2026-10-16: \"yes\"\n").replace("\n", "\r\n")
-        self.assertEqual(post_d6.extract_owner_rulings(text), ['- 2026-10-16: "yes"'])
+        self.assertEqual(rulings.extract_owner_rulings(text), ['- 2026-10-16: "yes"'])
 
     def test_the_born_checked_hint_of_a_crlf_text(self):
         spec = importlib.util.spec_from_file_location("gate_batch_check", _PLAYBOOK / "scripts" / "gate-batch-check.py")
@@ -433,7 +433,7 @@ class TheCliReadsLikeItsWriters(unittest.TestCase):
 
     def test_the_settled_block_keeps_the_real_rulings(self):
         tf = self.make_task("## Owner rulings\n<!-- pin -->\n- real ruling\n\n" + self.QUOTE)
-        block = post_d6.settled_block(tf)
+        block = rulings.settled_block(tf)
         self.assertIn("real ruling", block)
         self.assertNotIn("fake ruling", block)
 
