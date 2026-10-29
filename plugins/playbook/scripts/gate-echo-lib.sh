@@ -1580,13 +1580,13 @@ PB_HJ_STS=""               # seconds), `sts` (the wall time of that sample, epoc
 PB_HJ_BOOT=""
 
 # pb_hook_begin NAME — from here on, this run writes its line when the hook exits. The runner is installed in every
-# case (it runs the hook's own exit actions); no LINE is written for a review's session (`judge`, `tail-cert`: a review
+# case (it runs the hook's own exit actions); no LINE is written for a review's session (`judge`: a review
 # must not write the project — impl panel r1, opus) nor for a nested run (`PLAYBOOK_HOOK_NESTED=1`: codex's Stop runs
 # the stop hook as a subprocess, and its own line already says the run — impl panel r1, sonnet).
 pb_hook_begin() {
     _PB_HJ_HOOK="$1"
     [ "${PLAYBOOK_HOOK_NESTED:-}" != 1 ] || _PB_HJ_HOOK=""
-    case "${PLAYBOOK_SESSION_ID:-}" in judge|tail-cert) _PB_HJ_HOOK="" ;; esac
+    case "${PLAYBOOK_SESSION_ID:-}" in judge) _PB_HJ_HOOK="" ;; esac
     trap '_PB_HJ_ERR_CMD=$BASH_COMMAND; _PB_HJ_ERR_LINE=$LINENO' ERR
     trap '_pb_hj_exit' EXIT
 }

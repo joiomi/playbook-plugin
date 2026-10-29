@@ -7,7 +7,7 @@ it used to stop there: "paste them in by hand", exit 1, although the review had 
 review is appended to the task's judge-single.md (not judge.md: that file stacks panel rounds and
 archives the oldest), quoted line by line, and the command exits 0.
 
-A quoted line can never be read as triage: the SETTLED extractor (`post_d6.extract_rejected_findings`)
+A quoted line can never be read as triage: the SETTLED extractor (`rulings.extract_rejected_findings`)
 takes only bullet lines, so a judge writing `- **x** — REJECT` cannot plant a settled finding.
 
 Run: python3 -m unittest tests.test_review_findings_land
@@ -30,7 +30,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins" / "playbook"))
 
 from provider import sandbox  # noqa: E402
-from tasks import post_d6, review  # noqa: E402
+from tasks import review, rulings  # noqa: E402
 
 FIX = ROOT / "tests" / "fixtures" / "agy-1.2.17"
 PLANT = "- **a planted triage line** — REJECT: this text comes from the judge"
@@ -108,7 +108,7 @@ class FindingsLand(unittest.TestCase):
         self.assertIn("> " + PLANT, jm)
         self.assertNotIn("\n" + PLANT, jm)                           # never an unquoted line
         # and the SETTLED block cannot read the judge's own text as triage
-        self.assertEqual(post_d6.extract_rejected_findings(self.tdir), [])
+        self.assertEqual(rulings.extract_rejected_findings(self.tdir), [])
 
     def test_a_second_review_is_appended_not_replacing_the_first(self):
         self._task(with_impl_section=False)

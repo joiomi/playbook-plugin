@@ -60,11 +60,11 @@ SESSION_ID="$(resolve_session_id)"
 # runs it: the task is read inside the lane lock, an unresolved session records nothing; a busy lock with something
 # unread leaves an `unknown` marker, since nothing reads this transcript after its end — a `/clear` included: the
 # SessionStart that follows points the session at the new transcript, task 247 — PB_AU_MARK_BUSY). Its answer joins this hook's
-# journal line. Never for a judge's or a tail-cert's session (the monitor's exited at the top); bounded to 3 s of the
+# journal line. Never for a judge's session (the monitor's exited at the top); bounded to 3 s of the
 # hook's 5, and best-effort: it never changes what this hook does or decides.
 if [ -r "$HOOK_DIR/agent_usage.py" ]; then
     case "${PLAYBOOK_SESSION_ID:-}" in
-        judge|tail-cert) ;;
+        judge) ;;
         *) _pb_au_said=$(printf '%s' "$INPUT" | PB_AU_LANE="$AGENT_DIR" PB_AU_SESSION="$SESSION_ID" PB_AU_MARK_BUSY=1 \
                timeout 3 python3 -E -s "$HOOK_DIR/agent_usage.py" hook 2>/dev/null) || _pb_au_said="the recorder stopped"
            _pb_au_said="${_pb_au_said:0:120}"

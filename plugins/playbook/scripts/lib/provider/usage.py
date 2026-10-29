@@ -879,8 +879,8 @@ def judge_output_from_result(result, extract, format_judge_output) -> JudgeOutpu
       * recognized envelope WITH review text and no errors → that text, usage carried.
 
     Every failure marker starts with `(FAILED — ` so `judge_failed` fails the seat
-    AND `_judge_status` journals `fail` (tokens spent) on the panel, single and
-    tail-cert paths alike — never the no-cost `dnf`, never a clean PASS.
+    AND `_judge_status` journals `fail` (tokens spent) on the panel and single-judge
+    paths alike — never the no-cost `dnf`, never a clean PASS.
     """
     raw = result.stdout or ""
     got = extract(raw) if raw.strip() else None

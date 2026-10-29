@@ -66,28 +66,6 @@ def append_run(task_dir: Path, rec: dict) -> None:
         f.write(json.dumps(rec, sort_keys=True) + "\n")
 
 
-def gate_run(runs: "list[dict]", panel_fp: str, owner_ok: "str | None" = None
-             ) -> "tuple[bool, int, str]":
-    """(allowed, this run's number after the panel, refusal text). Runs 1-2 are
-    free; run k >= 3 needs an owner-ok reason — the owner's rule of 2026-10-13
-    18:37 made the plugin's (task 209, PHASE-B.md item 1): "two runs at most,
-    then the owner decides". Until task 209 a counted Critical in run 2 opened
-    run 3 by itself (task 108)."""
-    prior = [r for r in runs if r.get("panel") == panel_fp and r.get("kind") != "panel"]
-    n = len(prior) + 1
-    if n <= 2:
-        return True, n, ""
-    if owner_ok and owner_ok.strip():
-        return True, n, ""
-    why = ("the stop rule allows the post-panel judge two runs at most, then the owner decides"
-           + (" (run 2 counted a Critical: fix it, and let the owner decide on a third run)"
-              if n == 3 and int(prior[-1].get("critical") or 0) > 0 else ""))
-    return False, n, (
-        f"post-D6 run cap: this would be single-judge run {n} after impl panel "
-        f"{panel_fp}, and {why}. Nothing was spent. Close on the last verdict, or let "
-        'the owner decide:  tasks impl-review <N> --owner-ok --reason "…"')
-
-
 def _owner_alive(rec: dict) -> "bool | None":
     """True/False when the reservation's owning process can be judged (same host,
     live pid), None otherwise."""
@@ -155,13 +133,12 @@ class PanelRefused(Exception):
 
 
 def reserve_panel(task_file, stale_after: float = 7200, *, mode: "str | None" = None,
-                  bound_since: "str | None" = None, gate=None, record: "dict | None" = None
-                  ) -> "tuple[bool, str]":
+                  gate=None, record: "dict | None" = None) -> "tuple[bool, str]":
     """A panel's reservation (round 2): taken BEFORE the panel's tamper snapshot so
     a concurrent single judge cannot append under it; never counted by the cap.
     Task 209: `gate()` runs under the same lock, after the in-progress check — a
     non-empty answer raises `PanelRefused` with it, nothing written; `record` adds
-    fields to the reservation (the risk, caps and guard list the close reads)."""
+    fields to the reservation (the risk and the caps the close reads)."""
     import secrets
     from tasks.filelock import task_lock
     task_file = Path(task_file)
@@ -172,9 +149,7 @@ def reserve_panel(task_file, stale_after: float = 7200, *, mode: "str | None" = 
         if refusal:
             raise PanelRefused(refusal)
         rid = secrets.token_hex(6)
-        # task 149: the panel's mode and the stale-close opt-in in force when it ran
-        # — a later removal of the opt-in must not free this task from it
-        extra = {k: v for k, v in (("mode", mode), ("bound_since", bound_since)) if v}
+        extra = {"mode": mode} if mode else {}
         append_run(task_file.parent, {"id": rid, "kind": "panel", "status": "reserved",
                                       "expires_after": float(stale_after), **_owner_fields(),
                                       **(record or {}), **extra})
@@ -197,38 +172,23 @@ def panel_refusal(task_file) -> str:
     return _in_progress_msg(Path(task_file), live or "a reservation")
 
 
-def reserve_run(task_file, panel: str, owner_ok: "str | None", stale_after: float = 7200):
-    """Check the cap and RESERVE the run under the task lock, BEFORE the judge is
-    spawned (task 108 r1: a check-then-append-after-the-judge window let two
-    concurrent runs both pass). Returns (allowed, run number, refusal, run id). A
-    reservation never completed (a killed process) keeps counting — the spend
-    happened; `fail_run` releases a run that produced no review."""
+def reserve_run(task_file, stale_after: float = 7200) -> "tuple[bool, str, str]":
+    """RESERVE a single judge's run under the task lock, before the judge is spawned (task 108 r1: a check made after
+    the judge let two runs both pass): (allowed, refusal, run id). Refused, with nothing written, only while another
+    review — a single judge or a panel — holds a live reservation on the task (task 108 run 2: its append would change
+    the task folder under the first run's tamper guard and void it). No cap (task 343, PLAN-PLAYBOOK-2.md 4.1 a: the
+    post-panel judge's two runs went with it). `fail_run` releases a run that produced no review."""
     import secrets
     from tasks.filelock import task_lock
     task_file = Path(task_file)
     with task_lock(task_file):
-        bad = ledger_corrupt_lines(task_file.parent)
-        if bad and not (owner_ok and owner_ok.strip()):
-            # a truncated record could hide a counted run (codex, task 108): refuse
-            return False, 0, (
-                f"post-D6 run ledger {task_file.parent / RUNS_NAME} has {bad} corrupt "
-                "line(s) — the run count cannot be trusted. Repair or remove them, or let "
-                'the owner decide:  tasks impl-review <N> --owner-ok --reason "…"'), ""
-        runs = read_runs(task_file.parent)
-        live = _live_reservation(runs, panel, stale_after)
+        live = _live_reservation(read_runs(task_file.parent), "", stale_after)
         if live:
-            # a second concurrent run: its reservation append would change the
-            # task dir under the first run's tamper guard and void that paid run
-            # (codex, task 108 run 2) — refuse WITHOUT writing.
-            return False, 0, _in_progress_msg(task_file, live), ""
-        ok, n, msg = gate_run(runs, panel, owner_ok)
-        if not ok:
-            return False, n, msg, ""
+            return False, _in_progress_msg(task_file, live), ""
         rid = secrets.token_hex(6)
-        append_run(task_file.parent, {"id": rid, "panel": panel, "status": "reserved",
-                                      "expires_after": float(stale_after), **_owner_fields(),
-                                      "owner_ok": (" ".join(owner_ok.split()) if owner_ok else None)})
-    return True, n, "", rid
+        append_run(task_file.parent, {"id": rid, "kind": "single", "status": "reserved",
+                                      "expires_after": float(stale_after), **_owner_fields()})
+    return True, "", rid
 
 
 def finish_run(task_dir: Path, rid: str, rec: dict) -> None:

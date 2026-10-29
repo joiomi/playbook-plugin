@@ -914,7 +914,7 @@ def _scope_state(repo: Path, exclude: "list[str]") -> "tuple[str | None, list[st
 def tree_fingerprint(project: Path, cfg: dict) -> str:
     """The tree's fingerprint for the receipt (task 342; plan panel P5): per scope (the project and each code root),
     its HEAD — or `unborn` — and each path that differs from it with its content (`_scope_state`, `_content`); `.agent`
-    and the config's `fingerprint_exclude` left out, Python's caches too. Works before the first commit; writes nothing.
+    left out (the fingerprint's own exclusion, task 343), Python's caches too. Works before the first commit; writes nothing.
     "" when git cannot answer."""
     from tasks.core import _fingerprint_exclude_pathspecs
     exclude = _fingerprint_exclude_pathspecs(cfg)
@@ -1474,7 +1474,7 @@ def _cmd_red(cmd_args: "list[str]") -> None:
             said = rec["status"] + (f" (mutant: {mutant})" if mutant and rec["status"] == "red" else "")
             if rec.get("moved"):
                 said += (" — the tree changed while it ran: it counts for nothing (a file the test itself writes can be "
-                         "left out with `fingerprint_exclude` in .agent/config.json)")
+                         "left out with `.gitignore`)")
             detail = rec["error"] or rec["last"]
             print(_one_line(f"  row {row['row']} ({row['kind']}): {said}" + (f" — {detail}" if detail else "")))
             if mutant and rec["status"] == "green":

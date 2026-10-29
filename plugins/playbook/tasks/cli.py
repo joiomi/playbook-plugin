@@ -338,7 +338,7 @@ _USAGE = {
     "new": "tasks new <type> <name> [intent words …]  (intent words starting with `--` go after a `--`)",
     "adopt": "tasks adopt <task folder name>",
     "guide": "tasks guide [<type>]",
-    "work": 'tasks work <N> [--force] [--reopen]  |  tasks work done [--force|--stale-panel-ok|--owner-ok --reason "why"]',
+    "work": 'tasks work <N> [--force] [--reopen]  |  tasks work done [--force --reason "why"]',
 }
 
 
@@ -386,16 +386,8 @@ def _wrong_usage(cmd: str, args: list) -> "str | None":
     """Why `args` is wrong usage of `cmd`, or None (task 116). Runs BEFORE the session GC,
     so a refusal really changes nothing."""
     if cmd == "work" and args[:1] == ["done"]:
-        rest = args[1:]
-        hatch = next((h for h in ("--force", "-f", "--stale-panel-ok", "--owner-ok") if h in rest), None)
-        reason = None
-        if "--reason" in rest:
-            i = rest.index("--reason")
-            if i + 1 < len(rest) and not rest[i + 1].startswith("-"):    # `-f` is no reason (G1-6)
-                reason = rest[i + 1]
-        if hatch and not (reason and reason.strip()):
-            return f'{hatch} requires --reason "why" — a forced or stale-panel close must record why'
-        return None
+        from tasks.lifecycle import done_option_problem      # one rule for both (task 343)
+        return done_option_problem(list(args[1:]))
     if cmd == "work" and args:
         # task 140 (owner Q6): a done task is reopened only on request
         extra = [a for a in args[1:] if a not in ("--force", "-f", "--reopen")]

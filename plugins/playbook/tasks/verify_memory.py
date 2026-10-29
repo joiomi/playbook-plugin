@@ -14,8 +14,7 @@ repository as the commit it points at, and hides an edit under a skip-worktree o
 nothing is reused — when a scope cannot be listed or is not its own repository (a `code_roots` dir with no `.git` would
 be listed through the outer one), an index entry is unmerged, intent-to-add, a gitlink or an untracked repository that is
 not itself a scope, or carries one of those bits, a link leaves the scope or points at no file, or anything goes wrong
-building it. The owner's
-`fingerprint_exclude` is not applied: it may cover code.
+building it.
 
 The memory: `<lane>/journal/verify-green.json` — per command, its newest run `{key, command, started, ok, ts, seconds}`,
 read and written under `<lane>/journal/verify-green.lock`. Before a command runs, its start is written as a red mark

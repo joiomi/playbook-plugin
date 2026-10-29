@@ -75,13 +75,13 @@ fi
 # lane that is a link or not writable, through a linked journal/, into a hooks.jsonl that is a link or not a regular
 # file — a FIFO would hang the hook); no rotation of its own (the plugin's hooks rotate the file).
 # tests/test_hook_journal_python.py holds the three writers to the same answers. Always keeps the exit status. No
-# line for a review's session (judge, tail-cert).
+# line for a review's session (judge).
 PB_HJ_DECISION=""; PB_HJ_DETAIL=""
 _pb_nudge_journal() {
     local rc=$? LC_ALL=C lane="$AGENT_DIR" p="$PROJECT_DIR" jdir hfile ts ms=null t0="${_PB_HJ_T0:-}" t1 locked=none
     local re v h k sub event tool tuid sid hsid agent decision detail line error="" fresh=false task=null
     set +e
-    case "${PLAYBOOK_SESSION_ID:-}" in judge|tail-cert) exit "$rc" ;; esac
+    case "${PLAYBOOK_SESSION_ID:-}" in judge) exit "$rc" ;; esac
     _pbn_id() { v="${1:0:$(( $2 * 2 ))}"; v="${v//[^A-Za-z0-9._:@\/+=-]/}"; v="${v:0:$2}"; }
     # the head only: before the first tool input, within 4 KiB (a nested `agentId` is not the caller's — impl panel r1)
     _pbn_first() {

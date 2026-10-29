@@ -542,10 +542,9 @@ _BLOCK = re.compile(r"^### (\S+) · risk (\S+)")
 # The verdict sits at a fixed place in the writer's text (`core.format_verify_receipt`): a prefix of its own, or right
 # after `<round fp> vs close <close fp> — `. It is read only there, never as a word of the free text after it, so a
 # reason that names a verdict is not that verdict (task 236's impl round 2, Q1: opus, sonnet).
-_VERDICT_PREFIX = (("no stamp recorded", "NO-STAMP"), ("EXCLUDE-COVERS-CODE —", "EXCLUDE-COVERS-CODE"),
-                   ("n/a — the newest single-judge review ran with a", "SINGLE-TAMPER-DEGRADED"))
+_VERDICT_PREFIX = (("not judged — not a git repository", "NOT-JUDGED"),)
 _VERDICT_AT = re.compile(r"(?:\S+ )?vs close (?:\(unavailable\)|\S*) — "     # a fingerprint can be empty (K2)
-                         r"(TAMPER-GUARD-DEGRADED|UNREADABLE|FRESH|STALE, but TAIL-CERTIFIED|STALE)")
+                         r"(FRESH|STALE)")       # task 343: the two verdicts left
 
 
 def _freshness_of(line: str) -> str:
@@ -555,33 +554,14 @@ def _freshness_of(line: str) -> str:
             return name
     m = _VERDICT_AT.match(body)
     if m:
-        return "TAIL-CERTIFIED" if m.group(1).endswith("TAIL-CERTIFIED") else m.group(1)
+        return m.group(1)
     return "other"
-
-
-# The panel line's fields after its verdict, in the writer's order (`core.format_verify_receipt`): `, accepted: "…"`,
-# then `; <bound>` (`owner-ok: "…"` or `bound to post-D6 PASS …`) and `; <stop rule>`. Each field may hold `;` and
-# quotes of its own (the stop rule's clause always holds a `;`), so a field runs to the next of these separators or the
-# line's end (task 236's impl round 1, Y1: opus, codex, grok). A reason that itself holds one of the separators — the
-# literal `; stop rule (D6): ` — is the one text this split cannot tell apart.
-_FIELD_SEP = re.compile(r'; (?=owner-ok: "|bound to post-D6 PASS |stop rule \(D6\): )')
-_OK_SEP = re.compile(r'; (?=owner-ok: ")')
-
-
-def _quoted(field: str, label: str) -> "str | None":
-    """`<label>"…"` → the text between the label's opening quote and the field's last quote; a field cut before its
-    closing quote (the journal's 200 bytes) keeps what is there."""
-    if not field.startswith(label + '"'):
-        return None
-    body = field[len(label) + 1:]
-    return body[:-1] if body.endswith('"') else body
 
 
 def receipt_close(task_text: str) -> "dict | None":
     """How this closure closed, from the receipt's newest `###` block (the close inserts its block at the top; the
-    newest STAMP wins wherever it sits): stamp, epoch, risk, freshness (FRESH / STALE / TAIL-CERTIFIED / NO-STAMP / …),
-    the accepted and forced reasons, the bound (`owner_ok`, or `bound` for a post-panel PASS) and the stop rule's
-    clause, the post-panel judge's line (runs, last verdict, every owner-ok), the commands' PASS / FAIL counts. A pure
+    newest STAMP wins wherever it sits): stamp, epoch, risk, freshness (FRESH / STALE / NOT-JUDGED; task 343 left
+    these), the forced reason, the commands' PASS / FAIL counts. A pure
     reader, so it reads fail-OPEN as `core._latest_receipt_line` does: a closed fence hides a quoted receipt (task 235's
     last round, W3), an unclosed fence above does not hide the real one (task 236's impl round 1, Y9: grok)."""
     from tasks.core import _atx_h2_text, _iter_nonfenced, _physical_lines
@@ -613,30 +593,13 @@ def receipt_close(task_text: str) -> "dict | None":
     if best is None:
         return None
     out = {"stamp": best["stamp"], "epoch": best["epoch"], "risk": best["risk"], "freshness": None,
-           "accepted_reason": None, "forced_reason": None, "owner_ok": None, "bound": None, "stop_rule": None,
-           "post_panel": None, "commands": {"pass": 0, "fail": 0}}
+           "forced_reason": None, "commands": {"pass": 0, "fail": 0}}
     for ln in best["lines"]:
         s = ln.strip()
         if s.startswith("- **Forced close, reason:**"):
             out["forced_reason"] = s.split(":**", 1)[1].strip()
         elif s.startswith("- **Panel tree-state:**"):
             out["freshness"] = _freshness_of(s)
-            head, *fields = _FIELD_SEP.split(s)
-            i = head.find(', accepted: "')
-            if i >= 0:
-                out["accepted_reason"] = _quoted(head[i + 2:], "accepted: ")
-            for f in fields:
-                if f.startswith('owner-ok: "'):
-                    out["owner_ok"] = _quoted(f, "owner-ok: ")
-                elif f.startswith("bound to post-D6 PASS "):
-                    out["bound"] = f
-                elif f.startswith("stop rule (D6): "):
-                    out["stop_rule"] = f
-        elif s.startswith("- **Post-D6 single judge:**"):
-            head, *oks = _OK_SEP.split(s)
-            m = re.match(r"- \*\*Post-D6 single judge:\*\* (\d+) run\(s\) after impl panel \S+ — last verdict ([A-Za-z?-]+)", head)
-            out["post_panel"] = {"runs": int(m.group(1)) if m else None, "verdict": m.group(2) if m else None,
-                                 "owner_ok": [_quoted(o, "owner-ok: ") for o in oks]}
         elif re.match(r"- \[PASS\]", s):
             out["commands"]["pass"] += 1
         elif re.match(r"- \[FAIL", s):          # `[FAIL(exit 1)]`
@@ -924,7 +887,7 @@ def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list
             kind = ("background" if b.get("event") == "UserPromptSubmit"
                     and note.startswith("not logged: a notification") else "owner-idle")
             # task 249: the gap up to the close's stamp in its own session (the virtual End) with the turn over is the
-            # close run as a background command — its verify and tail-cert spans are carved; the rest keeps its kind
+            # close run as a background command — its verify and review spans are carved; the rest keeps its kind
             # (tasks 247 / 248 counted 204 s / 213 s of it as the owner's while he slept)
             carve = kind == "background" or bool(b.get("_virtual"))
         elif "AskUserQuestion" in tools:
@@ -953,7 +916,7 @@ def session_partition(lines: "list[dict]", task: str, end: float, reviews: "list
 
 def seats_table(reviews: "list[dict]") -> "dict[str, dict]":
     """Per seat: runs, ok, failed, seconds (summed over its runs), tokens in / out / cache_read / cache_write from the
-    runs whose usage is known, how many were unknown, and the runs by kind (panel / single / tail-cert / …)."""
+    runs whose usage is known, how many were unknown, and the runs by kind (panel / single / …)."""
     out: "dict[str, dict]" = {}
     for r in reviews:
         s = out.setdefault(str(r.get("seat") or "?"), {"runs": 0, "ok": 0, "failed": 0, "seconds": 0.0, "in": 0,
@@ -1040,10 +1003,9 @@ def _iso_epoch(ts) -> "int | None":
 
 def rounds_table(runs: "list[dict]", reviews: "list[dict]", start: float, end: float, failed: int = 0) -> dict:
     """The closure's review rounds: panels (mode, outcome, critical, important, owner_ok — from the merged run ledger,
-    `post_d6.read_runs`), post-panel runs (verdict, critical, important, owner_ok), the single-judge calls and the
-    tail certifications counted one per review record — a single-judge record within 120 s of a post-panel row is that
-    run, not another one (impl r1, agy, codex, grok) — and the runs the ledger marks failed (which read_runs drops)."""
-    panels, post = [], []
+    `review_ledger.read_runs`), the single-judge calls counted one per review record, and the runs the ledger marks
+    failed (which read_runs drops). Task 343: the post-panel runs and the tail certifications went with their code."""
+    panels = []
     for r in runs:
         t = _iso_epoch(r.get("ts"))
         if t is None or not (start <= t <= end):
@@ -1054,22 +1016,8 @@ def rounds_table(runs: "list[dict]", reviews: "list[dict]", start: float, end: f
             m = r.get("measures") if isinstance(r.get("measures"), dict) else {}
             panels.append({"mode": r.get("mode"), "outcome": r.get("outcome"), "critical": m.get("critical"),
                            "important": m.get("important"), "owner_ok": r.get("owner_ok")})
-        elif "verdict" in r:
-            post.append({"verdict": r.get("verdict"), "critical": r.get("critical"), "important": r.get("important"),
-                         "owner_ok": r.get("owner_ok"), "_t": t})
-    unmatched = [p["_t"] for p in post]
-    single = 0
-    for rec in sorted((r for r in reviews if r.get("kind") == "single"), key=lambda r: r.get("_t") or 0):
-        t = rec.get("_t")
-        hit = next((u for u in unmatched if t is not None and abs(u - t) <= 120), None)
-        if hit is not None:
-            unmatched.remove(hit)
-        else:
-            single += 1
-    for p in post:
-        p.pop("_t", None)
-    return {"panels": panels, "post_panel": post, "single": single,
-            "tail_cert": sum(1 for r in reviews if r.get("kind") == "tail-cert"), "failed": failed}
+    single = sum(1 for r in reviews if r.get("kind") == "single")
+    return {"panels": panels, "single": single, "failed": failed}
 
 
 def owner_table(lines: "list[dict]", task: str, log_text: "str | None", start: "float | None" = None,
@@ -1220,12 +1168,10 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
     trans = [r for r in mine if r["hook"] == "tasks" and r.get("reason") in ("work", "done")]
     life = _life(trans, end, newest) if rc is not None else None
     if life is not None:
-        # the closure in file order: its close records lie after its first `work` and before the next `work` after
-        # its `done` (they come seconds after the receipt, up to the lag); its number is its `done`'s rank (W4, Y5)
+        # the closure in file order: after its first `work` and before the next `work` after its `done`; its number
+        # is its `done`'s rank (W4, Y5)
         first, done, nxt = life
         start = first["_t"]
-        closes = [r for r in mine if r["hook"] == "close" and first["_n"] < r["_n"] and (nxt is None or r["_n"] < nxt)
-                  and r["_t"] <= end + CLOSE_RECORD_LAG_S]
         closure_no = sum(1 for r in trans if r.get("reason") == "done" and r["_n"] <= done["_n"])
         # its review / verify records too, by the same file-order bounds (task 236's impl round 2, Q3: codex)
         # — before its `done` the closure's, after it the late ones, even inside one second (K4, codex)
@@ -1241,7 +1187,6 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
         start = window[0] if window else None
         nxt_t = min((r["_t"] for r in trans if r.get("reason") == "work" and r["_t"] > end), default=float("inf"))
         upto = min(end + CLOSE_RECORD_LAG_S, nxt_t)
-        closes = [r for r in mine if r["hook"] == "close" and start is not None and start <= r["_t"] <= upto]
         # a receipt with no `done` to anchor on is still a close: at least the first (Minor, opus)
         closure_no = max(1, sum(1 for r in trans if r.get("reason") == "done" and r["_t"] <= upto))
         win = task_records(enf, task, start, end) if start is not None else {h: [] for h in _TASK_HOOKS}
@@ -1317,16 +1262,6 @@ def compose(lane: Path, task_dir: Path, task: str, deadline: float, end: "float 
                     if start is not None else owner_table([], task, log))
     close = dict(rc) if rc else {}
     close.pop("epoch", None)
-    # the receipt holds the reasons whole; the journal's records (their `command` cut to 200 bytes) only fill a gap
-    # (task 235's last round, W2, opus)
-    for r in closes:
-        reason, cmd = str(r.get("reason") or ""), str(r.get("command") or "")
-        if reason == "stale close owner-ok" and not close.get("owner_ok"):
-            close["owner_ok"] = _quoted(cmd, "owner-ok: ") or cmd    # cut at 200 bytes: no closing quote (Y10, opus)
-        elif reason == "stale close bound" and not close.get("bound"):
-            close["bound"] = cmd
-        elif reason.startswith("stale close no judge") and not close.get("stop_rule"):
-            close["stop_rule"] = cmd
     out["close"] = close or None
     out["late_records"] = late
     return out
@@ -1446,14 +1381,10 @@ def format_closure(c: dict) -> "list[str]":
     r = c.get("rounds") or {}
     bits = [f"{p.get('mode')} panel {p.get('outcome')} (C{_n(p.get('critical'))} I{_n(p.get('important'))})"
             + (f" owner-ok: {p['owner_ok']}" if p.get("owner_ok") else "") for p in r.get("panels") or []]
-    bits += [f"post-panel {p.get('verdict')} (C{_n(p.get('critical'))} I{_n(p.get('important'))})"
-             + (f" owner-ok: {p['owner_ok']}" if p.get("owner_ok") else "") for p in r.get("post_panel") or []]
     if r.get("failed"):
         bits.append(f"failed runs ×{r['failed']}")
     if r.get("single"):
         bits.append(f"single judge ×{r['single']}")
-    if r.get("tail_cert"):
-        bits.append(f"tail-cert ×{r['tail_cert']}")
     out.append("  rounds: " + (" · ".join(bits) or "none") + f"  — judges' wall time {_dur(c.get('judges_wall'))}")
     for seat, s in sorted((c.get("seats") or {}).items()):
         out.append(f"  seat {seat}: {s['runs']} run(s), {s['failed']} failed, {_dur(s['seconds'], True)}, "
@@ -1480,10 +1411,8 @@ def format_closure(c: dict) -> "list[str]":
     cl = c.get("close") or {}
     if cl:
         bits = [str(cl.get("freshness") or "no panel check")]          # a forced close's receipt has no freshness line
-        for k, label in (("forced_reason", "forced"), ("accepted_reason", "accepted"), ("owner_ok", "owner-ok"),
-                         ("bound", ""), ("stop_rule", "no judge after the last round")):
-            if cl.get(k):               # a bound reads "bound to post-D6 PASS …" on its own (Minor, agy)
-                bits.append(f"{label}: {cl[k]}" if label else str(cl[k]))
+        if cl.get("forced_reason"):
+            bits.append(f"forced: {cl['forced_reason']}")
         out.append("  close: " + " · ".join(bits))
     return out
 

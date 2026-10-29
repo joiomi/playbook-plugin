@@ -126,7 +126,7 @@ def append_review(agent_dir, *, session_id="", seat="", task="", round_no=0,
     The record shares the enforcement envelope (`hook="review"`,
     `decision="record"`, `reason="review spend"`) so a journal reader sees it as
     one more `record` line, plus review-specific fields:
-      * `kind`        — "panel" | "single" | "tail-cert" | "intent" (task 120)
+      * `kind`        — "panel" | "single" | "intent" (task 120; "tail-cert" until task 343)
       * `seat`        — the judge spec, e.g. "claude:opus" / "codex:gpt-5.6:medium"
       * `task`        — task number ("042") or "-" for a taskless/--prompt review
       * `round`       — the review iteration this spend belongs to (int; 0 = unknown)
@@ -485,12 +485,12 @@ def append_hook_run(project_root, *, hook, event="", tool="", tool_use_id="", se
     """Append one hook-journal line for a run of `hook` in the project at `project_root`. Never raises; a write that
     cannot be made is skipped. `ms` is the run's duration (None when unknown); `timing` = (start stamp, fallback
     time) instead makes the duration be taken AFTER the journal's own rotation (impl panel r1, codex). No line for a
-    review's session (`PLAYBOOK_SESSION_ID` judge / tail-cert: a review must not write the project — opus).
+    review's session (`PLAYBOOK_SESSION_ID` judge: a review must not write the project — opus).
     Task 234 — null = not on this line, "" = read and none: `task` None → read from the session's pointer (as the bash
     writer does), else written once digits ("" kept, anything else null); `section` None → null; `susp`, `sts` and
     `boot` all None → this process's own sample; given values are written once valid (digits / 8 hex), else null."""
     try:
-        if os.environ.get("PLAYBOOK_SESSION_ID", "") in ("judge", "tail-cert"):
+        if os.environ.get("PLAYBOOK_SESSION_ID", "") == "judge":
             return
         lane = resolve_hook_lane(project_root)
         if lane is None:

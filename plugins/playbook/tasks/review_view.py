@@ -197,11 +197,7 @@ def availability(project: "Path | str", cfg: dict, task_file: "Path | str | None
         if not (project / ".git").is_dir():
             return "the project is a linked worktree (its .git is a file)"
         scopes = _scopes(project, cfg)
-        from tasks.core import _code_roots, owner_exclude_covers_behavioral
-        covers, hits = owner_exclude_covers_behavioral(project, cfg)
-        if covers:
-            return ("fingerprint_exclude hides code (" + ", ".join(hits[:3]) + ") — a copy could not be sealed "
-                    "over what the fingerprint does not see")
+        from tasks.core import _code_roots
         for rel in _code_roots(cfg):
             if rel not in scopes:
                 return f"code root {rel} resolves outside the project"

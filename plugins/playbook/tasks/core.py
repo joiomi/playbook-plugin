@@ -2272,16 +2272,6 @@ def _printable_path(rel: str) -> str:
     return rel.encode("utf-8", "backslashreplace").decode("utf-8")
 
 
-def _owner_exclude_specs(cfg: dict) -> "list[str]":
-    """The owner's RAW `fingerprint_exclude` strings (validated like
-    `_fingerprint_exclude_pathspecs`, but WITHOUT the `:(exclude)` magic) — for
-    the positive-pathspec checks that ask what an exclude COVERS."""
-    raw = cfg.get("fingerprint_exclude") if isinstance(cfg, dict) else None
-    if not isinstance(raw, list):
-        return []
-    return [p.strip() for p in raw if isinstance(p, str) and p.strip() and "\x00" not in p]
-
-
 def _index_bits_cleared(repo_path: Path, env: dict) -> bool:
     """In the index `env["GIT_INDEX_FILE"]` names, clear the bits that make git skip a working file (task 314, audit
     4's G5): assume-unchanged on every entry; skip-worktree on every entry too, except a file a sparse checkout leaves
@@ -2630,86 +2620,6 @@ def _scope_identity(project_path: Path, cand: Path) -> str:
         return "<unresolvable>"
 
 
-# Prose-shaped files an owner `fingerprint_exclude` may legitimately cover
-# (task 060): the documented use is bookkeeping such as `journal/`. Anything
-# else under an exclude — code, scripts, json/config, lock files, no extension
-# — is source the fingerprint must not be blind to.
-_BOOKKEEPING_SUFFIXES = (".md", ".rst", ".log")   # NOT .txt: requirements.txt / CMakeLists.txt are behaviour (impl-panel r1)
-
-
-def owner_exclude_covers_behavioral(project_path: Path,
-                                    cfg: dict) -> "tuple[bool, list[str]]":
-    """Does the OWNER-declared `fingerprint_exclude` hide any BEHAVIORAL (source)
-    path from the fingerprint? (task 060; T036 r6 codex:sol #1 + the 060 plan
-    panel, four judges: an exclude that covers code filters it out of the
-    material while the exclude-set hash is unchanged since F0, so an edit under
-    it reads FRESH for the WHOLE gate — tail certification is never reached.)
-
-    Per scope (outer + each validated `code_root`, since the exclusion applies
-    uniformly), the owner's RAW pathspecs are passed as POSITIVE pathspecs to
-    `git ls-files -z --cached --others --exclude-standard`, and the listed paths
-    are classified with `classify_delta_paths`. "Source" = a BEHAVIORAL path
-    that is not bookkeeping-shaped: the documented use of `fingerprint_exclude`
-    is owner bookkeeping such as `journal/` (docs/configuration.md), whose
-    `.md`/`.rst`/`.log` files classify behavioral only because they sit
-    outside `docs/` — those stay allowed; code, scripts, `.json`/config, lock
-    files and extension-less files under an exclude are source and are flagged.
-    Returns `(covers, paths)`: any source path → `(True, [<scope>/<path>, …])`;
-    a git error → `(True, ["<scope>: git error"])` (unknown = covers, fail
-    closed); no owner excludes → `(False, [])`. Never raises."""
-    specs = _owner_exclude_specs(cfg)
-    if not specs:
-        return (False, [])
-    hits: "list[str]" = []
-    try:
-        scopes = review_scopes(Path(project_path), cfg)
-    except Exception:
-        return (True, ["<scopes>: could not enumerate fingerprint scopes"])
-    for name, repo in scopes.items():
-        prefix = (name + "/") if name else ""
-        try:
-            r = subprocess.run(
-                ["git", "ls-files", "-z", "--cached", "--others",
-                 "--exclude-standard", "--", *specs],
-                cwd=repo, capture_output=True, timeout=60)
-        except (OSError, subprocess.SubprocessError):
-            hits.append(f"{prefix or '.'}: git error")
-            continue
-        if r.returncode != 0:
-            hits.append(f"{prefix or '.'}: git error")
-            continue
-        found = {os.fsdecode(t) for t in r.stdout.split(b"\0") if t}
-        # Union with what HEAD has under the exclude (impl-panel r1 codex-high
-        # #1): a STAGED DELETION (`git rm src/x.py`) leaves the index/worktree
-        # listing empty while the exclude hides the `D` line from the fingerprint
-        # — the deleted code must still count as covered.
-        try:
-            rt = subprocess.run(
-                ["git", "ls-tree", "-r", "--name-only", "-z", "HEAD", "--", *specs],
-                cwd=repo, capture_output=True, timeout=60)
-        except (OSError, subprocess.SubprocessError):
-            hits.append(f"{prefix or '.'}: git error")
-            continue
-        if rt.returncode != 0:
-            hits.append(f"{prefix or '.'}: git error")
-            continue
-        found |= {os.fsdecode(t) for t in rt.stdout.split(b"\0") if t}
-        # ls-files/ls-tree from the scope's cwd are already project-relative for
-        # a toplevel scope; a subdir project gets toplevel-relative names from
-        # `-z`? No — ls-files prints relative to cwd. Normalise anyway (cheap,
-        # idempotent) so the file-class table sees project-relative paths.
-        _top = _git_toplevel(repo)
-        _pre = _toplevel_prefix(repo, _top) if _top is not None else None
-        if _pre is None:
-            hits.append(f"{prefix or '.'}: git error")     # cannot classify → covers
-            continue
-        paths = sorted({_project_relative(x, _pre) for x in found})
-        beh, _non = classify_delta_paths(paths, is_outer_scope=(name == ""))
-        hits.extend(_printable_path(prefix + b) for b in beh
-                    if not b.lower().endswith(_BOOKKEEPING_SUFFIXES))
-    return (bool(hits), sorted(hits))
-
-
 def tree_state_fingerprint(project_path: Path, *, outer_head_override: "str | None" = None,
                            cfg: "dict | None" = None) -> str:
     """Content fingerprint of the CODE STATE: sha256 over HEAD + porcelain status
@@ -2731,11 +2641,7 @@ def tree_state_fingerprint(project_path: Path, *, outer_head_override: "str | No
     # `.agent/` is EXCLUDED: triaging findings edits task.md between the panel
     # and the close by design — the fingerprint must answer "did the CODE
     # change?", not "did the workflow record change?" (else the advisory fires
-    # on every single close and gets ignored). Projects can extend the
-    # exclusion for owner-declared bookkeeping (`fingerprint_exclude` in
-    # .agent/config.json, git pathspec strings — e.g. "journal/"): a standing
-    # journal gate writes project-side files after the last panel by
-    # construction, and F18's irreversible gate must not tax that.
+    # on every single close and gets ignored). Nothing else is left out (task 343: no owner exclude).
     if cfg is not None:
         _cfg = cfg
     else:
@@ -2743,10 +2649,7 @@ def tree_state_fingerprint(project_path: Path, *, outer_head_override: "str | No
             _cfg = load_config(Path(project_path))
         except Exception:
             _cfg = {}
-    # Single source of truth for the exclusion pathspecs (impl-panel r5 sonnet#1):
-    # the fingerprint and the tail-cert delta enumeration MUST use the identical
-    # list, so they share this helper rather than hand-rebuilding it (the R4-3
-    # exclude-set binding depends on that equivalence).
+    # Single source of truth for the exclusion pathspecs (impl-panel r5 sonnet#1).
     exclude = _fingerprint_exclude_pathspecs(_cfg)
     # Outer-tree material. NOTE: hashing untracked CONTENT changed fingerprint
     # values across the 1.5.5→1.5.6 upgrade; a stamp from an older round reads
@@ -2756,20 +2659,6 @@ def tree_state_fingerprint(project_path: Path, *, outer_head_override: "str | No
     if base is None:
         return ""            # git absent — no fingerprint beats a fabricated one
     material = base
-    # Bind the OWNER-DECLARED exclude set into the material (task 051, impl-panel
-    # opus#1/grok#1): the pathspecs only FILTER porcelain/diff/untracked output,
-    # so a `fingerprint_exclude` added after the panel for a path that was CLEAN
-    # at F0 left the hash unchanged — the tree read FRESH, the close never
-    # entered tail-cert, and the R4-3 exclude-set check in `tail_cert_delta`
-    # (which rejects exactly that change) was never reached. Hashing the specs
-    # makes an exclude-set change STALE by construction, so the close routes to
-    # the check that fails it closed. UNSET/empty key → nothing appended →
-    # byte-identical fingerprints for every project without the key; a project
-    # WITH it reads STALE once and self-heals at its next panel (the 1.5.6
-    # precedent above).
-    _owner_excl = sorted(e for e in exclude if e != ":(exclude).agent")
-    if _owner_excl:
-        material += "\0fingerprint_exclude:" + "\0".join(_owner_excl)
     # Nested code repos (config `code_roots`): a code-only edit inside a
     # gitignored nested checkout is invisible to the outer `git status`, so the
     # outer material above never moves for it. Fold each root's own material in.
@@ -2919,27 +2808,13 @@ def classify_delta_paths(paths: "list[str]", *,
     return sorted(behavioral), sorted(non_behavioral)
 
 
-def _fingerprint_exclude_pathspecs(cfg: dict) -> "list[str]":
-    """The git `:(exclude)…` pathspecs the fingerprint uses — `.agent` always,
-    plus any owner-declared `fingerprint_exclude`. The tail-cert descriptor and
-    the close-time delta enumeration reuse the SAME exclusion so they track
-    EXACTLY the paths that can move the fingerprint: a `.agent/` task-record edit
-    never moves it and so never appears in the delta (owner decision A: task
-    records are excluded from what the certification judge reviews)."""
-    specs = [":(exclude).agent"]
-    raw = cfg.get("fingerprint_exclude")
-    if raw is not None:
-        if not isinstance(raw, list):
-            print("[playbook] fingerprint_exclude: must be a list of git "
-                  "pathspec strings — ignored", file=sys.stderr)
-        else:
-            for _i, p in enumerate(raw):
-                if isinstance(p, str) and p.strip() and "\x00" not in p:
-                    specs.append(f":(exclude){p.strip()}")
-                else:
-                    print(f"[playbook] fingerprint_exclude[{_i}]: needs a "
-                          "non-empty pathspec string — skipped", file=sys.stderr)
-    return specs
+def _fingerprint_exclude_pathspecs(_cfg: "dict | None" = None) -> "list[str]":
+    """The git `:(exclude)…` pathspecs every fingerprint uses: `.agent` only — the task records, which a review's
+    triage writes by design. Task 343 (PLAN-PLAYBOOK-2.md 4.1 a): the owner's exclude key is gone, and the
+    config is not read; a project leaves out what its tests or gates write with `.gitignore`. One list for every
+    caller (the fingerprint, the panel's snapshot, `tasks red`, the fixed copy), so they cannot disagree (plan panel
+    P13)."""
+    return [":(exclude).agent"]
 
 
 def _git_head_commit(repo_path: Path) -> str:
@@ -3113,10 +2988,7 @@ def build_panel_snapshot(project_path: Path, tree_fp: str, *, cfg: "dict | None"
         except Exception:
             scopes_out[name]["base"] = None
             scopes_out[name]["base_error"] = "exception while building the base"
-    # Bind the effective exclusion set to F0 (impl-panel r4 codex:terra#1): adding
-    # a path to `fingerprint_exclude` AFTER the panel makes the fingerprint stale
-    # while hiding that path from the close-time enumeration — the close must
-    # reject a changed exclude set, so it is recorded here.
+    # The exclusion set the stamp was taken with (records-only checks it is the one now).
     return {"v": 1, "tree_fp": tree_fp, "scopes": scopes_out,
             "exclude": sorted(exclude)}
 
@@ -3155,491 +3027,10 @@ def _parse_name_status_z(raw: bytes) -> "set[str]":
     return out
 
 
-def _enumerate_scope_delta(repo: Path, f0_commit: str, f0_dirty: dict,
-                           exclude: "list[str]") -> "set[str] | None":
-    """The COMPLETE superset of scope-relative paths by which this repo's
-    fingerprint could have moved since F0 — or None on ANY git error (fail-closed).
-    Two sources cover every case (the fingerprint = HEAD + porcelain + diff +
-    untracked-content):
-      (a) `git diff --name-status -z -M <F0_commit>..HEAD` — every path in a
-          commit made SINCE the panel (working-tree diffs compare to the NEW HEAD
-          and would miss these);
-      (b) the F0-vs-close content-token map comparison (tokens carry content +
-          mode) over the union of F0-dirty and currently-dirty paths — surfaces
-          every path CHANGED since F0 (incl. mode/type/symlink and reverted/
-          deleted, finding B), and — crucially — does NOT surface a path that was
-          already dirty at the panel and is unchanged at close (r9 codex:sol#1).
-    A stale tree whose delta is nonetheless empty (e.g. a HEAD-sha-only amend with
-    an identical tree) yields the empty set here; the caller treats empty-while-
-    stale as fail-closed (finding A)."""
-    paths: "set[str]" = set()
-    # Task 060 r2: git names diff paths toplevel-relative; the file-class table
-    # needs PROJECT-relative ones (a project under `<repo>/tests/` must not see
-    # its own code as `tests/…`). No toplevel → git error → fail closed.
-    _top = _git_toplevel(Path(repo))
-    if _top is None:
-        return None
-    _pre = _toplevel_prefix(Path(repo), _top)
-    if _pre is None:
-        return None
-    # (a) commits made SINCE F0 (`--name-status -z -M`, both rename endpoints) —
-    # working-tree diffs compare to the NEW HEAD and would miss these.
-    try:
-        r = subprocess.run(
-            ["git", "diff", "--name-status", "-z", "-M", "--ignore-submodules=none",
-             f"{f0_commit}..HEAD", "--", ".", *exclude],
-            cwd=repo, capture_output=True)
-        if r.returncode != 0:
-            return None
-        paths |= {_project_relative(x, _pre) for x in _parse_name_status_z(r.stdout)}
-    except (OSError, subprocess.SubprocessError):
-        return None
-    # (b) F0-vs-close content-token comparison over the union of F0-dirty and
-    # currently-dirty paths (tokens carry content + mode, so a mode/type/symlink
-    # change is caught). This compares against F0 DIRECTLY, so a path that was
-    # already dirty AT the panel and is UNCHANGED at close does NOT surface
-    # (impl-panel r9 codex:sol#1 — the old unconditional `git diff HEAD`/`--cached`
-    # re-flagged unchanged-dirty code and broke the review-before-commit tail);
-    # a currently-dirty NEW change, and an F0-dirty path later reverted/deleted
-    # (finding B), both surface by token inequality. A benign status-letter-only
-    # toggle (same content+mode) does not surface — safe: no content changed, and
-    # the empty-while-stale backstop (finding A) still fails closed if it is the
-    # SOLE change.
-    current = _dirty_path_content_map(repo, exclude)
-    if current is None:
-        return None                     # git error reading current dirty state
-
-    def _untrusted(tok):
-        # A token whose EQUALITY cannot be trusted to mean "unchanged": an
-        # oversized file is size-keyed (`toolarge:<size>:…`), so a SAME-SIZE
-        # content edit leaves the token identical (impl-panel r10 codex:sol#1 —
-        # a 6 MiB dirty code.py edited to the same size was invisible), and an
-        # `unreadable` file has no content signal at all. Such a path must ALWAYS
-        # surface so classification can block it if it is behavioral.
-        return tok is not None and (tok.startswith("toolarge") or tok == "unreadable")
-
-    for p in set(f0_dirty) | set(current):
-        if (f0_dirty.get(p) != current.get(p)
-                or _untrusted(f0_dirty.get(p)) or _untrusted(current.get(p))):
-            paths.add(p)
-    return paths
-
-
-def tail_cert_delta(project_path: Path, snapshot: "dict | None",
-                    round_tree_fp: str) -> "tuple[bool, list[str], list[str]]":
-    """`tail_cert_delta_why` without its cause: `(can_certify, behavioral,
-    non_behavioral)`."""
-    can, beh, non, _why = tail_cert_delta_why(project_path, snapshot, round_tree_fp)
-    return can, beh, non
-
-
-def _printable_cause(text) -> str:
-    """Text a terminal shows as it is (task 202): every character that is not
-    printable — a path's line break or escape sequence, a surrogate from a name that
-    is not UTF-8 — as `\\xNN` (`\\uNNNN` above 0xff)."""
-    return "".join(ch if ch.isprintable() else (f"\\x{ord(ch):02x}" if ord(ch) < 0x100 else f"\\u{ord(ch):04x}")
-                   for ch in str(text))
-
-
 def _is_object_id(value) -> bool:
     """A full git object id (40 hex, or 64 under sha256) — what a snapshot's `commit` must be before git reads it:
     a judge.md the agent can edit could hold `--output=<path>`, an option (task 202, impl round 1, R1-1)."""
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{40}|[0-9a-f]{64}", value) is not None
-
-
-def _cause_paths(paths) -> str:
-    """The first three paths of a cause, printable, then "…"."""
-    paths = list(paths)
-    return ", ".join(_printable_cause(p) for p in paths[:3]) + (", …" if len(paths) > 3 else "")
-
-
-def _owner_exclude_walk_cause(repo: Path, f0_commit: str, specs: "list[str]", label: str, name: str) -> str:
-    """Task 060 r2 (grok #1): code that passed THROUGH an owner exclude between F0
-    and HEAD (committed under `journal/`, deleted again before close) never enters
-    the `:(exclude)`-filtered delta and is gone from the ls-files/ls-tree check. A
-    two-endpoint `F0..HEAD` diff misses it too (added then removed = net nothing), so
-    walk EVERY commit since F0 and ask each one what it touched under the owner's
-    raw specs; any source hit → refuse. Bounded: more than 500 commits since F0 →
-    refuse. "" when nothing refuses, else the cause (task 202) — a scope's own."""
-    try:
-        # Only commits that TOUCH the owner's specs (r3 opus #3: a bare
-        # rev-list counted every commit of a busy monorepo since F0).
-        rl = subprocess.run(["git", "rev-list", f"{f0_commit}..HEAD", "--", *specs],
-                            cwd=repo, capture_output=True, text=True,
-                            errors="surrogateescape", timeout=120)
-        if rl.returncode != 0:
-            return f"scope {label}: `git rev-list` failed while checking the owner's excludes"
-        commits = [c for c in rl.stdout.split() if c]
-        if len(commits) > 500:
-            return f"scope {label}: more than 500 commits since the reviewed tree touch an owner exclude"
-        top = _git_toplevel(repo)
-        pre = _toplevel_prefix(repo, top) if top is not None else None
-        if pre is None:
-            return f"scope {label}: its git top level cannot be resolved"   # cannot classify git names (r3 grok)
-        through: "set[str]" = set()
-        for c in commits:
-            rx = subprocess.run(["git", "diff-tree", "--no-commit-id", "--name-only", "-z",
-                                 "-r", "-m", c, "--", *specs],
-                                cwd=repo, capture_output=True, timeout=60)
-            if rx.returncode != 0:
-                return f"scope {label}: `git diff-tree` failed on {c[:12]}"
-            through |= {_project_relative(os.fsdecode(t), pre) for t in rx.stdout.split(b"\0") if t}
-    except (OSError, subprocess.SubprocessError):
-        return f"scope {label}: git error while checking the owner's excludes"
-    beh, _ = classify_delta_paths(sorted(through), is_outer_scope=(name == ""))
-    code = [b for b in beh if not b.lower().endswith(_BOOKKEEPING_SUFFIXES)]
-    if code:
-        return (f"scope {label}: code passed through an owner exclude since the reviewed tree ("
-                + _cause_paths(code) + ")")
-    return ""
-
-
-def _finding_a_cause(project_path: Path, live_scopes: dict, snap_scopes: dict, round_tree_fp: str,
-                     base: str) -> str:
-    """Finding A's cause (task 202, plan triage 2-3): the tree is stale, yet no file
-    of the reviewed scopes differs from the reviewed tree — say what moved: nothing
-    at all (the tree IS the reviewed one — from a post-D6 base the bound close
-    applies), HEAD (per scope, with the files that move changed), or neither (a
-    staging or fingerprint-only change)."""
-    head = "the tree is stale, yet no file in the reviewed scopes differs from the reviewed tree"
-    try:
-        same = tree_state_fingerprint(Path(project_path)) == round_tree_fp
-    except Exception:
-        same = False
-    if same:
-        return head + ": it IS the reviewed tree" + (
-            f" — the close bound to {base} (`--stale-panel-ok`) applies" if base else "")
-    moved = []
-    for name, repo in live_scopes.items():
-        label = _printable_cause(name or ".")
-        rec = snap_scopes.get(name)
-        f0 = rec.get("commit") if isinstance(rec, dict) else ""
-        if not _is_object_id(f0):         # checked by the caller too; never an option to git (impl round 2)
-            moved.append(f"scope {label}: the snapshot of the reviewed tree records an unusable commit id for it")
-            continue
-        try:
-            h = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, timeout=30)
-        except (OSError, subprocess.SubprocessError):
-            h = None
-        cur = h.stdout.strip() if h is not None and h.returncode == 0 else ""
-        if not _is_object_id(cur):
-            # a failure is said as one, never as a fact (impl round 1, R1-2)
-            moved.append(f"scope {label}: git could not compare the reviewed commit with HEAD")
-            continue
-        if cur == f0:
-            continue
-        try:
-            # `--relative`: what moved INSIDE the scope, named from it (a project below its git top level)
-            n = subprocess.run(["git", "diff", "--name-only", "-z", "--no-renames", "--relative", f0, cur],
-                               cwd=repo, capture_output=True, timeout=60)
-        except (OSError, subprocess.SubprocessError):
-            n = None
-        if n is None or n.returncode != 0:
-            moved.append(f"scope {label}: git could not list what HEAD's move changed ({f0[:7]} → {cur[:7]})")
-            continue
-        paths = [os.fsdecode(x) for x in n.stdout.split(b"\0") if x]
-        # a committed path the delta compares always enters it: what is left is what it excludes
-        moved.append(f"scope {label}: HEAD moved {f0[:7]} → {cur[:7]}"
-                     + (f", and the files it changed ({_cause_paths(paths)}) are excluded from the delta" if paths
-                        else ", with no file of the scope changed"))
-    if moved:
-        return head + ": " + "; ".join(moved)
-    return head + ": no scope's HEAD moved: a staging or fingerprint-only change"
-
-
-def tail_cert_delta_why(project_path: Path, snapshot: "dict | None", round_tree_fp: str,
-                        base: str = "") -> "tuple[bool, list[str], list[str], str]":
-    """The tail-cert delta gate's I/O half (SAFETY-CRITICAL). Returns
-    `(can_certify, behavioral, non_behavioral, why)` — both lists scope-prefixed for
-    display, classified per-scope on scope-relative paths; `why` is a refusal's own
-    cause in the words the close prints, one printable line, "" when it can certify
-    (task 202, #17). `base` names the reviewed tree when it is not the impl panel's
-    (a post-D6 PASS). PRECONDITION: called only when the tree is STALE vs
-    `round_tree_fp` (the reviewed tree's stamp).
-
-    Fails CLOSED — `(False, [], [], <cause>)` — on every ambiguity, so a code path
-    can never slip through unreviewed:
-      * a missing/malformed descriptor, or one whose `tree_fp` ≠ the round stamp
-        (finding: the snapshot must authenticate to THIS round);
-      * a live scope-set that differs from the descriptor's (finding C: a
-        code_root added/removed/repointed after F0);
-      * a scope with no recorded F0 commit (cannot anchor the F0→HEAD diff);
-      * ANY git error during enumeration;
-      * a stale tree with an EMPTY attributable delta (finding A)."""
-    def no(why: str):
-        return (False, [], [], _printable_cause(" ".join(why.split())))
-    if not isinstance(snapshot, dict):
-        return no("the newest impl round recorded no panel snapshot")
-    if not round_tree_fp:
-        return no("the newest impl round carries no tree stamp")
-    if snapshot.get("tree_fp") != round_tree_fp:
-        return no(f"the panel snapshot's fingerprint ({snapshot.get('tree_fp') or 'none'}) is not the newest "
-                  f"impl round's stamp ({round_tree_fp})")
-    snap_scopes = snapshot.get("scopes")
-    if not isinstance(snap_scopes, dict):
-        return no("the snapshot of the reviewed tree lists no scopes")
-    try:
-        cfg = load_config(Path(project_path))
-    except Exception:
-        cfg = {}
-    live_scopes = review_scopes(Path(project_path), cfg)
-    if set(live_scopes.keys()) != set(snap_scopes.keys()):
-        # finding C: scope-set must match exactly
-        return no("the scope set changed since the reviewed tree (then: "
-                  + _cause_paths(sorted(n or "." for n in snap_scopes)) + "; now: "
-                  + _cause_paths(sorted(n or "." for n in live_scopes)) + ")")
-    exclude = _fingerprint_exclude_pathspecs(cfg)
-    # r4 codex:terra#1: the exclusion set must not have changed since F0, or a
-    # post-panel `fingerprint_exclude` addition could hide a behavioral path.
-    if sorted(exclude) != (snapshot.get("exclude") or []):
-        return no("the fingerprint's exclude set (`fingerprint_exclude`) changed since the reviewed tree")
-    # Task 060: an owner exclude that covers a SOURCE path (unchanged since F0,
-    # so it passed the set check above) hides that source from the delta —
-    # refuse; the close gate blocks this case before tail-cert is reached, this
-    # is the second line.
-    _covers, _hits = owner_exclude_covers_behavioral(Path(project_path), cfg)
-    if _covers:
-        _err = ": git error"
-        if "<scopes>: could not enumerate fingerprint scopes" in _hits:      # its other sentinel (impl round 1)
-            return no("the owner-exclude check could not enumerate the fingerprint's scopes")
-        _paths = [h for h in _hits if not str(h).endswith(_err)]
-        if _paths:
-            return no("an owner `fingerprint_exclude` covers source code (" + _cause_paths(_paths) + ")")
-        # its sentinel hits: git failed for a scope (plan triage 7, sonnet)
-        return no("git failed while checking whether an owner exclude covers source code ("
-                  + _cause_paths([str(h)[:-len(_err)] for h in _hits]) + ")")
-    all_behavioral: "list[str]" = []
-    all_non: "list[str]" = []
-    for name, repo in live_scopes.items():
-        label = _printable_cause(name or ".")
-        rec = snap_scopes.get(name)
-        if not isinstance(rec, dict):
-            return no(f"scope {label}: the snapshot of the reviewed tree holds no record of it")
-        # Task 060: the scope must be the SAME resolved directory it was at F0
-        # (a repoint to a same-HEAD clone is not certifiable; an older descriptor
-        # without the key fails closed too).
-        if rec.get("identity") != _scope_identity(Path(project_path), repo):
-            return no(f"scope {label}: it points at a different directory than at the reviewed tree")
-        f0_commit = rec.get("commit") or ""
-        f0_dirty = rec.get("dirty")
-        if not f0_commit:
-            return no(f"scope {label}: the snapshot of the reviewed tree recorded no commit for it")
-        if not _is_object_id(f0_commit):
-            # before ANY git call: `--output=<path>` is an option to git — it wrote a file and hid a code
-            # commit from this enumeration (impl round 1, R1-1: measured on 1.6.1 too)
-            return no(f"scope {label}: the snapshot of the reviewed tree records an unusable commit id for it")
-        if not isinstance(f0_dirty, dict):
-            return no(f"scope {label}: the snapshot of the reviewed tree recorded no dirty-file list for it")
-        scope_paths = _enumerate_scope_delta(repo, f0_commit, f0_dirty, exclude)
-        if scope_paths is None:
-            return no(f"scope {label}: git could not list its changes since the reviewed tree")   # fail closed
-        # Task 060 r2 (grok #1): code that passed THROUGH an owner exclude between
-        # F0 and HEAD (committed under `journal/`, deleted again before close)
-        # never enters the `:(exclude)`-filtered delta and is gone from the
-        # ls-files/ls-tree check. A two-endpoint `F0..HEAD` diff misses it too
-        # (added then removed = net nothing), so walk EVERY commit since F0 and
-        # ask each one what it touched under the owner's raw specs; any source
-        # hit → refuse. Bounded: more than 500 commits since F0 → refuse.
-        _specs = _owner_exclude_specs(cfg)
-        if _specs:
-            _walk = _owner_exclude_walk_cause(repo, f0_commit, _specs, label, name)
-            if _walk:
-                return no(_walk)
-        beh, non = classify_delta_paths(sorted(scope_paths),
-                                        is_outer_scope=(name == ""))
-        prefix = (name + "/") if name else ""
-        all_behavioral += [prefix + p for p in beh]
-        all_non += [prefix + p for p in non]
-    if not all_behavioral and not all_non:
-        # finding A: stale but unexplained
-        return no(_finding_a_cause(Path(project_path), live_scopes, snap_scopes, round_tree_fp, base))
-    return (True, sorted(all_behavioral), sorted(all_non), "")
-
-
-def config_sha(project_path: Path) -> str:
-    """sha256 of `.agent/config.json`'s bytes, or "absent" (task 149). The
-    fingerprints exclude `.agent/`, so this is how a bound stale close sees a
-    change to the config — which holds the opt-in itself and the verify bar."""
-    try:
-        return hashlib.sha256((Path(project_path) / ".agent" / "config.json").read_bytes()).hexdigest()
-    except FileNotFoundError:
-        return "absent"
-    except OSError:
-        return "unreadable"
-
-
-STALE_CLOSE_OPT_IN = "stale_panel_requires_post_d6"
-
-
-def post_d6_pass_base(project_path: Path, task_dir: Path) -> "tuple[dict, str, str] | None":
-    """(snapshot, tree fp, run id) of a post-D6 PASS that tail certification may
-    start from, else None (task 149, PLAN S12b; post-D6 run 1, codex): the newest
-    post-D6 run after the newest impl panel is finished, a PASS, recorded the tree
-    it reviewed and ran under today's `.agent/config.json`. From there, a docs or
-    tests delta is certified against the tree that judge reviewed — measured from
-    the impl panel instead, the delta always held the code the judge had passed."""
-    from tasks import post_d6 as _pd6
-    if _pd6.ledger_corrupt_lines(Path(task_dir)):
-        return None
-    panel_fp = _pd6.panel_key(_pd6.newest_impl_round(Path(task_dir)))
-    every = [r for r in _pd6.read_runs(Path(task_dir))
-             if panel_fp and r.get("panel") == panel_fp and r.get("kind") != "panel"]
-    if not every or every[-1].get("status") != "done":
-        return None
-    last = every[-1]
-    snap = last.get("reviewed_snapshot")
-    if (last.get("verdict") != "PASS" or not isinstance(snap, dict) or not snap.get("tree_fp")
-            or last.get("config_sha") != config_sha(Path(project_path))):
-        return None
-    return snap, str(snap["tree_fp"]), str(last.get("id") or "")
-
-
-def bound_stale_close(project_path: Path, task_dir: Path, *,
-                      owner_ok_reason: "str | None", rule_on: bool = False,
-                      why: str = "") -> "tuple[bool, str, str]":
-    """PB-STALE-CLOSE-BOUND (PLAN S12b, task 149) — (allowed, refusal, receipt note).
-
-    The owner's D6-amended rule, enforced where the workspace opts in with
-    `.agent/config.json` `"stale_panel_requires_post_d6": "<YYYY-MM-DD>"`: a
-    stale-panel close of an assertive/irreversible task (`--stale-panel-ok` or
-    `--force`; the caller decides the risk and the STALE verdict) needs either
-      * the newest post-D6 single-judge run after the newest impl panel to be a
-        PASS that recorded the tree it reviewed (`reviewed_snapshot`, review.py),
-        with nothing changed since but `.agent/` records — `.agent/config.json`
-        excepted, compared by hash — and `MIND_MAP*.md`; or
-      * `tasks work done --owner-ok --reason "…"` — an accountability marker the
-        agent can type, written to the receipt and the journal, not an
-        authentication.
-    Any other change since the PASS (code, a test, docs, a root `*.md`) goes
-    through a fresh post-D6 judge or tail certification (a plain `work done`).
-    A task whose newest panel reservation predates the opt-in date keeps the old
-    rule. Every doubt (no runs, no descriptor, a git error) refuses.
-
-    Task 209 (PHASE-B.md item 1): `rule_on` — the stop rule needs the post-panel
-    judge for this close (`tasks.stop_rule.judge_required`: an irreversible or
-    unclassified task's code, a file under `guard_paths`, a delta that cannot be
-    listed) — applies the binding in EVERY project, whatever the opt-in and its
-    date say; `why` is the rule's reason, said in the refusal."""
-    from tasks import post_d6 as _pd6
-    # The panel reservations as WRITTEN (impl panel r1, codex-high: the merged view
-    # takes the completion time) — and only impl panels, or panels recorded before
-    # the mode was (sonnet: a later PLAN panel must not pull an older impl panel
-    # under the rule).
-    reservations = []
-    try:
-        for ln in (Path(task_dir) / _pd6.RUNS_NAME).read_text(encoding="utf-8").splitlines():
-            try:
-                r = json.loads(ln)
-            except ValueError:
-                continue
-            if (isinstance(r, dict) and r.get("kind") == "panel" and r.get("status") == "reserved"
-                    and r.get("mode") in (None, "impl")):
-                reservations.append(r)
-    except OSError:
-        pass
-
-    def _local_day(ts) -> "datetime.date | None":
-        # run records are stamped in UTC; the opt-in is a local calendar date
-        try:
-            return datetime.datetime.fromisoformat(str(ts)).astimezone().date()
-        except (TypeError, ValueError):
-            return None
-    # The carrying round's OWN reservation (post-D6 run 2, codex): since task 149
-    # a panel's Round-id is its reservation id. A round that has none (a panel
-    # from before, a deleted ledger) cannot be dated — refused below when the
-    # rule is on; an older reservation must not stand in for it.
-    _round = _pd6.newest_impl_round(Path(task_dir))
-    _rid = (_round or {}).get("round_id") or ""
-    newest = next((r for r in reservations if _rid and r.get("id") == _rid), None)
-    # The opt-in in force: the EARLIEST of the config's date and the one recorded
-    # with the panel — removing the key, or moving the date later, after the panel
-    # does not free the task (r1 codex-high; r2 opus, codex ×2).
-    dates = []
-    for raw in (load_config(Path(project_path)).get(STALE_CLOSE_OPT_IN),
-                newest.get("bound_since") if newest is not None else None):
-        if raw is None:
-            continue
-        try:
-            dates.append(datetime.date.fromisoformat(str(raw)))
-        except ValueError:
-            return False, (f"{STALE_CLOSE_OPT_IN}={raw!r} (in .agent/config.json or recorded with the panel) "
-                           "is not a YYYY-MM-DD date — fix it; refusing the stale close meanwhile"), ""
-    if owner_ok_reason and owner_ok_reason.strip():
-        # the owner's decision is recorded whether or not the rule applies (r2,
-        # agy) — after the dates are validated, so a malformed one still refuses
-        # (post-D6 run 1, codex)
-        return True, "", f'owner-ok: "{" ".join(owner_ok_reason.split())}"'
-    if not dates and not rule_on:
-        return True, "", ""
-    since = min(dates) if dates else None
-    if rule_on:
-        pass                              # task 209: no date frees it, and none is needed to date the panel
-    elif newest is None:
-        # every doubt refuses (r2, opus; post-D6 run 2, codex): the rule is on and a
-        # carrying impl panel exists, but no reservation of ITS OWN dates it
-        return False, ("the stale-close rule is on, but no panel reservation in "
-                       f"{_pd6.RUNS_NAME} belongs to this task's newest impl round "
-                       f"(Round-id {_rid or 'none'}) — a panel from before task 149, or a deleted ledger.\n"
-                       '  Run a post-D6 judge, or let the owner decide:  tasks work done --owner-ok --reason "…"'), ""
-    day = _local_day(newest.get("ts")) if (newest is not None and not rule_on) else None
-    if day is not None and since is not None and day < since:
-        return True, "", ""               # the task's impl panel predates the opt-in: old rule
-    runs = _pd6.read_runs(Path(task_dir))
-    if _pd6.ledger_corrupt_lines(Path(task_dir)):
-        return False, ("the post-D6 run ledger has corrupt lines — a run's record cannot be "
-                       "trusted, so no stale close is bound to it (codex-medium)."), ""
-    # (r2, opus: tail certification used to measure from the impl panel's tree;
-    # since post-D6 run 1 it starts from a bound post-D6 PASS — post_d6_pass_base)
-    exits = ("  Either run the post-D6 single judge on this tree:  tasks impl-review <N>\n"
-             "  or, for a docs/tests change after a post-D6 PASS, close WITHOUT --stale-panel-ok/--force:\n"
-             "  tail certification reviews the delta since the tree that PASS reviewed,\n"
-             '  or let the owner decide:  tasks work done --owner-ok --reason "…"')
-    panel_fp = _pd6.panel_key(_pd6.newest_impl_round(Path(task_dir)))
-    every = [r for r in runs if panel_fp and r.get("panel") == panel_fp and r.get("kind") != "panel"]
-    if every and every[-1].get("status") != "done":
-        return False, (f"the newest post-D6 run ({every[-1].get('id')}) has not finished — a stale close "
-                       "cannot rest on an older run while a newer one is open.\n"
-                       "  Wait for it, or record it failed if its process is gone."), ""
-    after = [r for r in every if r.get("status") == "done"]
-    if not after:
-        if rule_on:
-            return False, (f"the stop rule needs the post-panel judge for this close ({why or 'see above'}), "
-                           "and no post-D6 run follows the newest impl panel.\n" + exits), ""
-        return False, ("this workspace binds a stale close to a post-D6 PASS "
-                       f"({STALE_CLOSE_OPT_IN}={since.isoformat()}), and no post-D6 run follows "
-                       "the newest impl panel.\n" + exits), ""
-    last = after[-1]
-    if last.get("verdict") != "PASS":
-        return False, (f"the newest post-D6 run ({last.get('id')}) is {last.get('verdict') or 'not a PASS'} — "
-                       "a stale close needs a PASS.\n" + exits), ""
-    snap = last.get("reviewed_snapshot")
-    if not isinstance(snap, dict) or not snap.get("tree_fp"):
-        return False, (f"the newest post-D6 PASS ({last.get('id')}) recorded no reviewed tree "
-                       "(a run from before task 149, or git failed) — it cannot be bound.\n" + exits), ""
-    if last.get("config_sha") != config_sha(Path(project_path)):
-        return False, (".agent/config.json changed after the post-D6 PASS — the config holds this "
-                       "rule and the verify bar, so its change is not a records-only drift.\n" + exits), ""
-    now_fp = tree_state_fingerprint(Path(project_path))
-    if now_fp and now_fp == snap["tree_fp"]:
-        return True, "", f"bound to post-D6 PASS {last.get('id')} on tree {now_fp} (unchanged since)"
-    can, beh, non, why = tail_cert_delta_why(Path(project_path), snap, snap["tree_fp"])
-    if not can:
-        return False, (f"the delta since the post-D6 PASS ({last.get('id')}) cannot be computed "
-                       f"exactly ({why}).\n" + exits), ""
-    # task 209 (impl round 3, T4): where the stop rule needs the judge, a guarded map file is no free drift
-    _guards: "list[str]" = []
-    if rule_on:
-        from tasks import stop_rule as _sr
-        _guards = sorted(set(_sr.resolve_guard_paths(load_config(Path(project_path)), warn=False))
-                         | set((_sr.panel_record(Path(task_dir)) or {}).get("guard_paths") or []))
-    other = beh + [x for x in non if not re.fullmatch(r"MIND_MAP[^/]*\.md", x)
-                   or (_guards and _sr.guarded(x, _guards))]
-    if other:
-        return False, (f"changed since the post-D6 PASS ({last.get('id')}): {', '.join(other[:8])}"
-                       + (" …" if len(other) > 8 else "") + " — only `.agent/` records and "
-                       "MIND_MAP*.md may drift without a judge.\n" + exits), ""
-    return True, "", (f"bound to post-D6 PASS {last.get('id')} on tree {snap['tree_fp']}; "
-                      f"since then only: {', '.join(non) or '`.agent/` records'}")
 
 
 # Paths a records-only commit may touch (task 085 round 3, U4): a task's own
@@ -3700,97 +3091,6 @@ def records_only_delta(project_path: Path, snapshot: "dict | None",
         return tree_state_fingerprint(Path(project_path), outer_head_override=f0) == round_tree_fp
     except Exception:
         return False
-
-
-def tail_cert_gate_decision(*, can_certify: bool, behavioral_nonempty: bool,
-                            cert_verdict: "str | None",
-                            non_behavioral: "list[str]",
-                            unavailable: str = "",
-                            no_verdict: str = "",
-                            cause: str = "",
-                            behavioral: "list[str] | None" = None,
-                            base: str = "") -> "tuple[bool, str]":
-    """PURE tail-cert policy → (allowed, receipt_clause). No I/O. Reached ONLY when
-    the existing freshness gate would otherwise BLOCK (stale + carrying panel +
-    assertive/irreversible/unclassified + no --force/--stale-panel-ok).
-
-    Fail-closed everywhere:
-      * `not can_certify` (missing/mismatched descriptor, scope-set change, git
-        error, empty-while-stale) → BLOCK, fall back to a fresh panel;
-      * `behavioral_nonempty` (ANY code-path delta since F0, incl. a code comment)
-        → BLOCK, a fresh full panel is required (owner decision A);
-      * a non-behavioral-only delta certifies IFF the single judge returned PASS;
-        a FAIL or a missing/unparseable verdict (None) → BLOCK.
-
-    Each block says what happened (task 165, PLAN S11 item 11): `unavailable` is
-    why NO judge was called (`review.tail_cert_unavailable` — over the payload cap,
-    an unreadable file — or the runner's own `no-judge` reason); it never certifies,
-    whatever `cert_verdict` holds. `no_verdict` is why a judge that WAS called left
-    no verdict (it did not answer, no verdict line, its answer discarded). Before,
-    all of these and a judge's FAIL read "tail certification did not return PASS".
-    `cause` is why the delta could not be certified at all (`tail_cert_delta_why`,
-    task 202): flattened and printable here too; `behavioral` names the code paths
-    of a code-path refusal, and `base` the reviewed tree when it is a post-D6 PASS's
-    (impl round 1, R1-4)."""
-    _b = f" (measured from {_printable_cause(' '.join(str(base).split()))})" if base else ""
-    if not can_certify:
-        _c = (_printable_cause(" ".join(str(cause or "").split())) + _b).strip()
-        return (False, "tail certification unavailable — " + (f"{_c} — " if _c else "") + "fresh panel required")
-    if behavioral_nonempty:
-        _p = f" ({_cause_paths(behavioral)})" if behavioral else ""
-        return (False, f"code-path delta since the reviewed tree{_p}{_b} — fresh full panel required")
-    if unavailable:
-        return (False, f"tail certification could not run — {' '.join(unavailable.split())}{_b}; "
-                       "no judge was called — fresh panel required")
-    # Collapse whitespace WITHIN each filename before joining (impl-review r12b F1):
-    # a git-`-z`-decoded path may legally contain NEWLINES, and this clause is
-    # embedded RAW into the task.md receipt — an untracked `docs/a\n## Status\ndone\nb.md`
-    # that certifies would otherwise inject real heading lines a section parser reads
-    # as `## Status` = done (the #09 disease). Mirrors the `' '.join(reason.split())`
-    # hardening the adjacent `reason` field already has.
-    files = (", ".join(" ".join(p.split()) for p in non_behavioral)
-             if non_behavioral else "(none)")
-    if cert_verdict == "PASS":
-        return (True, f"non-behavioral tail certified by single judge "
-                      f"(delta: {files})")
-    if cert_verdict == "FAIL":
-        return (False, f"the tail-certifying judge returned FAIL{_b} (its reasons: tail-cert.log "
-                       "beside task.md) — fresh panel required")
-    if no_verdict:
-        return (False, f"tail certification gave no usable verdict — {' '.join(no_verdict.split())}{_b} "
-                       "— fresh panel required")
-    return (False, "tail certification gave no usable verdict — fresh panel required")
-
-
-def _tail_cert_verdict_re(nonce: "str | None") -> "re.Pattern":
-    """The verdict-line matcher. With a NONCE (production — impl-panel r2 grok#2)
-    the token is `TAIL-CERT <nonce>: PASS|FAIL`, so unpredictable doc CONTENT can
-    never forge it. Common markdown DECORATION real judges add is tolerated (impl-
-    panel r8 opus#3: a bolded/fenced final line must still certify or the feature
-    fails closed on almost every real judge): optional surrounding `*`/backtick and
-    a trailing `.`/`*`/backtick after the verdict. The verdict word is still bounded
-    (`\\b`) so `PASSPORT` never matches, and only THIS one line is matched."""
-    tok = "TAIL-CERT" + ((" " + re.escape(nonce)) if nonce else "")
-    return re.compile(rf"^[ \t*`]*{tok}:[ \t]*(PASS|FAIL)\b[ \t.*`]*$")
-
-
-def parse_tail_cert_verdict(raw: "str | None",
-                            nonce: "str | None" = None) -> "str | None":
-    """Parse the dedicated tail-cert judge's structured verdict from the LAST
-    non-empty line only, FAIL-CLOSED (finding E; impl-panel r5 grok#1/codex:sol#2:
-    scanning the whole response let a judge whose prose concludes FAIL still
-    certify by having emitted a PASS line earlier, and the prompt's own example
-    lines were parser-valid). Returns "PASS"/"FAIL" ONLY when the FINAL non-empty
-    line IS the verdict token (possibly markdown-decorated) carrying the expected
-    `nonce`; None for everything else — missing, malformed, a spawn-error string,
-    wrong/absent nonce, or a non-terminal verdict. None always blocks."""
-    if not raw:
-        return None
-    lines = [ln for ln in raw.replace("\r\n", "\n").split("\n") if ln.strip()]
-    if not lines:
-        return None
-    m = _tail_cert_verdict_re(nonce).match(lines[-1])   # LAST non-empty line only
-    return m.group(1) if m else None
 
 
 # One round per `# Panel {Plan|Impl} Review` H1. judge.md stacks rounds NEWEST
@@ -4192,35 +3492,6 @@ _SINGLE_TAMPER_RE = re.compile(r"^\[tamper guard\]\s+(clean|degraded)(?:\s*[—-
                                re.MULTILINE)
 
 
-def single_review_tamper_degraded(task_file) -> "str | None":
-    """The detail of a DEGRADED tamper guard on the NEWEST single-judge review
-    log in a task's directory, else None (task 059, impl-panel r1 sonnet #1).
-
-    `cmd_single_review` stamps `[tamper guard] clean|degraded — …` into the
-    judge log's header. The close-time TAMPER-GUARD-DEGRADED gate reads PANEL
-    rounds, so without this a single-judge review — the only evidence most
-    `reversible` closes have, since `panel_required_for` demands no panel there
-    — could have run with an unverified guard and leave no trace at the close.
-    Advisory only: it adds a console note and a receipt clause, never a block
-    (blocking on non-panel evidence would be new close policy). Never raises."""
-    p = Path(task_file)
-    try:
-        names = judge_log_names()
-        logs = sorted((q for q in p.parent.iterdir() if q.name in names),
-                      key=lambda q: q.stat().st_mtime, reverse=True)
-    except OSError:
-        return None
-    for log in logs[:1]:                    # the NEWEST review's receipt is what counts
-        try:
-            head = log.read_text(encoding="utf-8", errors="replace")[:4000]
-        except OSError:
-            return None
-        m = _SINGLE_TAMPER_RE.search(head)
-        if m and m.group(1) == "degraded":
-            return (m.group(2) or "").strip() or "guard could not fully run"
-    return None
-
-
 def has_review_evidence(task_file, impl_only: bool = False) -> bool:
     """True when a task carries evidence that a review actually ran: a judge.md
     or a judge-single.md (task 117/138) in its directory — the records the CLI
@@ -4352,147 +3623,60 @@ def close_decision(*, risk: str, verify_declared: bool, verify_failed: bool,
     return True, ""
 
 
-def freshness_gate_decision(*, risk: str, panel_required: bool,
-                            evidence_carries: bool, round_fp: str, now_fp: str,
-                            force: bool, stale_ok: bool,
-                            stale_reason: "str | None",
-                            git_available: bool = True,
-                            exclude_covers: "list[str] | None" = None,
-                            tamper_degraded: bool = False,
-                            records_only: bool = False
-                            ) -> "tuple[bool, str]":
-    """F18 (design-1.5.6.md, blind-judge conditional-PASS, conditions built);
-    extended by T1 (owner decision 2026-08-23) to every risk held to the
-    high-consequence bar — ASSERTIVE, IRREVERSIBLE, and an unset/UNCLASSIFIED
-    `## Risk` — leaving only `reversible` advisory: a close resting on panel
-    evidence must not silently rest on a verdict that predates the closed code,
-    because a claim (assertive), an unrecoverable act (irreversible), or work
-    whose risk was never classified (held to the high bar everywhere else — see
-    close_decision + `panel_required_for:"all"`) signed off by a panel that
-    predates the code is a decision about code that was never reviewed. Blocking
-    only assertive/irreversible would make blanking `## Risk` strictly more
-    lenient on freshness than honest classification — the 1.5.32
-    "cheapest-path-through-the-strictest-gate" fail-open, reopened (panel
-    finding O1). Pure policy → (allowed, block_reason).
+def round_freshness(project_path: Path, rnd: dict, *, git_here: bool, now_fp: str) -> dict:
+    """The newest impl round against the tree now (task 343, PLAN-PLAYBOOK-2.md 4.1 a): `FRESH` when the round carries
+    a `**Tree-state:**` stamp equal to `now_fp` (or `records_only_delta` explains the difference: only the task's own
+    records were committed since) and its tamper guard was not degraded; otherwise `STALE` with its `cause` in words.
+    An unstamped round outside a git repository could never have been stamped: `NOT-JUDGED` (task 060's condition,
+    both halves — a STAMPED round whose repository git no longer finds is STALE)."""
+    round_fp = rnd.get("tree_state") or ""
+    if not round_fp and not git_here:
+        return {"verdict": "NOT-JUDGED"}
+    out = {"round_fp": round_fp or "?", "now_fp": now_fp or "?"}
+    if not round_fp:
+        cause = "the round has no tree stamp"
+    elif not now_fp:
+        cause = "git cannot fingerprint the tree now"
+    elif rnd.get("tamper_guard") == "degraded":
+        cause = ("the round's tamper guard was degraded ("
+                 + " ".join(str(rnd.get("tamper_detail") or "the guard could not fully run").split()) + ")")
+    elif now_fp == round_fp:
+        return dict(out, verdict="FRESH")
+    elif records_only_delta(Path(project_path), rnd.get("snapshot"), round_fp):
+        return dict(out, verdict="FRESH", records_only=True)
+    else:
+        cause = f"the code changed since the round (tree-state {round_fp} → {now_fp})"
+    return dict(out, verdict="STALE", cause=cause)
 
-    The gate is deliberately narrow (judge C3): it applies only when the panel
-    evidence would actually CARRY this close — rounds[0] is an impl round with
-    verdict PASS (`evidence_carries`) — so a FAIL round or a replan on top
-    falls through to the panel-evidence block instead of double-blocking, and
-    only when both fingerprints exist and disagree. --force bypasses close
-    policy wholesale as always (A8 — one blunt hatch, unchanged semantics);
-    `--stale-panel-ok --reason "..."` is the narrow exit (T1: the same two
-    escapes for every gated risk — user decision 2026-08-23), and the reason
-    is recorded in the receipt's freshness clause. Advisory (console note +
-    receipt clause, no block) remains the behavior for `reversible` alone:
-    batch 5 showed re-panels happen voluntarily when the delta is material —
-    the block is reserved for work a wrong close cannot be walked back on."""
-    if force:
+
+def freshness_gate_decision(*, risk: str, panel_required: bool, evidence_carries: bool,
+                            freshness: "dict | None", force: bool, task: str = "<N>",
+                            cap_reached: bool = False) -> "tuple[bool, str]":
+    """(allowed, block reason) for the close's review evidence (F18; T1, the owner 2026-08-23; task 343). A STALE
+    verdict holds a close that rests on a carrying impl round (judge C3) of an assertive, irreversible or unclassified
+    task — a claim, an act that cannot be walked back, or work never classified, signed off by a review that predates
+    the code; blanking `## Risk` must not be more lenient than classifying it (O1). `reversible` stays advisory, and
+    `--force` overrides with its reason in the receipt. The block names the ways out by the round cap (plan panel P7):
+    another impl round, or past the cap a round with the owner's word."""
+    if force or risk == "reversible" or not panel_required or not evidence_carries:
         return True, ""
-    # Allow ONLY the explicitly-reversible risk (fail-closed: an unexpected
-    # token blocks). assertive / irreversible / unclassified all gate — O1.
-    if risk == "reversible" or not panel_required or not evidence_carries:
+    if not freshness or freshness.get("verdict") != "STALE":
         return True, ""
-    if tamper_degraded:
-        # Task 059 (plan panel P2): the carrying round's tamper guard could not
-        # fully run (its header says `**Tamper guard:** degraded`). The verdict
-        # was KEPT on the review path — a degraded guard is not evidence of a
-        # write — but a high-consequence close must not rest on a PASS whose
-        # tamper-freedom is unverified: on the uncontained platform the guard
-        # IS the defense. Same two exits as STALE, acceptance on the record.
-        if stale_ok:
-            if stale_reason and stale_reason.strip():
-                return True, ""
-            return False, ('--stale-panel-ok requires --reason "why this close may '
-                           "rest on a panel whose tamper guard was degraded\" — the "
-                           "acceptance must be on the record.")
-        return False, (
-            f"risk is {risk} and the newest impl panel's TAMPER GUARD was DEGRADED "
-            "— TAMPER-GUARD-DEGRADED: git could not fully verify that no judge wrote "
-            "the tree during that review (see `**Tamper guard:**` on the round), so "
-            "its PASS is unverified for tamper-freedom.\n"
-            "  Either re-run:  tasks panel-review <N> --mode impl\n"
-            "  or record the acceptance:  tasks work done --stale-panel-ok "
-            '--reason "..."')
-    # Task 060 (plan panel): an ABSENT fingerprint is no longer "nothing to
-    # compare" → allow. Two shapes, both fail CLOSED for a carrying
-    # high-consequence panel, with the same two exits as STALE:
-    #   NO-STAMP   — the round carries no `**Tree-state:**` although the project
-    #                is a git repo (git broken at PANEL time, or a hand-edited
-    #                round). A non-git project (`git_available=False`) could
-    #                never have been stamped: advisory, as before (judge F4).
-    #   UNREADABLE — the round is stamped but git cannot fingerprint the tree
-    #                NOW (corrupt index, missing HEAD, toplevel unresolvable):
-    #                the panel's tree cannot be compared to the closed one.
-    # Otherwise, with an empty fingerprint fail-OPEN, these would be the cheaper
-    # path through the strict gate (the 1.5.32 argument).
-    if exclude_covers:
-        # Task 060: an owner `fingerprint_exclude` hides SOURCE from the
-        # fingerprint — no stamp can vouch for that code, fresh or not.
-        if stale_ok:
-            if stale_reason and stale_reason.strip():
-                return True, ""
-            return False, ('--stale-panel-ok requires --reason "why the excluded '
-                           "source paths need no review\" — the acceptance must "
-                           "be on the record.")
-        return False, (
-            f"risk is {risk} and `fingerprint_exclude` in .agent/config.json "
-            "hides BEHAVIORAL (source) paths from the panel-freshness "
-            "fingerprint — EXCLUDE-COVERS-CODE: " + ", ".join(exclude_covers[:8])
-            + (" …" if len(exclude_covers) > 8 else "") + "\n"
-            "  `fingerprint_exclude` is for owner bookkeeping (journal/, "
-            "generated docs), never code. Remove the source path from the "
-            "exclude list and re-run:  tasks panel-review <N> --mode impl\n"
-            "  or record the acceptance:  tasks work done --stale-panel-ok "
-            '--reason "..."')
-    if not round_fp and not git_available:
-        return True, ""
-    if not round_fp or not now_fp:
-        if stale_ok:
-            if stale_reason and stale_reason.strip():
-                return True, ""
-            return False, ('--stale-panel-ok requires --reason "why this close '
-                           "may rest on a panel whose tree cannot be verified\" "
-                           "— the acceptance must be on the record.")
-        if not round_fp:
-            return False, (
-                f"risk is {risk} and the newest impl panel carries NO STAMP "
-                "(no `**Tree-state:**` on the round, in a git repo) — the tree the "
-                "panel reviewed is unknown, so freshness cannot be verified.\n"
-                "  Either re-run:  tasks panel-review <N> --mode impl\n"
-                "  or record why the missing stamp is acceptable:  tasks work done "
-                '--stale-panel-ok --reason "..."')
-        return False, (
-            f"risk is {risk} and the tree is UNREADABLE at close — git could not "
-            f"fingerprint the working tree (stamp {round_fp}; corrupt index, "
-            "missing HEAD, or an unresolvable toplevel?) — not a code change, but "
-            "the panel's tree cannot be compared to the one being closed.\n"
-            "  Repair the repository (`git status` shows the error), then retry;\n"
-            "  or record the acceptance:  tasks work done --stale-panel-ok "
-            '--reason "..."')
-    # Task 085 T: `records_only` = `records_only_delta` proved the whole
-    # difference is commits touching only fingerprint-excluded paths.
-    if round_fp == now_fp or (records_only and round_fp and now_fp):
-        return True, ""
-    if stale_ok:
-        if stale_reason and stale_reason.strip():
-            return True, ""
-        return False, ('--stale-panel-ok requires --reason "why the post-panel '
-                       "delta doesn't need a re-panel\" — the acceptance must "
-                       "be on the record.")
+    if cap_reached:
+        another = ("  - a round past the cap needs the owner's word:  "
+                   f'tasks panel-review {task} --mode impl --owner-ok --reason "…"\n')
+    else:
+        another = f"  - another impl round: tasks panel-review {task} --mode impl\n"
     return False, (
-        f"risk is {risk} and the code state changed after the newest impl "
-        f"panel (tree-state {round_fp} → {now_fp}) — the panel's verdict "
-        "predates the code being closed.\n"
-        "  Either re-run:  tasks panel-review <N> --mode impl\n"
-        "  or record the delta judgment:  tasks work done --stale-panel-ok "
-        '--reason "..."\n'
-        "  (run `git status` / `git diff` to see what changed since the panel)"
-    )
+        f"risk is {risk} and the newest impl round no longer describes the code being closed — "
+        f"{freshness.get('cause') or 'STALE'}.\n"
+        "  The ways out:\n" + another
+        + '  - or override, the reason recorded:  tasks work done --force --reason "…"\n'
+        "  (`git status` / `git diff` show what changed since the round)")
 
 
 def format_verify_receipt(entries, head_sha, risk, *, reason=None, timestamp=None,
-                          dirty_files=0, freshness=None, post_d6=None, contract_overridden=None) -> str:
+                          dirty_files=0, freshness=None, contract_overridden=None) -> str:
     """Render ONE receipt ENTRY for the `## Verification Receipt` section (the
     heading itself belongs to upsert_task_section, which keeps entries
     newest-first). `entries` is a list of (source_label, command, rc, output);
@@ -4517,97 +3701,21 @@ def format_verify_receipt(entries, head_sha, risk, *, reason=None, timestamp=Non
         # Task 286 (PHASE-B 9b part 7): what `--force` overrode in the test contract's check, on one line
         out.append("- **Test contract, overridden by --force:** "
                    + "; ".join(" ".join(str(b).split()) for b in contract_overridden))
-    # F18 Leg 1: panel freshness is part of the durable record for EVERY close
-    # where an impl round exists (the F17 advisory was console-only and its
-    # firing at task 010 stayed unwitnessable forever). `freshness` is a dict:
-    # {verdict: "FRESH"|"STALE"|"NO-STAMP", round_fp, now_fp, accepted_reason}.
+    # F18 Leg 1: the review evidence is part of the durable record of EVERY close with an impl round (the F17
+    # advisory was console-only). `freshness` is `round_freshness`'s dict (task 343: FRESH or STALE, with its cause).
     if freshness:
         v = freshness.get("verdict")
-        if v == "NO-STAMP":
-            line = ("- **Panel tree-state:** no stamp recorded on the "
-                    "newest impl round — freshness unverifiable")
-            ar = freshness.get("accepted_reason")
-            if ar:
-                line += f', accepted: "{" ".join(ar.split())}"'
-            out.append(line)
-        elif v == "EXCLUDE-COVERS-CODE":
-            # Task 060: the owner exclude set hides source paths; only an
-            # override can reach the receipt, so name the paths and the reason.
-            line = ("- **Panel tree-state:** EXCLUDE-COVERS-CODE — "
-                    "`fingerprint_exclude` hides behavioral paths: "
-                    + ", ".join((freshness.get("paths") or [])[:8]))
-            ar = freshness.get("accepted_reason")
-            if ar:
-                line += f', accepted: "{" ".join(ar.split())}"'
-            out.append(line)
-        elif v == "UNREADABLE":
-            # Task 060: git could not fingerprint the tree at close (corrupt
-            # index / missing HEAD / unresolvable toplevel). A forced or
-            # stale-panel-ok close must carry this forensic line — a plain block
-            # exits before the receipt, so this arm exists for the override path.
-            line = (f"- **Panel tree-state:** {freshness.get('round_fp', '?')} "
-                    "vs close (unavailable) — UNREADABLE (git could not "
-                    "fingerprint the working tree at close)")
-            ar = freshness.get("accepted_reason")
-            if ar:
-                line += f', accepted: "{" ".join(ar.split())}"'
-            out.append(line)
-        elif v == "SINGLE-TAMPER-DEGRADED":
-            # Task 059: no panel round carried this close, but the newest
-            # single-judge review recorded a degraded guard. Advisory — the
-            # close proceeds, the record says what was not verified.
-            line = ("- **Panel tree-state:** n/a — the newest single-judge review ran with a "
-                    f"DEGRADED tamper guard ({freshness.get('detail') or 'guard could not fully run'}); "
-                    "its findings are unverified for tamper-freedom")
-            out.append(line)
-        elif v == "TAMPER-GUARD-DEGRADED":
-            # Task 059: the carrying round's tamper guard could not fully run;
-            # only an override (or a reversible close) reaches the receipt with it.
-            line = (f"- **Panel tree-state:** {freshness.get('round_fp', '?')} vs close "
-                    f"{freshness.get('now_fp', '?')} — TAMPER-GUARD-DEGRADED on the newest "
-                    f"impl round ({freshness.get('detail') or 'guard could not fully run'})")
-            ar = freshness.get("accepted_reason")
-            if ar:
-                line += f', accepted: "{" ".join(ar.split())}"'
-            out.append(line)
-        elif v == "TAIL-CERT-PASS":
-            # Finding G (task 036): a stale panel whose only post-panel delta was
-            # non-behavioral, re-certified by a single judge on the exact delta.
-            # The receipt names both fingerprints AND the certified delta so the
-            # close is self-documenting (not a bare STALE that hides the cert).
-            line = (f"- **Panel tree-state:** {freshness.get('round_fp', '?')} "
-                    f"vs close {freshness.get('now_fp', '?')} — STALE, but "
-                    f"TAIL-CERTIFIED: {freshness.get('cert_clause', 'non-behavioral delta')}")
-            out.append(line)
+        if v == "NOT-JUDGED":
+            out.append("- **Panel tree-state:** not judged — not a git repository, and the newest impl round has "
+                       "no tree stamp")
         elif v in ("FRESH", "STALE"):
             line = (f"- **Panel tree-state:** {freshness.get('round_fp', '?')} "
                     f"vs close {freshness.get('now_fp', '?')} — {v}")
             if v == "FRESH" and freshness.get("records_only"):
-                line += (" (records-only delta since the panel: commits touching only "
-                         "fingerprint-excluded paths)")
+                line += " (only the task's own records changed since the round)"
             if v == "STALE":
-                line += " (code changed after newest impl panel)"
-                ar = freshness.get("accepted_reason")
-                if ar:
-                    line += f', accepted: "{" ".join(ar.split())}"'
-                if freshness.get("bound"):
-                    line += f"; {' '.join(str(freshness['bound']).split())}"
-                if freshness.get("stop_rule"):
-                    # task 209: after the last round D6 allows, a change no judge needed — named
-                    line += f"; {' '.join(str(freshness['stop_rule']).split())}"
+                line += ": " + " ".join(str(freshness.get("cause") or "").split())
             out.append(line)
-        # Task 059 (impl-panel r3, sonnet #2): the tamper degradation can coexist
-        # with another verdict (EXCLUDE-COVERS-CODE / NO-STAMP / UNREADABLE) and
-        # is what the gate actually blocked on first — name it either way, so the
-        # record never drops the condition the operator accepted.
-        _td = freshness.get("tamper_degraded_detail")
-        if _td and v != "TAMPER-GUARD-DEGRADED":
-            out.append("- **Panel tamper guard:** the carrying impl round's tamper guard was "
-                       f"DEGRADED ({' '.join(str(_td).split())})")
-    # Task 108: the post-D6 single-judge series after the newest impl panel — run
-    # count, last verdict and every owner-ok reason (`tasks.post_d6.close_receipt_line`).
-    if post_d6:
-        out.append(" ".join(str(post_d6).split()))
     if not entries:
         out.append("- **Verification:** NONE DECLARED — nothing was verified at close. "
                    "Declare `verify` in `.agent/config.json` to make close self-verifying.")
@@ -4978,7 +4086,6 @@ PLAYBOOKS = {
 }
 
 
-
 def _slugify(name: str) -> str:
     """Convert name to lowercase hyphen-separated slug."""
     slug = re.sub(r'[\s_]+', '-', name)
@@ -5033,7 +4140,6 @@ def _next_task_number(tasks_dir: Path, agent_dir: "Path | None" = None) -> int:
     for num in registered_numbers(agent_dir if agent_dir is not None else tasks_dir.parent):
         max_num = max(max_num, num)
     return max_num + 1
-
 
 
 def _find_playbook_skill(project_path: Path | None = None) -> Path | None:

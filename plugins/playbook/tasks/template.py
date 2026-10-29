@@ -439,27 +439,16 @@ def time_budget_instruction(
     )
 
 
-def post_d6_clauses(settled: bool = False, delta: bool = False) -> str:
-    """Task 108 (post-D6 protocol): the severity marker every review prompt now
-    requires (so `tasks.post_d6.parse_verdict` can count findings), plus the
-    SETTLED and POST-PANEL DELTA rules when those context parts were delivered."""
+def finding_clauses(settled: bool = False) -> str:
+    """The severity marker every review prompt requires (task 108; `stop_rule.round_findings` counts a round's findings
+    by it), plus the SETTLED rule when that context part was delivered. Task 343 (PLAN-PLAYBOOK-2.md 4.1 a): the
+    post-panel delta's rules — its object, `[PRE-EXISTING]`, the `[file: …]` field — went with the post-panel judge."""
     s = ("Start every finding with its severity in bold — `**Critical**` or `**Important**` (a Minor one: "
-         "`**Minor**`) — optionally followed by ONE tag: `[SETTLED]`, `[SETTLED-CONTRADICTED]` or `[PRE-EXISTING]`. ")
+         "`**Minor**`) — optionally followed by ONE tag: `[SETTLED]` or `[SETTLED-CONTRADICTED]`. ")
     if settled:
         s += ("A SETTLED block (owner rulings + findings already rejected in triage) precedes "
               "the task context: read it first and follow its header — a ruling closes a design "
               "choice, never a correctness defect. ")
-    if delta:
-        s += ("This is a POST-PANEL review: its object is the POST-PANEL DELTA in your context "
-              "(the newest impl panel's base → the current working tree). Every finding must cite "
-              "a line the delta changed or a claim the delta changed; a problem in code the delta "
-              "did not touch is tagged [PRE-EXISTING] — it is parked, not counted. "
-              "Every finding's FIRST line also names its file in a fixed field, after the severity "
-              "and the tag: `[file: <path>]` — the path copied exactly from the delta's DELTA FILES "
-              "list, or, for a file the delta did not change, that file's path from the project root. "
-              "A [PRE-EXISTING] finding is parked only when that field names a real file the delta "
-              "did not change and the finding cites no file of the delta at a line (`<file>:<line>`); "
-              "without the field it counts. ")
     return s
 
 
@@ -483,18 +472,15 @@ def _contract_plan_lens() -> str:
             f"{_CONTRACT_MISSING}judge the test plan it has. ")
 
 
-def _contract_impl_lens(delta: bool = False) -> str:
+def _contract_impl_lens() -> str:
     """The impl review's test lens (task 278): each contract row has its test — a new behavior's fails on the old code,
-    a must-not or stay-the-same row shows a mutant it catches (impl round 1). A post-panel run reads a delta: a row it
-    did not touch, nor the code under its test, was the panel's to check (plan panel P6, impl round 1)."""
+    a must-not or stay-the-same row shows a mutant it catches (impl round 1)."""
     return ("(5) Test quality — do the tests verify Intent claims or just confirm the implementation? "
             "Each row of the task's `## Test contract` needs its test; a row with no test is a finding. "
             "A row of new or changed behavior needs a test that would fail on the code as it was; a must-not row, a "
             "row of behavior that must stay the same, or one already true before needs a test that holds on both and "
             "a shown sensitivity (a mutant it catches) or its reason `already true before: <why>`. "
-            + ("In this post-panel delta review, a contract row counts only if the delta added or changed it, its "
-               "test, or the code its test covers. " if delta else "")
-            + f"{_CONTRACT_MISSING}judge the tests against the Intent. "
+            f"{_CONTRACT_MISSING}judge the tests against the Intent. "
             "For pure-function code (parsers, formatters, transformations), are there untested invariants that "
             "property tests would catch? ")
 
@@ -508,7 +494,6 @@ def plan_review_prompt(
     trim_notice: str = "",
     judge_verify=None,
     settled: bool = False,
-    delta: bool = False,
 ) -> str:
     """Return the blind judge prompt for plan review (before implementation)."""
     context_location = "provided below" if inline_context else "provided in your system prompt"
@@ -542,7 +527,7 @@ def plan_review_prompt(
         "(5) Simplify — is anything over-engineered? What can be dropped? "
         "(6) Prove it — cite file:line evidence for claims about existing code. No hand-waving. "
         "Be specific and adversarial — your job is to find problems, not approve. "
-        f"{post_d6_clauses(settled, delta)}"
+        f"{finding_clauses(settled)}"
         "Max 5 findings that count — Critical or Important. Below them you may add at most 3 Minor ones "
         "(a small issue that should not hold the close: wording, style, a cheap hardening), each starting "
         "with `**Minor**`; they are never counted and block nothing — do not raise a Minor to Important to "
@@ -569,7 +554,6 @@ def impl_review_prompt(
     trim_notice: str = "",
     judge_verify=None,
     settled: bool = False,
-    delta: bool = False,
 ) -> str:
     """Return the blind judge prompt for implementation review (after code is written)."""
     context_location = "provided below" if inline_context else "provided in your system prompt"
@@ -600,10 +584,10 @@ def impl_review_prompt(
         "transaction rolls back; a crash after commit but before any post-commit step; a lost response causing the caller to retry. "
         "For each applicable sequence, trace the persisted state and external effects, then cite the test that proves it safe or raise a "
         "finding demanding one. If the change touches no shared or persisted state, say so in one line and move on. "
-        f"{_contract_impl_lens(delta)}"
+        f"{_contract_impl_lens()}"
         "(6) Prove it works — cite file:line evidence showing correctness, or construct a concrete scenario showing failure. "
         "Be specific and adversarial — your job is to find problems, not approve. "
-        f"{post_d6_clauses(settled, delta)}"
+        f"{finding_clauses(settled)}"
         "Max 5 findings that count — Critical or Important. Below them you may add at most 3 Minor ones "
         "(a small issue that should not hold the close: wording, style, a cheap hardening), each starting "
         "with `**Minor**`; they are never counted and block nothing — do not raise a Minor to Important to "
@@ -629,7 +613,6 @@ def panel_plan_review_prompt(
     trim_notice: str = "",
     judge_verify=None,
     settled: bool = False,
-    delta: bool = False,
 ) -> str:
     """Panel judge prompt for plan review — writes to stdout, never edits task.md."""
     context_location = "provided below" if inline_context else "provided in your system prompt"
@@ -663,7 +646,7 @@ def panel_plan_review_prompt(
         "(5) Simplify — is anything over-engineered? What can be dropped? "
         "(6) Prove it — cite file:line evidence for claims about existing code. No hand-waving. "
         "Be specific and adversarial — your job is to find problems, not approve. "
-        f"{post_d6_clauses(settled, delta)}"
+        f"{finding_clauses(settled)}"
         "Max 5 findings that count — Critical or Important. Below them you may add at most 3 Minor ones "
         "(a small issue that should not hold the close: wording, style, a cheap hardening), each starting "
         "with `**Minor**`; they are never counted and block nothing — do not raise a Minor to Important to "
@@ -688,7 +671,6 @@ def panel_impl_review_prompt(
     trim_notice: str = "",
     judge_verify=None,
     settled: bool = False,
-    delta: bool = False,
 ) -> str:
     """Panel judge prompt for impl review — writes to stdout, never edits task.md."""
     context_location = "provided below" if inline_context else "provided in your system prompt"
@@ -719,10 +701,10 @@ def panel_impl_review_prompt(
         "transaction rolls back; a crash after commit but before any post-commit step; a lost response causing the caller to retry. "
         "For each applicable sequence, trace the persisted state and external effects, then cite the test that proves it safe or raise a "
         "finding demanding one. If the change touches no shared or persisted state, say so in one line and move on. "
-        f"{_contract_impl_lens(delta)}"
+        f"{_contract_impl_lens()}"
         "(6) Prove it works — cite file:line evidence showing correctness, or construct a concrete scenario showing failure. "
         "Be specific and adversarial — your job is to find problems, not approve. "
-        f"{post_d6_clauses(settled, delta)}"
+        f"{finding_clauses(settled)}"
         "Max 5 findings that count — Critical or Important. Below them you may add at most 3 Minor ones "
         "(a small issue that should not hold the close: wording, style, a cheap hardening), each starting "
         "with `**Minor**`; they are never counted and block nothing — do not raise a Minor to Important to "
@@ -999,7 +981,7 @@ Then **ask the user** what they want to work on. Don't autonomously pick a task.
 
 ```bash
 .claude/bin/tasks work <number>              # activate task, hook starts tracking
-.claude/bin/tasks work done [--force]        # finish; bounces if gates open. --force overrides all; --stale-panel-ok --reason clears only a stale panel
+.claude/bin/tasks work done [--force]        # finish; bounces if gates open. --force --reason overrides all
 .claude/bin/tasks new <type> <name> [intent] # create task — intent fills ## Intent
 .claude/bin/tasks new --stub <type> <name> [intent] # stub — expands on tasks work
 .claude/bin/tasks plan-review <number>       # blind plan review by independent agent
@@ -1235,10 +1217,9 @@ Commands:
                       held to the strictest class listed, reversible work closes
                       on verify+single-judge; set "all" for a panel on every
                       close).
-                      Stale panel evidence on a high-consequence close blocks;
-                      --stale-panel-ok --reason accepts only that, while --force
-                      --reason is the blunt whole-policy override. --force and
-                      --stale-panel-ok both need --reason.
+                      Stale panel evidence on a high-consequence close blocks
+                      (another impl round, or --force --reason, the blunt
+                      whole-policy override, whose reason is recorded).
   audit [<N>]         Run mechanical pre-panel sweeps (conflict markers, merge
                       artifacts, stale markers, + project sweeps); the newest receipt in
                       task.md, the older ones in audit-log.md beside it
@@ -1405,10 +1386,10 @@ def render_light_template(num: int, title: str) -> str:
 - [ ] Orient: name the files/claims this touches and what "verified" means (one paragraph)
 - [ ] Do the work
 - [ ] Verify: run the check that proves it and paste its result under this gate.""",
-        """## Review
-- [ ] Review routing honored: assertive or irreversible work had the implementation panel, triaged in judge.md.""",
         """## Pre-review
 - [ ] MIND_MAP.md: owning node updated in place (only if architecture or claims moved)""",
+        """## Review
+- [ ] Review routing honored: assertive or irreversible work had the implementation panel, triaged in judge.md.""",
         parked(),
     ]
     return "\n\n".join(parts) + "\n"
@@ -1501,4 +1482,10 @@ def render_template(num: int, title: str, task_type: str | None = None) -> str:
             middle.append(judge_impl_section())
 
     parts = common_start + middle + common_end
+    # Task 343 (plan panel P6): `## Pre-review` — the tests, the debug artifacts, the mind map — comes before the
+    # implementation review, so the round reads them: after the round a close admits only the task's own records.
+    _impl = judge_impl_section()
+    if _impl in parts:
+        parts.remove(pre_review())
+        parts.insert(parts.index(_impl), pre_review())
     return "\n\n".join(parts) + "\n"

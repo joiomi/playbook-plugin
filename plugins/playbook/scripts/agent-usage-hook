@@ -6,13 +6,13 @@ _PB_HJ_T0=$EPOCHREALTIME     # the hook journal's start (task 222): first, befor
 # (agent_usage.py `record_spans`). The owner, 2026-10-18: "Da, după 243 (Recomandat)".
 #
 # A recorder, not a guard: it never decides a stop. It prints nothing on stdout (a Stop hook's stdout could carry a
-# decision) and every path exits 0; a failure only leaves the span for a later read. It records nothing for a judge's,
-# a tail-cert's or the monitor's session: task 232 counts the judges' own usage. Not wired on SessionEnd beside
+# decision) and every path exits 0; a failure only leaves the span for a later read. It records nothing for a judge's
+# or the monitor's session: task 232 counts the judges' own usage. Not wired on SessionEnd beside
 # session-end-hook (task 244's impl round 1, codex: it raced that hook's removal of the session dir); since task 246
 # session-end-hook runs the same recorder itself, FIRST, before it removes anything — for the turn after the last
 # Stop (one interrupted: Esc, or a session ended mid-turn).
 if [ "${PLAYBOOK_ROLE:-}" = "monitor" ]; then exit 0; fi
-case "${PLAYBOOK_SESSION_ID:-}" in judge|tail-cert) exit 0 ;; esac
+case "${PLAYBOOK_SESSION_ID:-}" in judge) exit 0 ;; esac
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 INPUT=$(cat)
 { source "$HOOK_DIR/gate-echo-lib.sh" && pb_hook_begin agent-usage; } 2>/dev/null || exit 0
