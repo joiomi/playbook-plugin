@@ -6,7 +6,7 @@ review evidence, and six templates carry such a gate ("Run the impl panel … `t
 task whose `## Risk` was left unset — held to the high-consequence bar — closed with no judge at all once its boxes
 were ticked, and so did a high-risk task with `panel_required_for: []`. Each test names the row of task 290's contract.
 
-Real temporary projects from part 1's `Project` (tests/test_red_receipt.py), the CLI driven as `python3 -m tasks.cli`.
+Real temporary projects from part 1's `Project` (tests/_red_project.py, moved from tests/test_red_receipt.py by task 342), the CLI driven as `python3 -m tasks.cli`.
 Run: python3 tests/test_review_evidence_records_only.py
 """
 import re
@@ -19,7 +19,7 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 sys.path.insert(0, str(_HERE.parent / "plugins" / "playbook"))
-from tests.test_red_receipt import Project  # noqa: E402
+from tests._red_project import Project  # noqa: E402
 from tasks.core import has_review_evidence  # noqa: E402
 
 TEMPLATES = ("bugfix", "build", "cleanup", "feature", "ops", "refactor")

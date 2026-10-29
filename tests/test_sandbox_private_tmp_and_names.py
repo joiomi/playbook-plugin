@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import contextlib
 import importlib.util
-import inspect
 import io
 import json
 import os
@@ -401,30 +400,8 @@ class TheCodexSingleJudge(unittest.TestCase):
         self.assertEqual([p for p in given if os.path.lexists(p)], [])   # the review removed the folder
 
 
-@unittest.skipUnless(shutil.which("bwrap"), "no bubblewrap here")
-class TheRedRows(t308._Home):
-
-    def test_a_contained_row_gets_the_private_tmp(self):
-        from tasks import red
-        live = _tmp_dir(self, "pb315-live-")                         # a live repository under /tmp
-        root = Path(tempfile.mkdtemp(prefix="pb315-red-", dir=str(self.home))).resolve()
-        params = inspect.signature(red._argv).parameters
-        kw = {}
-        if "private_tmp" in params:
-            kw["private_tmp"] = False                                # the old code: the copy in /tmp, /tmp shared
-        if "protect" in params:
-            kw["protect"] = [str(live)]
-        argv = red._argv("/bin/bash", "true", root, self.home, True, **kw)
-        self.assertEqual([b for a, b in _pairs(argv) if a == "--tmpfs" and b == "/tmp"], ["/tmp"], argv)
-        self.assertNotIn(("--bind", "/tmp"), _pairs(argv))
-        self.assertNotIn(("--ro-bind", str(live)), _pairs(argv))
-        # …and a launcher argv with /tmp shared is refused, never run (my mutant run, 23:25: the check removed survived)
-        from provider import sandbox
-        shared = ["bwrap", "--ro-bind", "/", "/", "--bind", "/tmp", "/tmp", "--bind", str(root), str(root),
-                  "/bin/bash", "-c", "true"]
-        with mock.patch.object(sandbox, "build_bwrap_argv", lambda *a, **k: list(shared)):
-            with self.assertRaises(RuntimeError):
-                red._argv("/bin/bash", "true", root, self.home, True)
+# `TheRedRows` (task 315: a contained red row got the launcher's private /tmp) went with task 342: `tasks red` runs
+# a row in the project as it is, as `tasks verify` runs the verify command, with no containment of its own.
 
 
 if __name__ == "__main__":

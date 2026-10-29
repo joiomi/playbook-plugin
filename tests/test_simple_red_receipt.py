@@ -1,0 +1,501 @@
+#!/usr/bin/env python3
+"""The simple red receipt (task 342, PLAN-PLAYBOOK-2.md 4.1 d; DESIGN-PLAYBOOK-2.md §2, approved R17).
+
+The owner's rule stays (M1415, 2026-10-21: the tests are written first, so the code follows their path); its check is
+simpler. `tasks red` runs each `## Test contract` row in the project as it is now and records the result with the
+tree's fingerprint (`core.tree_state_fingerprint`) and the time. The close passes a row seen red and later green on a
+different tree — the red may come from a mutant (code broken on purpose, `--mutant "<why>"`). The copy of the old code
+(`--base`), `--drop`, the late-row rules and the state carried between runs are gone; `base.json` keeps each
+repository's start commit only and the activation writes nothing into `.git/objects` (E023.11); `No behavior changes:`
+does not count `__pycache__` (E059.7).
+
+Real temporary git projects (an outer repository and a nested `code_roots` one), the CLI as `python3 -m tasks.cli`.
+Each test names the row of task 342's contract it proves. Pure stdlib unittest.
+"""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+_HERE = Path(__file__).resolve().parent
+_PLAYBOOK = _HERE.parent / "plugins" / "playbook"
+GIT = ["git", "-c", "user.email=a@b", "-c", "user.name=p", "-c", "commit.gpgsign=false"]
+NEW = "`tests.test_new.N.test_two`"
+OLD = "`tests.test_old.T.test_one`"
+
+
+def _contract(rows) -> str:
+    body = "".join(f"| {n} | {k} | {b} | {t} |\n" for n, k, b, t in rows)
+    return ("## Test contract\n<!-- pin -->\n\n| # | Kind | Behavior | Test that proves it |\n"
+            "|---|------|----------|---------------------|\n" + body + "\n")
+
+
+class _Project(unittest.TestCase):
+    """An outer repository with a nested `code_roots` repository `code/` (`src.f()` returns 1, `tests/test_old.py`
+    passes), a throwaway HOME, and a light task whose gates are ticked — a close needs no review."""
+
+    def setUp(self):
+        self.d = Path(tempfile.mkdtemp(prefix="pb342-"))
+        self.addCleanup(shutil.rmtree, self.d, True)
+        self.home = self.d / "home"
+        self.home.mkdir()
+        self.g("init", "-q")
+        (self.d / ".gitignore").write_text("home/\ncode/\n.agent/journal/\n.agent/sessions/\n", encoding="utf-8")
+        (self.d / ".agent" / "tasks").mkdir(parents=True)
+        self.config()
+        (self.d / "README.md").write_text("outer\n", encoding="utf-8")
+        self.g("add", "-A")
+        self.g("commit", "-qm", "outer start")
+        self.code = self.d / "code"
+        (self.code / "tests").mkdir(parents=True)
+        self.g("init", "-q", cwd=self.code)
+        (self.code / "src.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+        (self.code / "tests" / "__init__.py").write_text("", encoding="utf-8")
+        (self.code / "tests" / "test_old.py").write_text(
+            "import unittest\nimport src\n\n\nclass T(unittest.TestCase):\n"
+            "    def test_one(self):\n        self.assertTrue(callable(src.f))\n        src.f()\n", encoding="utf-8")
+        self.g("add", "-A", cwd=self.code)
+        self.g("commit", "-qm", "code start", cwd=self.code)
+
+    # -- the project
+    def config(self, **extra):
+        cfg = {"verify": "true", "code_roots": ["code"], "red_run": "cd code && python3 -m unittest {test}"}
+        cfg.update(extra)
+        (self.d / ".agent" / "config.json").write_text(json.dumps(cfg), encoding="utf-8")
+
+    def g(self, *args, cwd=None):
+        return subprocess.run([*GIT, *args], cwd=cwd or self.d, capture_output=True, text=True, check=True)
+
+    def env(self):
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("PLAYBOOK_", "CLAUDE", "GIT_"))}
+        env.update({"PYTHONPATH": str(_PLAYBOOK), "HOME": str(self.home), "PLAYBOOK_SESSION_ID": "pid-red342"})
+        return env
+
+    def cli(self, *args, timeout=300):
+        return subprocess.run([sys.executable, "-m", "tasks.cli", *args], cwd=self.d, env=self.env(),
+                              capture_output=True, text=True, timeout=timeout)
+
+    def light(self, rows=None, no_change=None):
+        r = self.cli("new", "light", "probe", "probe the receipt")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.task_dir = next((self.d / ".agent" / "tasks").glob("001-*"))
+        self.task_md = self.task_dir / "task.md"
+        text = self.task_md.read_text(encoding="utf-8").replace("## Risk\nunclassified\n", "## Risk\nreversible\n")
+        text = text.replace("- [ ] ", "- [x] ")
+        text = "\n".join(ln + (" — done" if ln.startswith("- [x] ") else "") for ln in text.split("\n"))
+        if rows is not None:
+            text = text.replace("## Pre-review\n", _contract(rows) + "## Pre-review\n", 1)
+        if no_change is not None:
+            text = text.replace("## Pre-review\n", "## Test contract\n<!-- pin -->\n\nNo behavior changes: "
+                                + no_change + "\n\n## Pre-review\n", 1)
+        self.task_md.write_text(text, encoding="utf-8")
+        self.g("add", "-A")
+        self.g("commit", "-qm", "the task")
+        r = self.cli("work", "1")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+
+    def set_rows(self, rows):
+        text = self.task_md.read_text(encoding="utf-8")
+        text = re.sub(r"(?ms)^## Test contract\n.*?(?=^## )", lambda _m: _contract(rows), text)
+        self.task_md.write_text(text, encoding="utf-8")
+
+    def write_new_test(self):
+        (self.code / "tests" / "test_new.py").write_text(
+            "import unittest\nimport src\n\n\nclass N(unittest.TestCase):\n"
+            "    def test_two(self):\n        self.assertEqual(src.f(), 2)\n", encoding="utf-8")
+
+    def fix_code(self):
+        # a size of its own: a `.pyc` of the same size and second would read as fresh, and the old code would run
+        (self.code / "src.py").write_text("def f():\n    return 2  # fixed\n", encoding="utf-8")
+
+    def break_code(self):
+        (self.code / "src.py").write_text("def f():\n    raise RuntimeError('broken on purpose')\n", encoding="utf-8")
+
+    # -- what the CLI wrote
+    def red(self, *args):
+        return self.cli("red", "1", *args)
+
+    def records(self):
+        p = self.task_dir / "red-receipt.jsonl"
+        return [json.loads(ln) for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()] if p.exists() else []
+
+    def section(self):
+        m = re.search(r"(?ms)^## Red receipt\n(.*?)(?=^## |\Z)", self.task_md.read_text(encoding="utf-8"))
+        return m.group(1) if m else ""
+
+    def close(self, *extra):
+        r = self.cli("work", "done", *extra, timeout=300)
+        return r, r.stdout + r.stderr
+
+    def done(self):
+        return "## Status\ndone" in self.task_md.read_text(encoding="utf-8")
+
+    def objects(self, repo):
+        out = self.g("count-objects", "-v", cwd=repo).stdout
+        return {k: v for k, v in (ln.split(": ") for ln in out.splitlines()) if k in ("count", "in-pack")}
+
+    def fingerprint(self):
+        code = ("import sys, json; sys.path.insert(0, sys.argv[1]); from pathlib import Path; "
+                "from tasks.red import tree_fingerprint as t; "
+                "print(t(Path(sys.argv[2]), json.loads((Path(sys.argv[2]) / '.agent' / 'config.json').read_text())))")
+        return subprocess.run([sys.executable, "-c", code, str(_PLAYBOOK), str(self.d)], env=self.env(),
+                              capture_output=True, text=True, check=True).stdout.strip()
+
+
+class Run(_Project):
+
+    def test_a_run_records_each_row_on_the_tree_now(self):
+        """Row 1: one v2 record per row, in the project (not a copy), with the tree's fingerprint and the time."""
+        self.light([("1", "normal", "the run is in the project", "`pwd -P`"), ("2", "normal", "f returns 2", NEW)])
+        self.write_new_test()
+        r = self.red()
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        recs = self.records()
+        self.assertEqual([x.get("row") for x in recs], ["1", "2"], recs)
+        tree = self.fingerprint()
+        for x in recs:
+            self.assertEqual(x.get("v"), 2, x)
+            self.assertEqual(x.get("tree"), tree, x)
+            self.assertTrue(x.get("at"), x)
+        self.assertEqual(recs[0]["status"], "green")
+        self.assertEqual(recs[0]["last"], str(self.d))             # cwd = the project itself
+        self.assertEqual(recs[1]["status"], "red")
+        sec = self.section()
+        self.assertIn("never red", sec)
+        self.assertIn("red now", sec)
+
+    def test_a_tree_that_moved_during_the_run_counts_for_nothing(self):
+        """Row 14: a run during which the tree changed is recorded as moved and proves nothing."""
+        self.light([("1", "normal", "f returns 2", "`echo '# x' >> code/src.py; false`")])
+        self.red()
+        recs = self.records()
+        self.assertTrue(recs and recs[-1].get("moved") is True, recs)
+        self.config(red_run="cd code && python3 -m unittest {test}")
+        self.set_rows([("1", "normal", "f returns 2", "`test 1 = 1`")])
+        self.red()
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("never red", out)
+
+    def test_guard_timeout_and_launch_failure_are_neither(self):
+        """Row 15: the command guard's refusal, a timeout and a launch failure are neither red nor green."""
+        self.config(red_timeout=2)
+        self.light([("1", "normal", "a", "`rm -rf /`"), ("2", "normal", "b", "`sleep 30`"),
+                    ("3", "normal", "c", "`no_such_command_342 --now`")])
+        self.red()
+        st = {x["row"]: x["status"] for x in self.records()}
+        self.assertEqual(st, {"1": "refused", "2": "timeout", "3": "launch failed"}, self.records())
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("run badly", out)
+
+
+    def test_python_caches_do_not_move_the_tree(self):
+        """Row 17 (plan panel P1): the project does not ignore `__pycache__`; a Python row run twice on the same code
+        reads the same tree, and neither run is `moved`."""
+        self.light([("1", "must-not", "the old test holds", OLD)])
+        self.red()
+        self.red()
+        recs = self.records()
+        self.assertEqual(len(recs), 2, recs)
+        self.assertFalse(any(x.get("moved") for x in recs), recs)
+        self.assertEqual(recs[0]["tree"], recs[1]["tree"])
+
+    def test_several_commands_fold_into_one_record(self):
+        """Row 18 (P3): red if one command is red, green only when all are, a command that ran badly first."""
+        self.light([("1", "normal", "two", "`test 1 = 1` and `test 1 = 2`"),
+                    ("2", "normal", "both", "`test 1 = 1` and `test 2 = 2`"),
+                    ("3", "normal", "bad", "`test 1 = 2` and `no_such_command_342 --x`")])
+        self.red()
+        st = {x["row"]: (x["status"], len(x.get("sides") or [])) for x in self.records()}
+        self.assertEqual(st, {"1": ("red", 2), "2": ("green", 2), "3": ("launch failed", 2)}, self.records())
+
+    def test_two_rows_with_one_test_are_refused(self):
+        """Row 25 (P11): two rows with the same test cell would share their records."""
+        self.light([("1", "normal", "a", NEW), ("2", "edge", "b", NEW)])
+        r = self.red()
+        self.assertNotEqual(r.returncode, 0, r.stdout)
+        self.assertIn("same test", r.stdout + r.stderr)
+        self.assertEqual(self.records(), [])
+
+
+class Close(_Project):
+
+    def test_red_then_green_on_newer_code_closes(self):
+        """Row 2: a row added after a first run (the old 'late row'), seen red, then green after the fix — the start is
+        the fix's parent — closes with no flag."""
+        self.light([("1", "must-not", "the old test holds", OLD)])
+        self.break_code()
+        self.red()
+        self.g("checkout", "src.py", cwd=self.code)
+        self.red()                                               # row 1: a mutant red, then green
+        self.set_rows([("1", "must-not", "the old test holds", OLD), ("2", "normal", "f returns 2", NEW)])
+        self.write_new_test()
+        self.red("--rows", "2")
+        self.fix_code()
+        self.red()
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+        self.assertTrue(self.done(), out)
+
+    def test_a_row_never_seen_red_blocks(self):
+        """Row 3: only green records: the close blocks and names both ways out."""
+        self.light([("1", "must-not", "the old test holds", OLD)])
+        self.red()
+        self.red()
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertFalse(self.done())
+        self.assertIn("never red", out)
+        self.assertIn("--mutant", out)
+
+    def test_a_row_red_now_blocks(self):
+        """Row 4: red, green, then red again: the newest record is red."""
+        self.light([("1", "normal", "f returns 2", NEW)])
+        self.write_new_test()
+        self.red()
+        self.fix_code()
+        self.red()
+        self.break_code()
+        self.red()
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("red now", out)
+
+    def test_red_and_green_on_the_same_tree_do_not_prove(self):
+        """Row 5: a flaky row — red, then green on the very same tree — proves nothing."""
+        marker = Path(tempfile.mkdtemp(prefix="pb342-flaky-")) / "seen"
+        self.addCleanup(shutil.rmtree, marker.parent, True)
+        # (no `|` in the cell: the table would split it)
+        self.light([("1", "normal", "flaky", f"`if test -f {marker}; then true; else touch {marker}; false; fi`")])
+        self.red()
+        self.red()
+        self.assertEqual([x["status"] for x in self.records()], ["red", "green"])
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("same tree", out)
+
+    def test_a_changed_test_starts_over_and_a_reworded_behavior_does_not(self):
+        """Row 13: a row's key is its test cell."""
+        self.light([("1", "normal", "f returns 2", NEW)])
+        self.write_new_test()
+        self.red()
+        self.fix_code()
+        self.red()
+        self.set_rows([("1", "normal", "f() gives two, reworded", NEW)])
+        st = self.cli("red", "1", "--check")
+        self.assertIn("proved", st.stdout + st.stderr)
+        self.set_rows([("1", "normal", "f returns 2", OLD)])
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("not run", out)
+
+
+    def test_red_then_green_before_the_first_commit(self):
+        """Row 19 (P5): a code root with no commit yet — a red, a code edit, a green: proved."""
+        shutil.rmtree(self.code / ".git")
+        self.g("init", "-q", cwd=self.code)                       # unborn: the files are there, nothing committed
+        self.light([("1", "normal", "f returns 2", NEW)])
+        base = json.loads((self.task_dir / "base.json").read_text(encoding="utf-8"))
+        self.assertIsNone(base["scopes"]["code"]["head"], base)
+        self.write_new_test()
+        self.red()
+        self.fix_code()
+        self.red()
+        recs = self.records()
+        self.assertEqual([x["status"] for x in recs], ["red", "green"], recs)
+        self.assertNotEqual(recs[0]["tree"], recs[1]["tree"])
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+
+    def test_a_red_on_other_test_files_does_not_prove(self):
+        """Row 20 (P6): `tasks red` before the test file exists is red ("no such test"); the green after the test and
+        the code were written is on other test files — no proof."""
+        self.light([("1", "normal", "f returns 2", NEW)])
+        self.red()                                                # the test does not exist yet: red
+        self.write_new_test()
+        self.fix_code()
+        self.red()
+        recs = self.records()
+        self.assertEqual([x["status"] for x in recs], ["red", "green"], recs)
+        self.assertNotEqual(recs[0].get("tests"), recs[1].get("tests"))
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("other test files", out)
+
+
+class Mutant(_Project):
+
+    def test_a_mutant_red_then_green_proves_and_names_its_reason(self):
+        """Row 6: a must-not row shows it can fail on code broken on purpose; the reason is kept and shown."""
+        self.light([("1", "must-not", "the old test holds", OLD)])
+        self.break_code()
+        r = self.red("--mutant", "f raises")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertEqual(self.records()[-1].get("mutant"), "f raises")
+        self.g("checkout", "src.py", cwd=self.code)
+        self.red()
+        self.assertIn("f raises", self.section())
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+        self.assertTrue(self.done())
+
+    def test_a_mutant_needs_its_reason(self):
+        self.light([("1", "must-not", "the old test holds", OLD)])
+        for args in (("--mutant",), ("--mutant", "   ")):
+            r = self.red(*args)
+            self.assertNotEqual(r.returncode, 0, args)
+        self.assertEqual(self.records(), [])
+
+
+    def test_a_mutant_that_stays_green_is_said(self):
+        """Row 26: the break did not reach the test — said, and the green proves nothing new."""
+        self.light([("1", "must-not", "the old test holds", OLD)])
+        r = self.red("--mutant", "nothing really broken")
+        self.assertIn("came out green", r.stdout + r.stderr)
+
+
+class Removed(_Project):
+
+    def test_base_and_drop_are_refused(self):
+        """Row 7."""
+        self.light([("1", "normal", "f returns 2", NEW)])
+        for args in (("--base", "code=HEAD"), ("--drop", "1", "--reason", "gone")):
+            r = self.red(*args)
+            self.assertNotEqual(r.returncode, 0, (args, r.stdout))
+        self.assertEqual(self.records(), [])
+        self.assertFalse((self.task_dir / "red-receipt.jsonl").exists())
+
+
+class Base(_Project):
+
+    def test_the_activation_records_heads_and_writes_no_object(self):
+        """Row 8: base.json holds each scope's HEAD only; untracked files are never written into `.git/objects`."""
+        (self.code / "untracked_note.txt").write_text("not in git\n", encoding="utf-8")
+        (self.d / "outer_note.txt").write_text("not in git either\n", encoding="utf-8")
+        before = (self.objects(self.d), self.objects(self.code))
+        self.light([("1", "normal", "f returns 2", NEW)])
+        outer_after = self.objects(self.d)
+        # the light task's own commit adds objects to the outer repository; the code root gets none
+        self.assertEqual(self.objects(self.code), before[1])
+        base = json.loads((self.task_dir / "base.json").read_text(encoding="utf-8"))
+        self.assertEqual(base.get("v"), 2, base)
+        self.assertEqual(set(base["scopes"]), {"", "code"}, base)
+        for scope, rec in base["scopes"].items():
+            self.assertEqual(set(rec), {"head", "dirty"}, (scope, rec))   # the start's files by content (plan panel P8)
+        self.assertIn("untracked_note.txt", base["scopes"]["code"]["dirty"])
+        self.assertEqual(len(base["scopes"]["code"]["dirty"]["untracked_note.txt"]), 64)
+        self.assertEqual(base["scopes"]["code"]["head"], self.g("rev-parse", "HEAD", cwd=self.code).stdout.strip())
+        self.assertIsNotNone(outer_after)
+
+    def test_a_run_writes_no_object(self):
+        self.light([("1", "normal", "f returns 2", NEW)])
+        (self.code / "untracked_note.txt").write_text("not in git\n", encoding="utf-8")
+        self.write_new_test()
+        before = (self.objects(self.d), self.objects(self.code))
+        self.red()
+        self.assertEqual((self.objects(self.d), self.objects(self.code)), before)
+
+
+class NoChange(_Project):
+
+    def test_pycache_is_no_code_change(self):
+        """Row 9: the files verify writes are not code."""
+        self.light(no_change="a records-only task")
+        cache = self.code / "__pycache__"
+        cache.mkdir()
+        (cache / "src.cpython-310.pyc").write_bytes(b"\x00compiled")
+        (self.code / "tests" / "__pycache__").mkdir()
+        (self.code / "tests" / "__pycache__" / "test_old.cpython-310.pyc").write_bytes(b"\x00compiled")
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+        self.assertTrue(self.done(), out)
+
+    def test_a_code_change_blocks(self):
+        """Row 10: a tracked edit, or a new untracked code file, still blocks `No behavior changes:`."""
+        self.light(no_change="a records-only task")
+        (self.code / "helper.py").write_text("x = 1\n", encoding="utf-8")
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("code changed since the start", out)
+        (self.code / "helper.py").unlink()
+        self.fix_code()
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("src.py", out)
+
+
+    def test_docs_and_tests_are_no_code_change(self):
+        """Row 21 (P7): only code counts."""
+        self.light(no_change="a docs-only task")
+        (self.d / "README.md").write_text("outer, edited\n", encoding="utf-8")
+        (self.code / "tests" / "test_more.py").write_text("x = 1\n", encoding="utf-8")
+        (self.code / "README.md").write_text("a readme\n", encoding="utf-8")   # a nested root's doc name
+        (self.code / "docs").mkdir()
+        (self.code / "docs" / "guide.md").write_text("a guide\n", encoding="utf-8")
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+
+    def test_a_file_dirty_at_the_start_is_no_change(self):
+        """Row 22 (P8): a code file uncommitted before the activation, untouched since, is not a change."""
+        (self.code / "wip.py").write_text("x = 1\n", encoding="utf-8")
+        self.light(no_change="the task touches no code")
+        base = json.loads((self.task_dir / "base.json").read_text(encoding="utf-8"))
+        self.assertIn("wip.py", base["scopes"]["code"].get("dirty", {}), base)
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+
+    def test_a_code_file_renamed_into_docs_counts(self):
+        """Row 23 (P9): the source of a rename is a change."""
+        self.light(no_change="claims no code change")
+        (self.code / "docs").mkdir()
+        self.g("mv", "src.py", "docs/src.md", cwd=self.code)
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("src.py", out)
+
+    def test_flagged_files_count_by_their_content(self):
+        """Row 24 (P9): an edit hidden by assume-unchanged or skip-worktree still counts."""
+        self.light(no_change="claims no code change")
+        self.g("update-index", "--assume-unchanged", "src.py", cwd=self.code)
+        self.fix_code()
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("src.py", out)
+        self.g("update-index", "--no-assume-unchanged", "src.py", cwd=self.code)
+        self.g("checkout", "src.py", cwd=self.code)
+        self.g("update-index", "--skip-worktree", "src.py", cwd=self.code)
+        self.fix_code()
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("src.py", out)
+
+
+class Readers(_Project):
+
+    def test_a_run_that_passed_no_test_is_skipped_and_blocks(self):
+        """Row 12: a run that passed no test is `skipped`, never green; the close blocks on it."""
+        (self.code / "tests" / "test_skip.py").write_text(
+            "import unittest\n\n\nclass S(unittest.TestCase):\n    @unittest.skip('not yet')\n"
+            "    def test_later(self):\n        self.fail()\n", encoding="utf-8")
+        self.g("add", "-A", cwd=self.code)
+        self.g("commit", "-qm", "a skipped test", cwd=self.code)
+        self.light([("1", "normal", "later", "`tests.test_skip`")])
+        self.red()
+        self.assertEqual(self.records()[-1]["status"], "skipped")
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("skipped", out)
+        # a green run that skipped a test (plan panel, grok) is no green either
+        self.set_rows([("1", "normal", "later", "`cd code && python3 -m unittest tests.test_skip tests.test_old`")])
+        self.red()
+        self.assertEqual(self.records()[-1]["status"], "partly skipped")
+
+
+if __name__ == "__main__":
+    unittest.main()

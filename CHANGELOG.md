@@ -4,7 +4,17 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Changed
+- **The red receipt is simple** (task 342, PLAN-PLAYBOOK-2.md 4.1 d). `tasks red` runs each `## Test contract` row in
+  the project as it is now and records it with the tree it ran on and the digest of the test files; the close passes a
+  row seen red, then green on newer code with the same tests (a red on code broken on purpose: `tasks red --mutant
+  "<why>"`). `base.json` keeps each repository's start commit and the files dirty then, by content — nothing is written
+  into `.git/objects` any more (it was every untracked file); `No behavior changes:` counts code only, not Python's
+  caches. Limit: the close does not compare the newest green's tree with the tree it closes (`verify` runs the suite).
+
 ### Removed
+- **`tasks red --base` and `--drop`**, the run on a copy of the task's base, the late rows' own bases, the state
+  carried between runs, a row's containment, and the `red_tests` / `red_links` keys (task 342).
 - **`tasks prepare-merge`** (task 338; PLAN-PLAYBOOK-2.md 4.1 c). It renumbered colliding tasks with regexes over every
   task.md and chat_log.md, so ordinary text changed too ("2-hour" became "3-hour"), and chat_log.md is git-ignored. No
   skill or command called it; `tasks merge-doctor` stays. Merging lanes comes back with the lanes.

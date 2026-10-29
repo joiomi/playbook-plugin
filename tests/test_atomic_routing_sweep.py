@@ -67,10 +67,6 @@ APPROVED = {
         "task 280: the base record written whole under a private temporary name in the task folder, then published "
         "by os.link — exclusive, so two first activations make one base and none overwrites it; the temporary "
         "name is removed in `finally` — the link is the atomic step",
-    ("tasks/red.py", "shutil.copy2(src, dst)"):
-        "task 280: a working-tree test file laid over the base copy — a new folder made by mkdtemp for this run "
-        "and removed in `finally` (an existing copy of the name, from the archive, is unlinked first) — ephemeral, "
-        "never state",
     ("tasks/atomic.py", 'os.fdopen(fd, "wb")'):
         "the primitive itself: the temp file it later os.replace()s into place",
     ("tasks/atomic.py", 'os.fdopen(fd, "w", encoding=encoding, newline=newline)'):

@@ -19,7 +19,7 @@ _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent))
 sys.path.insert(0, str(_HERE.parent / "plugins" / "playbook"))
 from tests.test_batch_close_guard import ProjectFixture  # noqa: E402
-from tests.test_red_receipt import Project  # noqa: E402
+from tests._red_project import Project  # noqa: E402
 from tasks.core import _atx_h2_text, _extract_status, _iter_fenced_flags, _physical_lines  # noqa: E402
 
 
