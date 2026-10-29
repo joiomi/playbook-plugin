@@ -7,12 +7,13 @@ check the gate anyway, `work done` (false), or misuse `freehand`. This adds a
 `blocked` state so the pause is self-documenting.
 
 Invariants (from the write-up):
-  * the Stop hook exits 0 on a blocked task with unchecked gates, FIRST attempt
-    (stop_hook_active:false — the retry valve would mask a broken implementation);
+  * the Stop hook leaves no memento on a blocked task with unchecked gates, FIRST attempt
+    (stop_hook_active:false; since task 340 the hook never blocks — a held stop is its
+    memento, `tests/_stopcheck.py`);
   * blocking checks/adds/reorders NO gate — gate lines byte-identical before/after;
   * `tasks list`/`status` show BLOCKED, counted separately from pending and done;
   * `_find_active_task` skips a blocked task;
-  * `tasks work <N>` clears it and the Stop hook blocks again afterwards;
+  * `tasks work <N>` clears it and the Stop hook leaves its memento again afterwards;
   * the reason cannot break the gate parsers — a reason containing `- [ ]`, a `## `
     heading, or backticks must not become a phantom gate/section (see #09).
 
@@ -22,6 +23,7 @@ import json
 import os
 import subprocess
 from tests._bashcheck import bash_or_skip
+from tests._stopcheck import held, memento, released
 import sys
 import tempfile
 import unittest
@@ -614,7 +616,7 @@ class BlockedEndToEnd(unittest.TestCase):
         self._set_counters()
 
         # unchecked gate + real activity → hook blocks
-        self.assertEqual(self.run_stop_hook().returncode, 2,
+        self.assertTrue(held(self.run_stop_hook()),
                          "open gates with activity must block")
 
         # block it
@@ -624,7 +626,7 @@ class BlockedEndToEnd(unittest.TestCase):
 
         # THE invariant: hook allows the turn to end, on the FIRST attempt
         self._set_counters()
-        self.assertEqual(self.run_stop_hook(stop_active=False).returncode, 0,
+        self.assertTrue(released(self.run_stop_hook(stop_active=False)),
                          "a blocked task must let the turn end without a fake checkbox")
 
         # list + status show BLOCKED, counted separately
@@ -638,7 +640,7 @@ class BlockedEndToEnd(unittest.TestCase):
         self.assertEqual(self.run_tasks("work", "012").returncode, 0)
         self.assertEqual(_extract_status(self.task_file), "in_progress")
         self._set_counters()
-        self.assertEqual(self.run_stop_hook().returncode, 2,
+        self.assertTrue(held(self.run_stop_hook()),
                          "after resume, open gates block again")
 
     def test_blocked_requires_a_reason(self):
@@ -662,7 +664,7 @@ class BlockedEndToEnd(unittest.TestCase):
             encoding="utf-8")
         self.assertEqual(_extract_status(self.task_file), "blocked")
         self._set_counters()
-        self.assertEqual(self.run_stop_hook().returncode, 0,
+        self.assertTrue(released(self.run_stop_hook()),
                          "hook must honor the LAST ## Status, as Python does")
 
         # Reverse: decoy FIRST says blocked, real LAST says pending →
@@ -673,7 +675,7 @@ class BlockedEndToEnd(unittest.TestCase):
             encoding="utf-8")
         self.assertEqual(_extract_status(self.task_file), "pending")
         self._set_counters()
-        self.assertEqual(self.run_stop_hook().returncode, 2,
+        self.assertTrue(held(self.run_stop_hook()),
                          "a decoy 'blocked' heading must not release the gate")
 
 
@@ -697,7 +699,7 @@ class BlockedEndToEnd(unittest.TestCase):
             self.assertEqual(_extract_status(self.task_file), "pending", name)
             self._set_counters()
             r = self.run_stop_hook()
-            self.assertEqual(r.returncode, 2,
+            self.assertTrue(held(r),
                              f"{name}: a fenced `## Status`/blocked decoy released the gate: {r.stderr}")
         # Control: the same file with a REAL trailing blocked status is released,
         # and the hook agrees with Python (the LAST live heading wins).
@@ -707,7 +709,7 @@ class BlockedEndToEnd(unittest.TestCase):
             encoding="utf-8")
         self.assertEqual(_extract_status(self.task_file), "blocked")
         self._set_counters()
-        self.assertEqual(self.run_stop_hook().returncode, 0,
+        self.assertTrue(released(self.run_stop_hook()),
                          "a real live blocked status after a fenced example must still release")
 
     def test_status_read_fails_closed_without_python(self):
@@ -727,7 +729,7 @@ class BlockedEndToEnd(unittest.TestCase):
         payload = '{"stop_hook_active": false}'
         r = subprocess.run([bash_or_skip(), str(SCRIPTS / "stop-hook")], input=payload,
                            cwd=self.project, env=env, capture_output=True, text=True)
-        self.assertEqual(r.returncode, 2,
+        self.assertTrue(held(r),
                          f"unreadable status must fail CLOSED (gate count runs): {r.stderr}")
         self.assertIn("status", r.stderr.lower(), "the fallback must be loud")
 
@@ -761,7 +763,7 @@ class BlockedEndToEnd(unittest.TestCase):
         self._set_counters()
         shims = {"python3": "#!/bin/sh\nexit 1\n"}
         first = self._run_stop_hook_with_shims(shims)
-        self.assertEqual(first.returncode, 2, f"first stop must block: {first.stderr}")
+        self.assertTrue(held(first), f"first stop must block: {first.stderr}")
         second = self._run_stop_hook_with_shims(shims, stop_active=True)
         self.assertEqual(second.returncode, 0,
                          f"the valve must end a re-issued stop without python3: {second.stderr}")
@@ -775,7 +777,7 @@ class BlockedEndToEnd(unittest.TestCase):
         ]:
             with self.subTest(label):
                 r = self._run_stop_hook_with_shims(shims, payload=payload)
-                self.assertEqual(r.returncode, 2, f"{label}: {r.stderr}")
+                self.assertTrue(held(r), f"{label}: {r.stderr}")
         # Round-4 codex-medium: the shell regex is the fallback for a MISSING
         # python3, not for a payload python3 could not parse — with python3
         # present a malformed payload must read as "not active" and BLOCK.
@@ -786,7 +788,7 @@ class BlockedEndToEnd(unittest.TestCase):
         ]:
             with self.subTest("python present, " + label):
                 r = self._run_stop_hook_with_shims({}, payload=payload)
-                self.assertEqual(r.returncode, 2, f"{label}: malformed payload released: {r.stderr}")
+                self.assertTrue(held(r), f"{label}: malformed payload released: {r.stderr}")
         # Round-5 codex ×2: a project-root `json.py` shadows the stdlib for a
         # `python3 -c` run from the project dir — the parser fails while a bare
         # `python3 -c pass` probe succeeds, so the flag read False forever and
@@ -795,7 +797,7 @@ class BlockedEndToEnd(unittest.TestCase):
         (self.project / "json.py").write_text("raise ImportError('shadowed')\n", encoding="utf-8")
         try:
             r = self._run_stop_hook_with_shims({})
-            self.assertEqual(r.returncode, 2, f"first stop must block with json shadowed: {r.stderr}")
+            self.assertTrue(held(r), f"first stop must block with json shadowed: {r.stderr}")
             r = self._run_stop_hook_with_shims({}, stop_active=True)
             self.assertEqual(r.returncode, 0,
                              f"valve must survive a project-root json.py shadow: {r.stderr}")
@@ -804,7 +806,7 @@ class BlockedEndToEnd(unittest.TestCase):
         # Round-2 codex-medium: the valve must be SHELL-NATIVE — with python3 AND
         # grep both broken the re-issued stop still has to end the turn.
         both = {"python3": "#!/bin/sh\nexit 1\n", "grep": "#!/bin/sh\nexit 2\n"}
-        self.assertEqual(self._run_stop_hook_with_shims(both).returncode, 2)
+        self.assertTrue(held(self._run_stop_hook_with_shims(both)))
         r = self._run_stop_hook_with_shims(both, stop_active=True)
         self.assertEqual(r.returncode, 0, f"valve must not depend on grep either: {r.stderr}")
 
@@ -822,7 +824,7 @@ class BlockedEndToEnd(unittest.TestCase):
         sd.mkdir(parents=True, exist_ok=True)
         (sd / "counters").write_text("writes=0\ntools=1\n", encoding="utf-8")
         r = self._run_stop_hook_with_shims({"python3": "#!/bin/sh\nexit 1\n"})
-        self.assertEqual(r.returncode, 0, f"conversational bypass is the documented bound: {r.stderr}")
+        self.assertTrue(released(r), f"conversational bypass is the documented bound: {r.stderr}")
 
     def test_no_python_fallback_blocks_when_grep_itself_fails(self):
         """Task 072 (070 release panel, codex-high #2): in the no-python arm a grep
@@ -839,7 +841,7 @@ class BlockedEndToEnd(unittest.TestCase):
             "python3": "#!/bin/sh\nexit 1\n",
             "grep": "#!/bin/sh\necho 'grep: simulated failure' >&2\nexit 2\n",
         })
-        self.assertEqual(r.returncode, 2,
+        self.assertTrue(held(r),
                          f"a failed grep must BLOCK (fail closed), not release: {r.stderr}")
         self.assertIn("grep could not count the gates", r.stderr,
                       "the hook's OWN warning (not the shim's stderr) must disclose the failure")
@@ -851,7 +853,7 @@ class BlockedEndToEnd(unittest.TestCase):
             "python3": "#!/bin/sh\nexit 1\n",
             "grep": "#!/bin/sh\nexit 2\n",
         })
-        self.assertEqual(r.returncode, 2,
+        self.assertTrue(held(r),
                          f"a failed count must not be released by the low-activity bypass: {r.stderr}")
         # Round-3 codex (both seats): a grep that exits 0 but prints GARBAGE is a
         # count NOT taken — `[0-9]*` as a shell glob is "one digit then anything",
@@ -864,7 +866,7 @@ class BlockedEndToEnd(unittest.TestCase):
                     "python3": "#!/bin/sh\nexit 1\n",
                     "grep": "#!/bin/sh\nprintf '%s\\n' '" + out + "'\nexit 0\n",
                 })
-                self.assertEqual(r.returncode, 2, f"{label}: garbled count released: {r.stderr}")
+                self.assertTrue(held(r), f"{label}: garbled count released: {r.stderr}")
                 self.assertIn("grep could not count the gates", r.stderr, label)
 
     def test_no_python_fallback_counts_a_bom_prefixed_gate(self):
@@ -878,11 +880,11 @@ class BlockedEndToEnd(unittest.TestCase):
             .encode("utf-8"))
         self._set_counters()
         # Sanity: the Python-backed path sees the gate (so the two arms must agree).
-        self.assertEqual(self.run_stop_hook().returncode, 2, "python arm must count the BOM gate")
+        self.assertTrue(held(self.run_stop_hook()), "python arm must count the BOM gate")
         r = self._run_stop_hook_with_shims({"python3": "#!/bin/sh\nexit 1\n"})
-        self.assertEqual(r.returncode, 2,
+        self.assertTrue(held(r),
                          f"no-python fallback under-counted a BOM-prefixed gate (released): {r.stderr}")
-        self.assertIn("1 unchecked", r.stderr)
+        self.assertIn("1 open gate", memento(r) or "")
         # Round-2 opus: the parity table proves the pattern through `grep -f`; the
         # shipped hook passes it INLINE on argv. Drive every BOM shape through the
         # real invocation too, so the argv byte path is proven on every CI lane.
@@ -899,12 +901,12 @@ class BlockedEndToEnd(unittest.TestCase):
                     body = "\ufeff- [ ] G0 first line\n" + body
                 self.task_file.write_bytes(body.encode("utf-8"))
                 r = self._run_stop_hook_with_shims({"python3": "#!/bin/sh\nexit 1\n"})
-                self.assertEqual(r.returncode, 2, f"{label}: released: {r.stderr}")
-                self.assertIn("1 unchecked", r.stderr, label)
+                self.assertTrue(held(r), f"{label}: released: {r.stderr}")
+                self.assertIn("1 open gate", memento(r) or "", label)
                 # all-checked BOM file must still RELEASE (no over-block on the BOM itself)
                 self.task_file.write_bytes(("\ufeff- [x] done\n").encode("utf-8"))
                 r = self._run_stop_hook_with_shims({"python3": "#!/bin/sh\nexit 1\n"})
-                self.assertEqual(r.returncode, 0, f"{label}: BOM on a checked gate over-blocked: {r.stderr}")
+                self.assertTrue(released(r), f"{label}: BOM on a checked gate over-blocked: {r.stderr}")
 
 
     def test_fenced_gate_decoys_do_not_fool_the_stop_gate(self):
@@ -921,22 +923,22 @@ class BlockedEndToEnd(unittest.TestCase):
             "## Work Plan\n- [x] G1\n- [ ] G2: real work left\n", encoding="utf-8")
         self._set_counters()
         r = self.run_stop_hook()
-        self.assertEqual(r.returncode, 2, f"fenced Freehand decoy released the stop: {r.stderr}")
-        self.assertIn("G2: real work left", r.stderr)
-        self.assertIn("1 unchecked", r.stderr)
+        self.assertTrue(held(r), f"fenced Freehand decoy released the stop: {r.stderr}")
+        self.assertIn("G2: real work left", memento(r) or "")
+        self.assertIn("1 open gate", memento(r) or "")
         # (2) fenced example, every live gate checked → must ALLOW (exit 0).
         self.task_file.write_text(
             "# 012 - Decide\n\n## Status\npending\n\n## Work Plan\n- [x] G1\n- [x] G2\n\n"
             "## Docs\n```\n- [ ] <describe the gate>\n```\n", encoding="utf-8")
         self._set_counters()
         r = self.run_stop_hook()
-        self.assertEqual(r.returncode, 0, f"a fenced example blocked a finished task: {r.stderr}")
+        self.assertTrue(released(r), f"a fenced example blocked a finished task: {r.stderr}")
         # (3) control: a REAL live Freehand first gate still releases.
         self.task_file.write_text(
             "# 012 - Decide\n\n## Status\npending\n\n## Debrief\n- [ ] Freehand — work is done\n",
             encoding="utf-8")
         self._set_counters()
-        self.assertEqual(self.run_stop_hook().returncode, 0)
+        self.assertTrue(released(self.run_stop_hook()))
         # Round-1 panel (task 055): three more decoys that the COUNT keeps live
         # but the Freehand RELEASE must not act on — decided in Python now.
         decoys = {
@@ -953,7 +955,7 @@ class BlockedEndToEnd(unittest.TestCase):
             self.task_file.write_text(body, encoding="utf-8")
             self._set_counters()
             r = self.run_stop_hook()
-            self.assertEqual(r.returncode, 2, f"{name}: released the stop: {r.stderr}")
+            self.assertTrue(held(r), f"{name}: released the stop: {r.stderr}")
 
     def test_gate_discovery_fails_closed_without_python(self):
         """No python → the hook cannot read the live view. The grep fallback may
@@ -965,7 +967,7 @@ class BlockedEndToEnd(unittest.TestCase):
             "# 012 - Decide\n\n## Status\npending\n\n## Debrief\n- [ ] Freehand — work is done\n",
             encoding="utf-8")
         self._set_counters()
-        self.assertEqual(self.run_stop_hook().returncode, 0, "control: python releases Freehand")
+        self.assertTrue(released(self.run_stop_hook()), "control: python releases Freehand")
         shim = Path(tempfile.mkdtemp())
         (shim / "python3").write_text("#!/bin/sh\nexit 1\n", encoding="utf-8")
         os.chmod(shim / "python3", 0o755)
@@ -974,7 +976,7 @@ class BlockedEndToEnd(unittest.TestCase):
         r = subprocess.run([bash_or_skip(), str(SCRIPTS / "stop-hook")],
                            input='{"stop_hook_active": false}', cwd=self.project, env=env,
                            capture_output=True, text=True)
-        self.assertEqual(r.returncode, 2, f"no-python fallback must not release: {r.stderr}")
+        self.assertTrue(held(r), f"no-python fallback must not release: {r.stderr}")
         self.assertIn("python", r.stderr.lower(), "the fallback must be loud")
 
     def _run_gate_hook(self, task_pointer, code_path="src/main.py"):
@@ -1029,7 +1031,7 @@ class BlockedEndToEnd(unittest.TestCase):
         self.assertEqual(_extract_status(self.task_file), "pending")
         self._set_counters()
         r = self.run_stop_hook()
-        self.assertEqual(r.returncode, 2, f"U+0085-minted status released the stop: {r.stderr}")
+        self.assertTrue(held(r), f"U+0085-minted status released the stop: {r.stderr}")
         # F3: a U+0085-joined `## Status\x85done` is one physical line, not a done pair.
         self.task_file.write_text(
             "# 012 - Decide\n\n## Status\u0085done\n\n## Status\npending\n\n## Work Plan\n- [ ] G1\n",
@@ -1189,7 +1191,7 @@ class BlockedEndToEnd(unittest.TestCase):
         self.assertEqual(_extract_status(self.task_file), "unknown")
         self._set_counters()
         r = self.run_stop_hook()
-        self.assertEqual(r.returncode, 2, f"fallback to an earlier blocked released the gate: {r.stderr}")
+        self.assertTrue(held(r), f"fallback to an earlier blocked released the gate: {r.stderr}")
 
 
     def test_hook_blocked_match_is_exact(self):
@@ -1199,7 +1201,7 @@ class BlockedEndToEnd(unittest.TestCase):
             "# 012 - Decide\n\n## Status\nblockedness\n\n## Work Plan\n- [ ] open gate\n",
             encoding="utf-8")
         self._set_counters()
-        self.assertEqual(self.run_stop_hook().returncode, 2, "a blocked* prefix released the gate")
+        self.assertTrue(held(self.run_stop_hook()), "a blocked* prefix released the gate")
 
 
     def test_work_done_force_is_not_an_escape_from_the_status_preflight(self):
@@ -1236,7 +1238,7 @@ class BlockedEndToEnd(unittest.TestCase):
         r = subprocess.run([bash_or_skip(), str(SCRIPTS / "stop-hook")],
                            input='{"stop_hook_active": false}', cwd=self.project, env=env,
                            capture_output=True, text=True)
-        self.assertEqual(r.returncode, 0, f"a CR after `blocked` must not defeat the release: {r.stderr}")
+        self.assertTrue(released(r), f"a CR after `blocked` must not defeat the release: {r.stderr}")
 
 
 class TransitionsCheckTheSourceStatus(unittest.TestCase):

@@ -100,12 +100,14 @@ class AFailedCallIsCounted(unittest.TestCase):
     def test_a_turn_whose_only_call_failed_is_held_by_the_stop(self):
         self.sed_call(failed=True)
         stop = self.stop()
-        self.assertTrue(any(rc == 2 and "unchecked gate" in err for _, rc, _, err in stop), stop)
+        self.assertTrue(any(rc == 0 and '"systemMessage"' in out and "open gate" in out for _, rc, out, _ in stop),
+                        stop)      # held: since task 340 the stop's memento
 
     def test_control_the_same_call_succeeding_is_held(self):
         self.sed_call(failed=False)
         stop = self.stop()
-        self.assertTrue(any(rc == 2 and "unchecked gate" in err for _, rc, _, err in stop), stop)
+        self.assertTrue(any(rc == 0 and '"systemMessage"' in out and "open gate" in out for _, rc, out, _ in stop),
+                        stop)      # held: since task 340 the stop's memento
 
     def test_a_failed_call_is_counted_as_a_tool_and_a_write(self):
         self.sed_call(failed=True)

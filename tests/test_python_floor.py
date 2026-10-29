@@ -32,6 +32,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from tests._stopcheck import held, released
 from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
@@ -278,7 +279,7 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
             r = self._hook_old_python("stop-hook", b'{"hook_event_name":"Stop","stop_hook_active":false}')
             err = r.stderr.decode("utf-8", "replace")
             self.assertIn(FLOOR_MSG, err, f"the stop hook was silent about the floor: {err!r}")
-            self.assertEqual(r.returncode, 2, f"an open gate was let through below the floor: {err!r}")
+            self.assertTrue(held(r), f"an open gate was let through below the floor: {err!r}")
             r = self._hook_old_python("stop-hook", b'{"hook_event_name":"Stop","stop_hook_active":true}')
             self.assertEqual(r.returncode, 0, "the one-shot valve did not end the re-issued stop below the floor")
         finally:
@@ -461,7 +462,8 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
     def test_the_stop_hook_holds_a_turn_the_echo_did_not_count(self):
         # why the echo marks: a user's prompt below the floor resets nothing either (the chat hook does nothing), so
         # counts of 0 and 0 stay 0 while shell commands run — the stop hook's low-activity release would end the
-        # turn with its gate open. The mark holds it; without the mark the same counts release it (the control).
+        # turn with its gate open. The mark holds it (since task 340: its memento); without the mark the same counts
+        # release it (the control).
         import json as _json
         path, _log = self._working_old_python()
         payload = _json.dumps({"hook_event_name": "PostToolUse", "tool_name": "Bash",
@@ -482,7 +484,7 @@ class ShellEntrypointFloorGuard(unittest.TestCase):
                 if not marked:
                     (sess / "counts_unsure").unlink()
                 r = self._hook_old_python("stop-hook", b'{"hook_event_name":"Stop","stop_hook_active":false}')
-                self.assertEqual(r.returncode, 2 if marked else 0, r.stderr.decode("utf-8", "replace"))
+                self.assertTrue(held(r) if marked else released(r), r.stderr.decode("utf-8", "replace"))
 
     # -- negative control: on the REAL (>= 3.10) interpreter the guard does NOT
     #    fire — no floor message, safe command still allowed (exit 0). Proves the

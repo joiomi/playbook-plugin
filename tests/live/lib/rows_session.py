@@ -42,7 +42,13 @@ def stop_rounds(events: "list[dict]") -> "list[list[dict]]":
 
 
 def blocked(stop: "list[dict]") -> bool:
-    return any(x.get("exit_code") == 2 for x in stop)
+    return any(str(x.get("exit_code")) == "2" for x in stop)
+
+
+def reminded(stop: "list[dict]") -> bool:
+    """The stop hook's memento (task 340: the stop never blocks — exit 0 and a `systemMessage` naming open gates)."""
+    return any(str(x.get("exit_code")) == "0" and '"systemMessage"' in str(x.get("stdout") or x.get("output") or "")
+               and "open gate" in str(x.get("stdout") or x.get("output") or "") for x in stop)
 
 
 def resume_named(events: "list[dict]") -> "tuple[bool, str]":
@@ -171,9 +177,9 @@ def hook_invocation(out: Path) -> int:
     echoed = [x for x in post if "Working on task [001]" in json.dumps(x)]
     run.clause("the state echo runs after the tool events and reports the active gate", bool(echoed),
                f"{len(post)} PostToolUse hook responses, {len(echoed)} naming task [001]")
-    run.clause("the stop event invokes the stop hook (its gate line blocks the first stop)",
-               bool(stops) and any("unchecked gate" in (x.get("stderr") or "") for x in stops[0]),
-               f"stops: {[[(x.get('exit_code'), (x.get('stderr') or '')[:60]) for x in s] for s in stops]}")
+    run.clause("the stop event invokes the stop hook (its memento on the first stop — task 340: it never blocks)",
+               bool(stops) and reminded(stops[0]) and not blocked(stops[0]),
+               f"stops: {[[(x.get('exit_code'), (x.get('stdout') or '')[:80]) for x in s] for s in stops]}")
     return run.finish()
 
 
@@ -217,14 +223,15 @@ def stop_close(out: Path) -> int:
         "3. Edit src/app.py: change `x = 1` to `x = 2` (read it first).\n"
         "Then reply DONE.\n"))
     stops = stop_rounds(ev)
-    run.note("stops (each: its hooks' exit codes and stderr): " + json.dumps(
-        [[(x.get("exit_code"), (x.get("stderr") or "")[:160]) for x in s] for s in stops]))
+    run.note("stops (each: its hooks' exit codes and stdout): " + json.dumps(
+        [[(x.get("exit_code"), (x.get("stdout") or "")[:160]) for x in s] for s in stops]))
     first = stops[0] if stops else []
-    run.clause("with gates open after a turn that wrote, the FIRST stop is blocked by the hook's own line",
-               blocked(first) and any("unchecked gate" in (x.get("stderr") or "") for x in first),
-               f"first stop: {[(x.get('exit_code'), (x.get('stderr') or '')[:120]) for x in first]}")
-    run.clause("the one-shot valve: the re-issued stop is let through, the session is not trapped",
-               len(stops) >= 2 and not blocked(stops[-1]) and _r.returncode == 0,
+    # task 340 (PLAN-PLAYBOOK-2.md 4.1 b, the owner's R14): the stop never blocks — it leaves a memento
+    run.clause("with gates open after a turn that wrote, the FIRST stop ends with the hook's memento",
+               reminded(first) and not blocked(first),
+               f"first stop: {[(x.get('exit_code'), (x.get('stdout') or '')[:120]) for x in first]}")
+    run.clause("the session is not held: no stop is blocked and the session ends",
+               bool(stops) and not any(blocked(s) for s in stops) and _r.returncode == 0,
                f"stops blocked: {[blocked(s) for s in stops]}; session rc {_r.returncode}")
     # a COMPLETE task: every gate checked before the turn ends
     p2 = _proj("pb184-stop2-")
@@ -239,9 +246,9 @@ def stop_close(out: Path) -> int:
     stops2 = stop_rounds(ev2)
     text = (p2 / ".agent" / "tasks" / "001-done-probe" / "task.md").read_text(encoding="utf-8")
     open_gates = re.findall(r"(?m)^\s*- \[ \]", text)
-    run.clause("with every gate checked, the first stop is let through", not open_gates and bool(stops2)
-               and not blocked(stops2[0]), f"open gate lines left: {len(open_gates)}; "
-               f"stops blocked: {[blocked(s) for s in stops2]}")
+    run.clause("with every gate checked, the first stop says nothing", not open_gates and bool(stops2)
+               and not blocked(stops2[0]) and not reminded(stops2[0]), f"open gate lines left: {len(open_gates)}; "
+               f"stops blocked: {[blocked(s) for s in stops2]}; reminded: {[reminded(s) for s in stops2]}")
     # task 193 (PLAN S14 T4, #38): a `claude -p` the session's agent starts resolves to the SAME session, and its
     # prompt reset the outer turn's counts (measured before the fix: `writes=2 tools=3`, then 0) — a turn that had
     # worked could end as a chat reply with its gates open. Its prompt must leave them as they were.
@@ -252,21 +259,19 @@ def stop_close(out: Path) -> int:
         "1. Run: .claude/bin/tasks new quick nest-probe \"a probe task\"\n"
         "2. Run: .claude/bin/tasks work 1\n"
         "3. Read src/app.py.\n"
-        "4. Run exactly: cat .agent/sessions/*/counters .agent/sessions/*/prompt_gen\n"
+        "4. Run exactly: cat .agent/sessions/*/counters\n"
         f"5. Run exactly: {nested}\n"
-        "6. Run exactly: cat .agent/sessions/*/counters .agent/sessions/*/prompt_gen\n"
+        "6. Run exactly: cat .agent/sessions/*/counters\n"
         "Then reply DONE.\n"), timeout=600)
     # impl panel r1 (fable, opus, codex): `tools` alone also rises after a reset (the nested agent's own calls count
-    # into the same file) or after a nested call that failed. A reset of the user's kind also begins a new prompt
-    # generation, so the generation must be the same before and after; the nested call must have answered; `writes`
-    # (the other number of the chat-reply release) must not go down.
+    # into the same file) or after a nested call that failed. The nested call must have answered; `writes` (the
+    # other number of the chat-reply rule) must not go down. (The prompt generation this read too went with task 340.)
     reads = []
     for out in tool_results(ev3):
         tools_m = re.search(r"(?m)^tools=(\d+)$", out)
         writes_m = re.search(r"(?m)^writes=(\d+)$", out)
-        gen_m = re.search(r"(?m)^0 ([A-Za-z0-9]+)$", out)
-        if tools_m and writes_m and gen_m:
-            reads.append((int(tools_m.group(1)), int(writes_m.group(1)), gen_m.group(1)))
+        if tools_m and writes_m:
+            reads.append((int(tools_m.group(1)), int(writes_m.group(1))))
     issued = any("claude -p" in i.get("command", "") and "--plugin-dir" in i.get("command", "")
                  for n, i in tool_calls(ev3) if n == "Bash")
     # the nested prompt's own hook ran and saw a nested agent: its journal record (task 193, impl panel r1, codex:
@@ -274,12 +279,11 @@ def stop_close(out: Path) -> int:
     # and on 2026-10-13 23:11 one was held by the outer task's gates and did not answer `OK`)
     answered = issued and any(x.get("hook") == "chat-log" and x.get("decision") == "record"
                               and "nested agent" in str(x.get("reason", "")) for x in journal(p3))
-    held = (len(reads) >= 2 and reads[-1][2] == reads[0][2] and reads[-1][0] > reads[0][0]
-            and reads[-1][1] >= reads[0][1])
+    held = len(reads) >= 2 and reads[-1][0] > reads[0][0] and reads[-1][1] >= reads[0][1]
     run.clause("a nested `claude -p`'s prompt leaves the outer turn as it was (task 193, #38): its prompt hook ran "
-               "and journaled the nested agent, and between the reads before and after it the prompt generation is "
-               "the same, `tools` rose and `writes` did not go down", answered and held,
-               f"nested prompt hook journaled: {answered}; (tools, writes, generation) before/after: {reads}")
+               "and journaled the nested agent, and between the reads before and after it `tools` rose and `writes` "
+               "did not go down", answered and held,
+               f"nested prompt hook journaled: {answered}; (tools, writes) before/after: {reads}")
     return run.finish()
 
 
@@ -295,9 +299,10 @@ def freehand(out: Path) -> int:
     run.clause("freehand starts a task whose first live gate is `Freehand`, with its timestamped start marker",
                task is not None and "<!-- freehand-start:" in task.read_text(encoding="utf-8"),
                f"task: {task}")
-    run.clause("in freehand the edit is allowed and the stop is released (no block)",
+    run.clause("in freehand the edit is allowed and the stop says nothing (no memento)",
                (p / "src" / "app.py").read_text(encoding="utf-8").startswith("x = 2") and bool(stops)
-               and not any(blocked(s) for s in stops), f"stops blocked: {[blocked(s) for s in stops]}")
+               and not any(blocked(s) or reminded(s) for s in stops),
+               f"stops blocked: {[blocked(s) for s in stops]}; reminded: {[reminded(s) for s in stops]}")
     # the transition: the freehand log captured, then work goes to a tracked task and the gates hold again
     _r2, ev2 = claude_session(run, "the transition: log the freehand span, then a tracked task and an edit", p, RULES + (
         "1. Run: .claude/bin/tasks work 1\n"
@@ -310,8 +315,8 @@ def freehand(out: Path) -> int:
     stops2 = stop_rounds(ev2)
     logged, said = freehand_logged(text, tool_results(ev2))
     run.clause("`tasks freehand log` records the span from the chat log under the `Freehand log` gate", logged, said)
-    run.clause("after the switch to a tracked task, a turn that wrote is stopped by the re-armed gates",
-               bool(stops2) and blocked(stops2[0]), f"stops blocked: {[blocked(s) for s in stops2]}")
+    run.clause("after the switch to a tracked task, a turn that wrote ends with the re-armed gates' memento",
+               bool(stops2) and reminded(stops2[0]), f"reminded: {[reminded(s) for s in stops2]}")
     return run.finish()
 
 

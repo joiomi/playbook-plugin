@@ -50,15 +50,16 @@ truth.
 
 ## Family 1 — enforcement decisions (`decision` = `allow` / `block` / `record`)
 
-Emitted by the gate/guard/stop/batch hooks and the close path. `hook` is one
-of `task-gate`, `command-guard`, `stop`, `gate-batch-check` or `close` (`task-dir-watch`, task 196's task-folder
-watch, wrote records here until task 339 removed it: `record` / `block` / `allow` with `reason="unknown task
-folder"` and the folder as `path`);
+Emitted by the gate/guard/batch hooks and the close path. `hook` is one of `task-gate`,
+`command-guard`, `gate-batch-check` or `close` (`stop` wrote its blocks here until task 340, which made
+the stop hook leave a memento instead; `task-dir-watch`, task 196's task-folder watch, wrote records
+here until task 339 removed it: `record` / `block` / `allow` with `reason="unknown task folder"` and the
+folder as `path`);
 `task-gate` writes `allow` or `block` (its Bash task-dir refusal wrote
 `reason="manual task dir creation"` from task 110 until task 197 removed it); `command-guard` writes
 `block`, and `allow` for an acknowledged dangerous command with
 `reason="ack-irreversible-task:<rule>"` or `"ack-operator-env:<rule>"` (task 110);
-`stop`/`gate-batch-check` write `block`; the **close** path writes a `record` (`hook="close"`,
+`gate-batch-check` writes `block`; the **close** path writes a `record` (`hook="close"`,
 `reason="verify contract"`) logging the verify bar a close ran, and since task 235 each of its records names its
 `task`. Optional fields:
 `tool`, `path`, `command` (the command head, capped). See
@@ -423,7 +424,7 @@ Every line has the same eighteen keys, in this order (the last five since task 2
 | `session_id` | playbook's session id (`pid-N`, as `sessions/<id>` and `enforcement.jsonl` name it), "" where the hook resolved none |
 | `host_session_id` | the host's own session id, from the payload |
 | `agent_id` | a subagent's id when a subagent made the call, else "" |
-| `decision` | `allow` (a PreToolUse hook let the call through, or the stop hook released the turn), `block` (exit 2: the call or the stop held), `context` (the hook showed the agent something), `ok` (it ran and showed nothing), `skip` (it did nothing by design: no session, python below 3.10), `error` (it failed — whatever its exit status says) |
+| `decision` | `allow` (a PreToolUse hook let the call through, or the stop hook let the turn end — since task 340 always, its `detail` saying `memento: …` when it left one), `block` (exit 2: the call held; a stop until task 340), `context` (the hook showed the agent something), `ok` (it ran and showed nothing), `skip` (it did nothing by design: no session, python below 3.10), `error` (it failed — whatever its exit status says) |
 | `detail` | the hook's short why, from a fixed vocabulary: `echo full`, `echo reminder`, `quiet`, `failed call counted`, `released: no active task`, `held: 2 unchecked gate(s) in task 007`, `active task 007`, `no active task`, `gate batch refused`, `git-push-force`, `session id injected` (approved: a plain call of the project's CLI), `session id injected, not approved`, `logged M042`, `nudge delivered`, … |
 | `ms` | how long the hook ran, whole milliseconds from its FIRST line to its exit; `null` when bash has no `EPOCHREALTIME` |
 | `exit` | the hook's exit status |

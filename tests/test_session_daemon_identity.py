@@ -50,6 +50,7 @@ import unittest
 from pathlib import Path
 
 from tests._bashcheck import bash_or_skip
+from tests._stopcheck import held, released
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PLUGIN = REPO_ROOT / "plugins" / "playbook"
@@ -602,7 +603,7 @@ class DaemonOnlyAncestryWritesNothing(_ProjectMixin):
         # own gates are open when its argv could not be read. Block once
         # (loud); the stop_hook_active valve still ends a re-issued stop.
         r = self.run_hook("stop-hook", {"stop_hook_active": False})
-        self.assertEqual(r.returncode, 2, f"unresolved stop was released:\n{r.stderr}")
+        self.assertTrue(held(r), f"unresolved stop was released:\n{r.stderr}")
         r = self.run_hook("stop-hook", {"stop_hook_active": True})
         self.assertEqual(r.returncode, 0, r.stderr)
 

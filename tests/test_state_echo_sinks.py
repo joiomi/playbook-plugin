@@ -18,6 +18,7 @@ import unittest
 from pathlib import Path
 
 from tests._bashcheck import bash_or_skip
+from tests._stopcheck import held, released
 
 SCRIPTS = Path(__file__).resolve().parent.parent / "plugins" / "playbook" / "scripts"
 SID = "echo-sinks"
@@ -125,7 +126,7 @@ class TheEchosSinks(unittest.TestCase):
         r = subprocess.run([bash_or_skip(), str(SCRIPTS / "stop-hook")], cwd=p, env=env, text=True,
                            input=json.dumps({"hook_event_name": "Stop", "stop_hook_active": False}),
                            capture_output=True, timeout=60)
-        self.assertEqual(r.returncode, 0, r.stderr)          # every gate ticked: the stop is let through
+        self.assertTrue(released(r), r.stderr)          # every gate ticked: the stop is let through
         self.assertEqual(sorted(f.name for f in elsewhere.iterdir()), before, "a mark was written into the target")
 
     def test_control_the_stop_hooks_mark_in_a_plain_session(self):
@@ -135,8 +136,10 @@ class TheEchosSinks(unittest.TestCase):
         r = subprocess.run([bash_or_skip(), str(SCRIPTS / "stop-hook")], cwd=p, env=env, text=True,
                            input=json.dumps({"hook_event_name": "Stop", "stop_hook_active": False}),
                            capture_output=True, timeout=60)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue((p / ".agent" / "sessions" / SID / "turn_end").is_file())
+        self.assertTrue(released(r), r.stderr)
+        # since task 340 the stop writes no mark at all (the `turn_end` this control once found here went with the
+        # notification release)
+        self.assertFalse((p / ".agent" / "sessions" / SID / "turn_end").exists())
 
 
     def test_write_counter_writes_nothing_inside_a_linked_session_directory(self):
@@ -158,8 +161,8 @@ class TheEchosSinks(unittest.TestCase):
 
 
 class TheWritersTempPaths(unittest.TestCase):
-    """impl panel r1 (codex, reproduced): `write_counter` and `write_session_mark` wrote `${file}.tmp.$$` without
-    looking at it — a link planted there was written through, then renamed onto the state path. And gemini: a sink
+    """impl panel r1 (codex, reproduced): `write_counter` (and `write_session_mark`, removed by task 340) wrote
+    `${file}.tmp.$$` without looking at it — a link planted there was written through, then renamed onto the state path. And gemini: a sink
     `write_counter` refuses is said (PLAYBOOK_WRITE_FAILED), not dropped in silence."""
 
     def setUp(self):
@@ -177,10 +180,9 @@ class TheWritersTempPaths(unittest.TestCase):
                               env=hook_env(self.tmp))
 
     def test_a_link_at_the_temp_path_is_not_written_through(self):
-        for writer, call in (("write_counter", 'write_counter "$1" tools 7'),
-                             ("write_session_mark", 'write_session_mark "$1" "3 abc"')):
+        for writer, call in (("write_counter", 'write_counter "$1" tools 7'),):
             with self.subTest(writer=writer):
-                target = self.sess / ("counters" if writer == "write_counter" else "turn_end")
+                target = self.sess / "counters"
                 # the temp path is `<file>.tmp.<the shell's pid>`: planted from inside that shell, before the call
                 r = self.lib('ln -s "$2" "$1.tmp.$$"; ' + call + '; echo "failed=${PLAYBOOK_WRITE_FAILED:-}"',
                              str(target), str(self.victim))
@@ -198,11 +200,10 @@ class TheWritersTempPaths(unittest.TestCase):
         self.assertEqual(self.victim.read_text(encoding="utf-8"), "keep\n")
 
     def test_control_the_writers_on_plain_paths(self):
-        r = self.lib('PLAYBOOK_WRITE_FAILED=false; write_counter "$1" tools 7; write_session_mark "$2" "3 abc"; '
-                     'echo "failed=$PLAYBOOK_WRITE_FAILED"', str(self.sess / "counters"), str(self.sess / "turn_end"))
+        r = self.lib('PLAYBOOK_WRITE_FAILED=false; write_counter "$1" tools 7; '
+                     'echo "failed=$PLAYBOOK_WRITE_FAILED"', str(self.sess / "counters"))
         self.assertIn("failed=false", r.stdout)
         self.assertEqual((self.sess / "counters").read_text(encoding="utf-8"), "tools=7\n")
-        self.assertEqual((self.sess / "turn_end").read_text(encoding="utf-8"), "3 abc\n")
 
 
 class ALinkedSessionsDirectory(unittest.TestCase):
@@ -305,7 +306,7 @@ class ALinkedSessionsDirectory(unittest.TestCase):
         (self.victim / SID / "current_state").write_text("001\n", encoding="utf-8")
         (self.victim / SID / "counters").write_text("tools=0\nwrites=0\n", encoding="utf-8")
         r = self.run_hook("stop-hook", {"hook_event_name": "Stop", "stop_hook_active": False})
-        self.assertEqual(r.returncode, 2, "the low-activity release was taken through the link")
+        self.assertTrue(held(r), "the low-activity release was taken through the link")
 
 
 if __name__ == "__main__":

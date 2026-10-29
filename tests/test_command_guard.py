@@ -2208,7 +2208,7 @@ H_VECTORS = [
     ("H30", "command-guard-hook", "guard-push-force", {"risk": "reversible"}, {}, 2, 2, ""),
     ("H31", "state-echo-hook", "post-bash", {}, {}, 0, 0, ""),
     ("H32", "state-echo-hook", "post-edit-taskmd", {}, {}, 0, 0, ""),
-    ("H33", "stop-hook", "stop", {}, {}, 2, 2, ""),
+    ("H33", "stop-hook", "stop", {}, {}, 2, 0, "task 340: the stop never blocks — it exits 0 with its memento"),
     ("H34", "stop-hook", "stop-active", {}, {}, 0, 0, ""),
     ("H36", "stop-hook", "stop", {"status": "blocked"}, {}, 0, 0, ""),
     ("H38", "chat-log-hook", "prompt-short", {}, {}, 0, 0, ""),
@@ -2339,7 +2339,7 @@ class GauntletHookStepsAsVectors(unittest.TestCase):
         if step in ("H31", "H32"):
             self.assertIn("Working on task [003]", r.stdout)
         if step == "H33":
-            self.assertIn("unchecked gate", r.stderr)
+            self.assertIn("open gate", r.stdout)            # the memento (task 340)
         if step == "H38":
             self.assertIn("g2 canary prompt", log)
         if step == "H39":

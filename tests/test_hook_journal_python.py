@@ -1019,8 +1019,9 @@ class TheCodexHooks(_Tmp):
         r, new = self.codex("codex-stop-hook", {"hook_event_name": "Stop", "turn_id": "t1"}, PLAYBOOK_SESSION_ID="sess-c1")
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual([x["hook"] for x in new], ["codex-stop"], new)
-        # impl panel r2 (opus, codex, gemini): the line names the active task's open gates, not "no task"
-        self.assertEqual((new[0]["decision"], new[0]["detail"]), ("block", "held: 1 unchecked gate(s) in task 001"))
+        # impl panel r2 (opus, codex, gemini) had the line name the active task's open gates; since task 340 the stop
+        # hook never blocks (it exits 0 with a memento codex does not show), so codex's Stop lets the turn end
+        self.assertEqual((new[0]["decision"], new[0]["detail"]), ("allow", "released"))
 
     def test_a_stop_with_no_decision_is_released(self):
         r, new = self.codex("codex-stop-hook", {"hook_event_name": "Stop", "turn_id": "t1"})

@@ -1,39 +1,52 @@
 #!/bin/bash
 _PB_HJ_T0=$EPOCHREALTIME     # the hook journal's start (task 222): first, before anything else runs
 # stop-hook
-# Stop hook — prevents agent from finishing when task gates are unchecked.
+# Stop hook — a memento, never a block (task 340, PLAN-PLAYBOOK-2.md 4.1 b; the owner's R14: "rămâne ca memento,
+# doar blocarea pleacă (214 alarme false din 223)").
 #
-# Reads active task's task.md, counts unchecked gates (- [ ]).
-# If any unchecked: exit 2 with message (blocks stopping).
-# If all checked, no active task, or stop_hook_active: exit 0.
+# Reads the active task's task.md and counts its open gates (- [ ]). When a working turn ends with gates open it
+# prints Claude Code's `{"systemMessage": …}` naming the task, the count and the first open gate — shown to the
+# person — and the stop ends. Every path exits 0. No memento for a chat reply (writes 0, tools < 5), a blocked task,
+# a task with every gate checked, no active task or the Freehand gate.
 
 set -e
 
 # Skip when invoked from the monitor's own claude session — monitor runs in
-# the same project dir and would otherwise be blocked on the FRONT agent's
+# the same project dir and would otherwise remind about the FRONT agent's
 # task gates. Launch-monitor exports PLAYBOOK_ROLE=monitor specifically.
-# Log to stderr so the skip is visible; only gate-enforcement skipped.
 if [ "${PLAYBOOK_ROLE:-}" = "monitor" ]; then
     echo "[stop-hook] skip (PLAYBOOK_ROLE=monitor)" >&2
     exit 0
 fi
 
-# The Python floor (task 193, PLAN S14 T4, #46), with this hook's polarity: below
-# 3.10 it says so and takes its python-free path — the gates counted by the
-# fence-blind grep, the one-shot valve read by the bash regex — so an open gate
-# still blocks the first stop and a re-issued stop still ends (fail closed). The
-# launchers' one-line probe; no python3 lands here too.
+# The Python floor (task 193, PLAN S14 T4, #46): below 3.10 it says so and takes its python-free path — the gates
+# counted by the fence-blind grep — so an open gate still gets its memento. The launchers' one-line probe; no python3
+# lands here too.
 PB_PY_FLOOR=true
 if ! python3 -I -c 'import sys; sys.exit(0 if sys.version_info >= (3,10) else 1)' 2>/dev/null; then
     PB_PY_FLOOR=false
     PB_PY_FOUND="$(python3 --version 2>/dev/null | head -1 | tr -cd 'A-Za-z0-9._ -')"
-    echo "playbook: needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — the stop hook counts the gates without it (fail closed); upgrade python3" >&2
+    echo "playbook: needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — the stop hook counts the gates without it; upgrade python3" >&2
 fi
 
 # Source shared lib (same directory)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$HOOK_DIR/gate-echo-lib.sh"
 pb_hook_begin stop           # one line per run in journal/hooks.jsonl (task 222)
+
+# pb_memento TEXT DETAIL — the stop's answer when work is left (task 340): one JSON object on stdout, Claude Code's
+# `systemMessage`, shown to the person; the stop ends (exit 0). `_json_str` escapes it, the control bytes left are
+# dropped and the text is cut at 400 characters (counted in a UTF-8 locale where there is one), so the object stays
+# one valid line whatever a gate's title holds.
+pb_memento() {
+    local s
+    s=$(_json_str "$1")
+    s="${s//[[:cntrl:]]/}"
+    s=$(LC_ALL=C.UTF-8; printf '%s' "${s:0:400}")
+    printf '{"systemMessage":"%s"}\n' "$s"
+    PB_HJ_DECISION=allow; PB_HJ_DETAIL="memento: $2"
+    exit 0
+}
 
 # Find project root
 PROJECT_DIR=$(find_project_root)
@@ -42,172 +55,32 @@ if [ -z "$PROJECT_DIR" ]; then
 fi
 
 # I1: a malformed .agent/current_user makes resolve_agent_dir `exit 1`, which at
-# top level under `set -e` aborted the hook with exit 1 — a NON-blocking error,
-# so the stop proceeded with open gates (failed OPEN). Detect it and FAIL CLOSED
-# below (block the stop once), never abort-open. The stop_hook_active valve
-# still ends a re-issued stop, so this can't wedge the session.
+# top level under `set -e` aborted the hook with exit 1. Detect it: the memento
+# says the lane's gates could not be checked.
 if ! AGENT_DIR=$(resolve_agent_dir "$PROJECT_DIR" 2>/dev/null); then
     MARKER_INVALID=true
-    AGENT_DIR="$PROJECT_DIR/.agent"   # nominal for path building; blocks below
+    AGENT_DIR="$PROJECT_DIR/.agent"   # nominal for path building
 else
     MARKER_INVALID=false
 fi
 
-# The session and the prompt generation before the input is read (task 193, PLAN S14 T4, #28): a user's
-# prompt whose hook ran to its end while this hook read its input (and parsed the valve with python)
-# gave the stop of the turn BEFORE that prompt the new generation (the single judge's run 3 of task
-# 173). Only that wait moved: bash's start, the lib, the project and the session walk still come
-# first, so the window is close to the old one (impl panel r1, opus).
-# Claude Code's Stop and UserPromptSubmit payloads both carry a `prompt_id` (measured by task 193) — the turn
-# identity that would close the window; using it rewrites task 173's marks, so it is the owner's to schedule.
 SESSION_ID="$(resolve_session_id)"
-PB_PROMPT_GEN=none
-# A stop decided in the main tree for a worktree session (task 302) keeps reading the turn's activity — the counters,
-# their marks, the prompt generation and the turn-end note — in the worktree's session folder, where the session's
-# hooks keep them: the main tree's are frozen at the moment the session left (impl round 1: opus, grok — reproduced —
-# and codex: a "chat reply" release with the main task's gates open).
+# A stop decided in the main tree for a worktree session (task 302) keeps reading the turn's counters in the
+# worktree's session folder, where the session's hooks keep them: the main tree's are frozen at the moment the session
+# left (impl round 1: opus, grok — reproduced — and codex).
 PB_ACTIVITY_DIR="${PB_STOP_ACTIVITY_DIR:-$AGENT_DIR/sessions/$SESSION_ID}"
-# and the prompt generation the FIRST run read before its input (impl round 2, codex — reproduced: a user's prompt
-# that lands while the first run reads its input must not lend its generation to the run decided in the main tree)
-if [ -n "${PB_STOP_PROMPT_GEN:-}" ]; then
-    PB_PROMPT_GEN="$PB_STOP_PROMPT_GEN"
-elif [ -n "$SESSION_ID" ]; then
-    PB_PROMPT_GEN=$(read_prompt_generation "$PB_ACTIVITY_DIR")
-fi
 
-# Read stdin (Stop JSON) — extract stop_hook_active
-INPUT=$(cat)
-# `-I` (isolated): the hook's cwd is the project, whose own `json.py` would
-# otherwise shadow the stdlib for a `-c` run (round-5 codex ×2 — the parser
-# failed, a bare `python3 -c pass` probe passed, the flag read False forever).
-STOP_ACTIVE=""
-if [ "$PB_PY_FLOOR" = true ]; then
-    STOP_ACTIVE=$(echo "$INPUT" | python3 -I -c "import sys,json; d=json.load(sys.stdin); print(d.get('stop_hook_active', False))" 2>/dev/null) || STOP_ACTIVE=""
-fi
-if [ -z "$STOP_ACTIVE" ] && [ "$PB_PY_FLOOR" = true ] && python3 -I -c "import json" 2>/dev/null; then
-    # python3 + json RUN but could not parse the payload (round-4 codex-medium):
-    # that is a malformed Stop JSON, not a missing interpreter — the flag is
-    # simply not set. The shell regex below is for a missing/broken python3 only.
-    STOP_ACTIVE="False"
-fi
-if [ -z "$STOP_ACTIVE" ]; then
-    # python3 missing/broken (task 072 impl panel, grok): the no-python fallback
-    # below blocks on >= 1 open gate and nothing can check a gate without the
-    # CLI, so the one-shot valve is the ONLY way such a session ends its turn —
-    # it must not depend on python3, and (round 2, codex) not on grep either:
-    # a bash-builtin regex (bash 3.2 has `=~`; the pattern sits in a variable so
-    # 3.2's quoting rule holds). Byte-wise: a JSON `true` for exactly this key
-    # followed by `,` / `}` / end (a `false`, a missing key, a quoted "true" or
-    # another field's `true` stay False — never a substring guess). Disclosed
-    # bound: the shell cannot tell nesting depth, so a NESTED object carrying
-    # this key would count — the Stop payload is produced by the host, not by
-    # the agent, so that is not an attack surface here.
-    PB_VALVE_RE='"stop_hook_active"[[:space:]]*:[[:space:]]*true[[:space:]]*([,}]|$)'
-    if [[ "$INPUT" =~ $PB_VALVE_RE ]]; then
-        STOP_ACTIVE="True"
-    else
-        STOP_ACTIVE="False"
-    fi
-fi
+INPUT=$(cat)                 # the Stop payload: only the worktree hop below re-reads it
 
-# Owner's Q1 (2026-09-24; PLAN S11, task 173): a notification no longer resets
-# the session's counters, and a turn STARTED by one may end if it made no write.
-# For the chat-log hook to tell a notification that starts a turn from one that
-# lands in the middle of one, every stop this hook lets through (exit 0, on any
-# path below) leaves the tool count of that moment in a one-line file beside the
-# counters, `turn_end`; it equals `tools` only while no tool has run since. With
-# it goes a nonce made for this stop: a notification's baseline carries the nonce
-# of the mark it was taken from, and counts only beside that mark (see the
-# bypass below, and read_session_mark).
-# A blocked stop (exit 2) leaves nothing. Written only where a counters file
-# already exists, for a resolved session and a readable lane — and never INTO the
-# counters file, which a tool call's hook may be updating (impl panel r1; see
-# write_session_mark). It never changes the exit
-# status: it is an exit action of the hook journal's runner (`pb_on_exit`, task
-# 222), which runs it `|| true`, gives it the hook's own status as `$?` (it reads
-# `$?` first: a status the runner left would mark a blocked stop — plan panel
-# 2026-10-16, all five judges) and ends with `exit` of that status — because
-# under `set -e` a command that fails inside a plain EXIT trap replaces the
-# shell's exit status with 1, whatever it was (measured on bash 5.1, for 0 and for 2). The only write below
-# runs for an exit 0, so today that could only turn an allowed stop into a hook
-# error; the guard is there so that no later line added to this function can
-# turn a BLOCK (2) into 1, which the host reads as a non-blocking error. A mark
-# that cannot be written is the stricter case: no mark, and a later notification
-# is read as landing mid-turn.
-# Two fences since post-D6 run 2. (1) Only the session's OWN agent ends its turn:
-# every agent in a process chain resolves to the root agent's session
-# (resolve_session_id), so a `claude -p` the agent runs fires this hook into the
-# same session when it finishes — and, run as a background command, its mark and
-# its completion notice read together as "a notification started a turn" in the
-# middle of the user's. The walk lists the agents of this hook's chain: one is
-# the session's own (measured on a live session), two or more is a nested one,
-# which leaves no mark. (2) The nonce begins with the prompt generation this
-# hook saw when it STARTED (PB_PROMPT_GEN, read before the input above, before
-# any decision): a hook that a user's prompt overtakes publishes a mark of the
-# generation before that prompt, which starts nothing.
-pb_note_turn_end() {
-    local rc=$?
-    if [ "$rc" -eq 0 ] && [ -n "${SESSION_ID:-}" ] && [ "${MARKER_INVALID:-false}" != true ]; then
-        local dir="$PB_ACTIVITY_DIR"
-        if [ -f "$dir/counters" ]; then
-            local agents
-            agents=$(_agent_walk all)
-            # shellcheck disable=SC2086  # word-splitting is the count
-            set -- $agents
-            if [ "$#" -le 1 ]; then
-                write_session_mark "$dir/turn_end" \
-                    "$(read_counter_int "$dir/counters" tools) ${PB_PROMPT_GEN:-none}-$(new_session_nonce)"
-            fi
-        fi
-    fi
-    return 0
-}
-pb_on_exit 'pb_note_turn_end'     # the runner (gate-echo-lib.sh, task 222) gives it the hook's status as \$?, `|| true`
-
-# Enforcement-journal target (log-only, best-effort). The resolved lane, but
-# NEVER in the fresh-clone shape (lanes exist, no marker): a root journal there
-# would mint phantom root-lane state (see S15). Empty disables journalling.
-PB_JOURNAL_DIR=""
-[ -z "$(lanes_without_marker "$PROJECT_DIR")" ] && PB_JOURNAL_DIR="$AGENT_DIR"
-
-# Safety valve: if already blocked once, allow stopping to prevent loops
-if [ "$STOP_ACTIVE" = "True" ]; then
-    PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: stop re-issued (valve)"
-    exit 0
-fi
-
-# I1: malformed marker — FAIL CLOSED (block the stop, never abort-open). Placed
-# AFTER the stop_hook_active valve so a re-issued stop still ends the turn.
 if [ "${MARKER_INVALID:-false}" = true ]; then
-    journal_enforcement "$PB_JOURNAL_DIR" stop block "marker invalid" "$SESSION_ID"
-    cat >&2 <<'MSG'
-BLOCKED: .agent/current_user is malformed — cannot resolve your lane to check
-task gates. Fix it to a single username line (letters, digits, and ._- only),
-then finish.
-MSG
-    PB_HJ_DETAIL="held: marker invalid"
-    exit 2
+    pb_memento "playbook: .agent/current_user is malformed, so this lane's task gates could not be checked — fix it to a single username line (letters, digits and ._- only)." "marker invalid"
 fi
 
-# --- Eval mode: skip stop guard if stop_guard=off ---
-if [ -n "$PLAYBOOK_EVAL_CONFIG" ] && [ -f "$PLAYBOOK_EVAL_CONFIG" ]; then
-    EVAL_STOP=$(python3 -I -c "import json; print(json.loads(open('$PLAYBOOK_EVAL_CONFIG').read()).get('stop_guard','on'))" 2>/dev/null || echo "on")
-    if [ "$EVAL_STOP" = "off" ]; then
-        PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: eval mode, stop guard off"
-        exit 0
-    fi
-fi
-
-# Task 105: unresolved (under the Claude Code background daemon, or an ancestor
-# whose argv could not be read; no PLAYBOOK_SESSION_ID). The hook cannot see
-# which task's gates are open, so it FAILS CLOSED once (post-D6 single judge:
-# exiting 0 released a session whose own gates were open). The
-# stop_hook_active valve above ends a re-issued stop. Nothing is written.
+# Task 105: unresolved (under the Claude Code background daemon, or an ancestor whose argv could not be read; no
+# PLAYBOOK_SESSION_ID): the hook cannot see which task's gates are open, and says so.
 if [ -z "$SESSION_ID" ]; then
     session_unresolved_notice
-    echo "BLOCKED: cannot check this session's task gates (see the line above). Stop again to end the turn." >&2
-    PB_HJ_DETAIL="held: no session"
-    exit 2
+    pb_memento "playbook: this session could not be identified, so its task gates could not be checked." "no session"
 fi
 
 SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
@@ -228,7 +101,7 @@ pb_stop_in_main_tree() {
     [ -n "$root" ] && [ "$root" -ef "$main" ] || return 0
     case "$PB_ACTIVITY_DIR" in /*) ;; *) PB_ACTIVITY_DIR="$PWD/$PB_ACTIVITY_DIR" ;; esac
     cd -- "$main" 2>/dev/null || return 0
-    export PB_STOP_HOPPED=1 PB_STOP_ACTIVITY_DIR="$PB_ACTIVITY_DIR" PB_STOP_PROMPT_GEN="${PB_PROMPT_GEN:-none}"
+    export PB_STOP_HOPPED=1 PB_STOP_ACTIVITY_DIR="$PB_ACTIVITY_DIR"
     exec "${BASH:-bash}" "$HOOK_DIR/stop-hook" < <(printf '%s' "$INPUT")
 }
 
@@ -290,10 +163,10 @@ fi
 # say so and fall back to the fence-blind grep for the COUNT only — it can only
 # over-count (a fence hides lines, never adds them; the grep is BOM-tolerant like
 # the Python reader, and a grep ERROR counts as >= 1 open gate AND disarms the
-# conversational bypass — task 072), so an open gate still blocks the first stop
-# (fail CLOSED; the low-activity bypass below remains the documented release for
-# a COUNTED tree on both arms); the status is never guessed `blocked` and the
-# Freehand release is NOT applied to a grep-derived first gate (it could be the decoy).
+# chat-reply rule — task 072), so an open gate still gets its memento (the
+# chat-reply rule below applies only to a COUNTED tree); the status is never
+# guessed `blocked` and the Freehand rule is NOT applied to a grep-derived first
+# gate (it could be the decoy).
 PB_STATE_READ=true
 PB_GREP_RC=0
 STATUS_LINE=""
@@ -341,7 +214,7 @@ if [ "$PB_STATE_READ" != true ]; then
     #  * grep's exit code is read: 0/1 = a count was taken (1 = zero matches);
     #    anything else (unreadable file, unsupported regex, broken binary) is NOT
     #    "0 gates" — the count could not be taken, so the arm assumes >= 1 open
-    #    gate and blocks, loudly. `|| UNCHECKED=0` used to release the stop here.
+    #    gate, loudly. `|| UNCHECKED=0` used to drop the stop's answer here.
     #  * `set -e` is on: the capture runs inside `if` so a non-zero grep can
     #    neither abort the hook open (I1) nor be mistaken for a count.
     PB_BOM=$(printf '\357\273\277')
@@ -376,19 +249,15 @@ if [ "$UNCHECKED" -eq 0 ]; then
     exit 0
 fi
 
-# Counter-gated bypass: allow stop for conversational replies (low tool activity)
-# Missing counter file = assume work was done (block)
-# Not when the gate COUNT itself failed (task 072 round 2, codex): a heuristic
-# must not release a tree the hook could not count — "never releases on a count
-# it could not take" is the ledger's exact sentence.
-# Nor when the counts themselves are not sure (task 182): a tool call's hook
-# that was not given the counters lock did not count its call and left the mark
-# `counts_unsure`; a `writes` that is behind would read here as a chat reply.
-# The mark goes when a prompt of the user's has reset the counts under the lock.
-# It also holds the notification exception below, which reads `writes`.
-# Any `counts_unsure` entry holds them — a dangling link too, which `-e` reads as absent —
-# and so does a linked session directory: `_counters_mark` refuses to write through a link
-# (task 193), so there an uncounted call could leave no mark (impl panel r2, opus, codex).
+# The chat-reply rule: a turn with low activity (writes 0 and tools < 5, counted from the user's last prompt) is a
+# conversational reply, and gets no memento. Not when the gate COUNT itself failed (task 072 round 2, codex), nor
+# when the counts are not sure (task 182): a tool call's hook that was not given the counters lock did not count its
+# call and left the mark `counts_unsure` — a `writes` that is behind would read as a chat reply. Any `counts_unsure`
+# entry counts — a dangling link too, which `-e` reads as absent — and so does a linked session directory:
+# `_counters_mark` refuses to write through a link (task 193), so there an uncounted call could leave no mark. A
+# missing counters file reads as a working turn. (A notification does not reset the counts — the owner's Q1,
+# 2026-09-24 — so a turn started by one gets the memento when the turn before it wrote; until task 340 its marks
+# released such a turn from the block.)
 COUNTER_FILE="$PB_ACTIVITY_DIR/counters"
 PB_COUNTS_SURE=true
 if [ -e "$PB_ACTIVITY_DIR/counts_unsure" ] || [ -L "$PB_ACTIVITY_DIR/counts_unsure" ] \
@@ -396,68 +265,23 @@ if [ -e "$PB_ACTIVITY_DIR/counts_unsure" ] || [ -L "$PB_ACTIVITY_DIR/counts_unsu
     PB_COUNTS_SURE=false
 fi
 if [ -f "$COUNTER_FILE" ] && [ "${PB_GREP_RC:-0}" -le 1 ] && [ "$PB_COUNTS_SURE" = true ]; then
-    # read_counter_int (not read_counter): coerce the .agent/-resident counter
-    # bytes to integers before the `[ -eq ]`/`[ -lt ]` tests — parity with the
-    # C5 hardening elsewhere (the `[` builtin doesn't command-substitute like
-    # `$(( ))`, but keep the whole codebase off raw counter bytes in arithmetic).
+    # read_counter_int (not read_counter): coerce the .agent/-resident counter to a plain non-negative integer before
+    # `-eq`/`-lt`, which would otherwise evaluate a crafted counter as an arithmetic expression under `set -e`.
     WRITES=$(read_counter_int "$COUNTER_FILE" writes)
     TOOLS=$(read_counter_int "$COUNTER_FILE" tools)
     if [ "$WRITES" -eq 0 ] && [ "$TOOLS" -lt 5 ]; then
         PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: a chat reply (writes 0, tools ${TOOLS})"
         exit 0
     fi
-    # Owner's Q1 (task 173): the counters above run from the last USER prompt — a
-    # notification no longer resets them. His one exception: a turn that a
-    # notification STARTED may end if it made no write. The chat-log hook noted
-    # the write count at that start (file `notif_start`); equal now = none since.
-    # No tool-count limit: his sentence has none. Only a plain number counts — a
-    # missing, empty or malformed value releases nothing (read_session_mark; the
-    # bytes are `.agent/`-resident, and `_safe_int` would read garbage as 0).
-    # And only beside the mark it was taken from: the baseline's nonce must be the
-    # nonce of `turn_end` as it stands now. A user's prompt removes that mark and
-    # a later stop replaces it, so a baseline written late — by a notification's
-    # hook that a user's prompt overtook — releases nothing (post-D6 run 1).
-    # And the mark itself must be of the session's CURRENT prompt generation (the
-    # head of its nonce): one made before the user's last prompt is not this
-    # turn's, whenever it reached the disk (post-D6 run 2). A `prompt_gen` that is there but
-    # holds no generation (a planted directory, task 193) releases nothing.
-    PB_NOTIF_START=$(read_session_mark "$PB_ACTIVITY_DIR/notif_start")
-    PB_TURN_END=$(read_session_mark "$PB_ACTIVITY_DIR/turn_end")
-    PB_TURN_NONCE="${PB_TURN_END#* }"
-    if [ -n "$PB_NOTIF_START" ] && [ -n "$PB_TURN_END" ] \
-       && [ "${PB_NOTIF_START#* }" = "$PB_TURN_NONCE" ] \
-       && ! prompt_generation_unreadable "$PB_ACTIVITY_DIR" \
-       && [ "${PB_TURN_NONCE%%-*}" = "$(read_prompt_generation "$PB_ACTIVITY_DIR")" ] \
-       && [ "$WRITES" -eq "$((10#${PB_NOTIF_START%% *}))" ]; then
-        PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: a notification's turn with no write"
-        exit 0
-    fi
 fi
 
-# Freehand mode: don't block when the Python reader says the block may be
-# waived — its rule: the FIRST LIVE unchecked gate's text starts with "Freehand"
-# (covers "Freehand", "Freehand — work is done", "Freehand debrief — ...", and
-# discussion-style variants observed in real task.md files; the single exception
-# is "Freehand log", the cleanup gate at cli.py:1620, which must still block so
-# its work runs before close), that gate sits at indent < 4 columns, and the
-# file has no unclosed fence. The decision is `core._freehand_release_allowed`,
-# never re-derived here from FIRST_GATE (round-1 panel: a bash prefix test on
-# the gate text released on decoys the count correctly kept live). Only when the
-# frame came from the Python reader — the grep fallback always holds.
-# scripts/state-echo-hook and provider/codex_hooks.py keep their own (advisory /
-# experimental) Freehand pattern — disclosed in the ledger, not lockstep.
+# The Freehand gate: the user drives, no memento (decided in Python, `core._freehand_release_allowed`; never on a
+# grep-derived first gate).
 if [ "$PB_STATE_READ" = true ] && [ "$PB_RELEASE" = release ]; then
     PB_HJ_DECISION=allow; PB_HJ_DETAIL="released: freehand gate"
     exit 0
 fi
 
-journal_enforcement "$PB_JOURNAL_DIR" stop block "unchecked gates" "$SESSION_ID"
-cat >&2 <<MSG
-BLOCKED: ${UNCHECKED} unchecked gate(s) in task ${TASK}.
-
-First unchecked: ${FIRST_GATE}
-
-Complete all gates before finishing.
-MSG
-PB_HJ_DETAIL="held: ${UNCHECKED} unchecked gate(s) in task ${TASK}"
-exit 2
+PB_COUNTED=""
+[ "$PB_STATE_READ" = true ] || PB_COUNTED=" (counted without python3)"
+pb_memento "playbook: task ${TASK} has ${UNCHECKED} open gate(s)${PB_COUNTED} — next: ${FIRST_GATE}" "${UNCHECKED} open gate(s) in task ${TASK}"

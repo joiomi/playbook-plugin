@@ -67,6 +67,7 @@ SCRIPTS = PLUGIN / "scripts"
 if str(_HERE.parent) not in sys.path:
     sys.path.insert(0, str(_HERE.parent))
 
+from tests._stopcheck import held
 from tests._bashcheck import bash_or_skip  # noqa: E402
 
 # A module that dies loudly when imported: the test then shows WHICH file ran.
@@ -475,7 +476,7 @@ class AUsersPythonpathDoesNotReachTheHelpers(_Project):
 
     def test_the_stop_hook_reads_the_task_as_it_does_without_it(self):
         clean = self._hook(self.clean, "stop-hook", {"stop_hook_active": False})
-        self.assertEqual(clean.returncode, 2, clean.stderr)                    # the control: an open gate blocks
+        self.assertTrue(held(clean), clean.stderr)                   # the control: an open gate's memento (task 340)
         self.assertIn("first gate", clean.stdout + clean.stderr)
         self.assertNotIn("could not read the task state", clean.stderr)
         for path in self._paths():
@@ -698,7 +699,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         "scripts/session-end-hook": 2,     # +1: the Python floor probe (task 192, #46)
         "scripts/session-start-hook": 3,   # +1: the Python floor probe (task 192, #46); +1: the registry enrolment (task 339)
         "scripts/state-echo-hook": 9,      # +1: the Python floor probe (task 194, #46); -1: one JSON writer for every answer (task 219); +1: the fallback path's shell-log command (task 221)
-        "scripts/stop-hook": 4,            # +1: the Python floor probe (task 193, #46)
+        "scripts/stop-hook": 1,            # the Python floor probe (task 193, #46); -3: the valve's two reads and the eval switch (task 340)
         "scripts/task-gate-hook": 16,      # +1: the Python floor probe (task 194, #46); +1: the recovery path's resolved path (task 198, #26); +1: the no-project path's reader of an escaped path (task 302); +1: the `ws` Monitor's check (task 307)
         "scripts/tasks": 2,
         "tasks/plugin_copies.py": 1,
@@ -708,7 +709,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         _, counts, inline, _ = sweep()
         self.assertEqual(inline, self.ISOLATED_INLINE_CALLS)
         self.assertEqual(counts.get("ok-inline"), sum(self.ISOLATED_INLINE_CALLS.values()))
-        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 67)   # 55 + the floor probes of tasks 192 (2), 193 (2) and 194 (2) + task 198's resolved path - task 219's one JSON writer + task 221's fallback command + task 233's floor probe + task 244's floor probe + task 302's escaped-path reader + task 307's `ws` Monitor check + task 339's registry enrolment
+        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 64)   # 55 + the floor probes of tasks 192 (2), 193 (2) and 194 (2) + task 198's resolved path - task 219's one JSON writer + task 221's fallback command + task 233's floor probe + task 244's floor probe + task 302's escaped-path reader + task 307's `ws` Monitor check + task 339's registry enrolment - task 340's three stop-hook reads
 
     # Every call that starts a FILE of the plugin's, file by file — 22 when task 180
     # isolated them (18 in the hooks and scripts, 4 that the merge skill gives the agent).

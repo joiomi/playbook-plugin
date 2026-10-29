@@ -132,7 +132,8 @@ class AMonitorIsAShellCall(unittest.TestCase):
         return self.fire("Stop", {"stop_hook_active": False})
 
     def held(self, stop):
-        return any(rc == 2 and "unchecked gate" in err for _, rc, _, err in stop)
+        """The stop left its memento (task 340: it never blocks — exit 0 and a `systemMessage` naming the gates)."""
+        return any(rc == 0 and '"systemMessage"' in out and "open gate" in out for _, rc, out, _ in stop)
 
     def hook_journal(self):
         p = self.proj / ".agent" / "journal" / "hooks.jsonl"

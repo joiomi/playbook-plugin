@@ -29,6 +29,7 @@ import unittest
 from pathlib import Path
 
 from tests._bashcheck import bash_or_skip
+from tests._stopcheck import held, released
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "plugins" / "playbook" / "scripts"
@@ -154,17 +155,15 @@ class CommandGuardJournal(_Base):
 
 
 class StopJournal(_Base):
-    def test_block_writes_line(self):
-        # Active task, real work done (counters), an open non-Freehand gate → stop blocks.
+    def test_a_memento_is_no_enforcement_record(self):
+        # Active task, real work done (counters), an open non-Freehand gate: until task 340 the stop blocked and wrote
+        # a `block` line here. It leaves a memento now, which decides nothing: no enforcement line (the hook journal,
+        # journal/hooks.jsonl, still has its run).
         self.pointer.write_text("001\n", encoding="utf-8")
         (self.session_dir / "counters").write_text("tools=6\nwrites=2\n", encoding="utf-8")
         r = self.run_stop()
-        self.assertEqual(r.returncode, 2, r.stderr)
-        recs = [x for x in _read_journal(self.agent) if x["hook"] == "stop"]
-        self.assertEqual(len(recs), 1, f"expected one stop line: {recs}")
-        self.assertEqual(recs[0]["decision"], "block")
-        self.assertEqual(list(recs[0].keys()),
-                         ["ts", "session_id", "hook", "decision", "reason"])
+        self.assertTrue(held(r), r.stderr)
+        self.assertEqual([x for x in _read_journal(self.agent) if x["hook"] == "stop"], [])
 
 
 class BatchCloseJournal(_Base):
@@ -285,12 +284,12 @@ class NegativeControl(_Base):
         r = self.run_command_guard("rm -rf /")
         self.assertEqual(r.returncode, 2, "journal failure changed a command-guard BLOCK")
 
-    def test_stop_still_blocks(self):
+    def test_stop_still_leaves_its_memento(self):
         self._wedge_journal(self.agent)
         self.pointer.write_text("001\n", encoding="utf-8")
         (self.session_dir / "counters").write_text("tools=6\nwrites=2\n", encoding="utf-8")
         r = self.run_stop()
-        self.assertEqual(r.returncode, 2, "journal failure changed a stop BLOCK")
+        self.assertTrue(held(r), "journal failure changed the stop's memento")
 
 
 class NeverCreatesAgentDir(unittest.TestCase):

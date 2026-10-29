@@ -27,5 +27,5 @@ This will either:
 
 Once in freehand mode:
 - Wait for user instructions — don't work autonomously
-- Drift counter and stop-hook blocking are suppressed
+- The drift counter and the stop hook's memento are suppressed (the stop hook never blocks since task 340)
 - When the user says done: check `[x] Freehand — <summary>`, run `tasks freehand log`, retro-add checked gates for work done

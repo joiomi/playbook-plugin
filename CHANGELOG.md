@@ -15,6 +15,13 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   folder was removed or adopted; the audits' journals show no real hold of it. `tasks work done` still refuses while a
   hand-made task folder stands (ledger PB-TASK-DIR-CLOSE), now the only check, and a session's start still writes a
   lane's missing task registry. Bound: with the registry deleted, a re-enrolment takes in a hand-made folder too.
+- **The stop hook's block** (task 340, PLAN-PLAYBOOK-2.md 4.1 b; 214 of its 223 blocks were false alarms). It
+  never exits 2 now: when a turn that wrote ends with the active task's gates open, it prints a `systemMessage`
+  memento — the task, the open-gate count and the first open gate — and the turn ends. A chat reply, a blocked task,
+  a task with every gate checked and the Freehand gate get none. With the block went its one-shot valve, its eval
+  switch, its enforcement-journal `block` line and the notification exception with its three marks (`turn_end`,
+  `notif_start`, `prompt_gen`). A notification still keeps the counts, a user's prompt still resets them. Codex's
+  Stop, which runs this hook for an active task, lets the turn end too.
 
 ### Fixed
 - **A task record that is not valid UTF-8 is refused, never rewritten** (task 335). Read leniently, a byte that is not

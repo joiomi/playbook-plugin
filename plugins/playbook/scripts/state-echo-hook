@@ -98,7 +98,7 @@ fi
 
 # The Python floor (task 194, PLAN S14 T5, #46), advisory: below 3.10 the echo says so,
 # reads no payload, writes and counts nothing — and MARKS the count it did not make
-# (`counts_unsure`, below), so the stop hook holds the turn instead of releasing it on
+# (`counts_unsure`, below), so the stop hook shows its memento instead of reading
 # counts that stopped moving. The launchers' one-line probe. Asked only inside a project
 # (impl panel r1, opus: before the project check every tool call of every project
 # started python3).
@@ -237,7 +237,7 @@ if [ "$PB_PY_FLOOR" != true ]; then
     if [ "$AGENT_WRITABLE" = true ] && [ -d "$AGENT_DIR/sessions/$SESSION_ID" ]; then
         _counters_mark "$AGENT_DIR/sessions/$SESSION_ID/counters"
     fi
-    echo "{\"hookSpecificOutput\":{\"hookEventName\":\"${PB_HOOK_EVENT}\",\"additionalContext\":\"# ⚠ playbook needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — no gate echo, and this call was not counted: the stop hook holds this turn like one that wrote. Upgrade python3.\"}}"
+    echo "{\"hookSpecificOutput\":{\"hookEventName\":\"${PB_HOOK_EVENT}\",\"additionalContext\":\"# ⚠ playbook needs python3 >= 3.10 (found: ${PB_PY_FOUND:-no python3 on PATH}) — no gate echo, and this call was not counted: the stop hook's memento reads this turn as one that wrote. Upgrade python3.\"}}"
     PB_HJ_DECISION=context; PB_HJ_DETAIL="python < 3.10 (not counted)"
     exit 0
 fi
@@ -263,15 +263,15 @@ PLAYBOOK_WRITE_FAILED=false
 SESSION_DIR="$AGENT_DIR/sessions/$SESSION_ID"
 # A session directory that is a link is not this session's (task 194, measured: the
 # pointer and the counts were written into the link's target, and the gate read there
-# was logged again at every call). Nothing is written or counted; the stop hook holds
-# its low-activity releases on such a directory (task 193).
+# was logged again at every call). Nothing is written or counted; the stop hook does not
+# apply its chat-reply rule on such a directory (task 193): the memento shows.
 if ! _pb_session_dir_ok "$SESSION_DIR"; then     # it, or `.agent/sessions` itself (task 194, impl panel r1)
     # The write log is not session state (it lives under HOME; write_log.py checks its sink): an
     # Edit/Write is still recorded (impl panel r2, fable — the stop had switched it off).
     if [ "$AGENT_WRITABLE" = true ] && [ "$PB_HOOK_EVENT" = PostToolUse ]; then
         case "$TOOL_NAME" in Edit|Write) write_log_append "$INPUT" "$PROJECT_DIR" ;; esac
     fi
-    printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"# ⚠ this session'"'"'s directory under .agent/sessions/ (or .agent/sessions itself) is a link — not written, not counted (the stop hook holds this turn like one that wrote)."}}\n' "$PB_HOOK_EVENT"
+    printf '{"hookSpecificOutput":{"hookEventName":"%s","additionalContext":"# ⚠ this session'"'"'s directory under .agent/sessions/ (or .agent/sessions itself) is a link — not written, not counted (the stop hook reads this turn as one that wrote and shows its memento)."}}\n' "$PB_HOOK_EVENT"
     PB_HJ_DECISION=context; PB_HJ_DETAIL="session directory is a link (not counted)"
     exit 0
 fi
@@ -443,11 +443,11 @@ _pb_warnings() {
 # ⚠ the gate you completed is not logged yet — the chat log's lock is held by another process; the next tool call tries again."
     fi
     # There is a counters lock and it was not given (task 182) — say WHICH step went without: the count (the stop
-    # hook then holds the turn) or only the gate step after a count that was made.
+    # hook then reads the turn as one that wrote) or only the gate step after a count that was made.
     if [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; then
         if [ "$PB_NOT_COUNTED" = true ]; then
             c="${c}
-# ⚠ the session's counters lock could not be taken within ${PLAYBOOK_COUNTERS_WAITED}s — this call was NOT counted, and the stop hook holds this turn like one that wrote, until your next prompt."
+# ⚠ the session's counters lock could not be taken within ${PLAYBOOK_COUNTERS_WAITED}s — this call was NOT counted, and the stop hook's memento reads this turn as one that wrote, until your next prompt."
         else
             c="${c}
 # ⚠ the session's counters lock could not be taken again within this call's ${PLAYBOOK_COUNTERS_WAITED}s — the call is counted; the gate was not looked at, the next call does that."

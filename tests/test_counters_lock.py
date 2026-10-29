@@ -34,7 +34,8 @@ import unittest
 from pathlib import Path
 
 from tests._bashcheck import bash_or_skip
-from tests.test_notification_turn import NOTIFICATIONS, SCRIPTS, SID, _Session
+from tests._stopcheck import held, released
+from tests.test_notification_turn import SCRIPTS, SID, _Session
 
 LIB = SCRIPTS / "gate-echo-lib.sh"
 WINDOW = 1.0      # seconds a writer that does NOT wait for the lock has to finish in
@@ -358,7 +359,7 @@ class TheLockHasATimeLimit(_Counters):
         self.assertGreaterEqual(took, 0.9, "the hook did not wait for the lock at all")
         self.assertIn(NOTICE, out)
         self.assertIn("was NOT counted", out)
-        self.assertIn("the stop hook holds this turn", out)             # what it costs, said where it is seen
+        self.assertIn("the stop hook's memento reads this turn as one that wrote", out)   # what it costs, said where it is seen
         self.assertIn("1s", out)
         json.loads(out)                                  # … and it is still the hook's answer
 
@@ -402,8 +403,9 @@ class ACountMadeWithoutTheLockHoldsTheStop(_Counters):
     """Where a lock exists and was not given, the call is NOT counted and nothing is written
     to the counters — so the counts are behind, and a count that is too low is what lets the
     stop hook take a turn for a chat reply. The session is MARKED (file `counts_unsure`), and
-    the stop hook uses neither of its low-activity releases until a prompt of the user's has
-    reset the counts under the lock (three review rounds, a counted Critical in each)."""
+    the stop hook does not apply its chat-reply rule (since task 340: the memento shows) until a
+    prompt of the user's has reset the counts under the lock (three review rounds, a counted
+    Critical in each). (The notification exception those rounds also held went with task 340.)"""
 
     def setUp(self):
         super().setUp()
@@ -419,19 +421,19 @@ class ACountMadeWithoutTheLockHoldsTheStop(_Counters):
         self.prompt()
         self.tools("Read")
         self.assertFalse(self.unsure.exists())
-        self.assertEqual(self.stop().returncode, 0)
+        self.assertTrue(released(self.stop()))
 
     def test_a_turn_counted_without_the_lock_is_held_like_one_that_wrote(self):
         self.prompt()
         self._a_read_while_the_lock_is_held()
         self.assertTrue(self.unsure.exists(), "nothing marks that the count was made without the lock")
         r = self.stop()
-        self.assertEqual(r.returncode, 2, "released on counts that were made without the lock")
+        self.assertTrue(held(r), "released on counts that were made without the lock")
         # … and the user's next prompt, whose reset IS made under the lock, clears it
         self.prompt()
         self.assertFalse(self.unsure.exists())
         self.tools("Read")
-        self.assertEqual(self.stop().returncode, 0)
+        self.assertTrue(released(self.stop()))
 
     def test_a_prompt_whose_own_reset_could_not_take_the_lock_leaves_it_unsure(self):
         self.prompt()
@@ -443,27 +445,7 @@ class ACountMadeWithoutTheLockHoldsTheStop(_Counters):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(self.unsure.exists())
         self.assertEqual(self.counts(), (1, 1))          # the Read was not counted, and NOTHING was reset
-        self.assertEqual(self.stop().returncode, 2)
-
-    def _a_turn_a_notification_started(self, one_read_without_the_lock):
-        """Five reads and no write in a turn that a notification began — the owner's
-        exception lets such a turn end, however many calls it made."""
-        self.a_turn_that_ended()
-        self.prompt(NOTIFICATIONS[0])
-        self.assertTrue(self.notif_start.exists(), "the notification did not begin a turn")
-        if one_read_without_the_lock:
-            self._a_read_while_the_lock_is_held()
-        self.tools(*["Read"] * 5)
-        return self.stop()
-
-    def test_control_a_turn_a_notification_started_may_end_without_a_write(self):
-        self.assertEqual(self._a_turn_a_notification_started(False).returncode, 0)
-
-    def test_the_notification_exception_is_off_too_while_the_mark_stands(self):
-        # the exception reads `writes` as the chat-reply release does (impl round 2, opus: untested)
-        r = self._a_turn_a_notification_started(True)
-        self.assertTrue(self.unsure.exists())
-        self.assertEqual(r.returncode, 2, "released by the notification exception on counts made without the lock")
+        self.assertTrue(held(self.stop()))
 
     def test_a_call_that_was_not_given_the_lock_writes_nothing_to_the_counters(self):
         # Round 2 left the mark again AFTER a write made without the lock had landed; between
@@ -487,7 +469,7 @@ class ACountMadeWithoutTheLockHoldsTheStop(_Counters):
         renamed = [ln for ln in (log.read_text(encoding="utf-8").splitlines() if log.exists() else []) if "counters" in ln]
         self.assertEqual(renamed, [], "a copy of the counters was renamed without the lock")
         self.assertTrue(self.unsure.exists())
-        self.assertEqual(self.stop().returncode, 2)
+        self.assertTrue(held(self.stop()))
         # the user's next prompt resets under the lock; what is counted after it stays counted
         self.prompt()
         self.assertFalse(self.unsure.exists())

@@ -24,6 +24,7 @@ import unittest
 from pathlib import Path
 
 from tests._bashcheck import bash_or_skip
+from tests._stopcheck import held, released
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 SCRIPTS = REPO_ROOT / "plugins" / "playbook" / "scripts"
@@ -76,7 +77,10 @@ class _Tree(unittest.TestCase):
             "file_path": str(path), "content": content}, "cwd": str(cwd)}, cwd).returncode
 
     def stop(self, cwd: Path) -> int:
-        return self.run_hook("stop-hook", {"stop_hook_active": False, "cwd": str(cwd)}, cwd).returncode
+        """The stop's answer in the old codes: 2 = its memento (a held stop before task 340, which made the hook
+        never block), 0 = nothing said; any other exit as it is."""
+        r = self.run_hook("stop-hook", {"stop_hook_active": False, "cwd": str(cwd)}, cwd)
+        return 2 if held(r) else 0 if released(r) else r.returncode
 
     def activate(self, root: Path, n: str = "001", lane: "str | None" = None):
         s = root / ".agent" / (lane + "/sessions" if lane else "sessions") / SID / "current_state"
@@ -348,21 +352,6 @@ class RoundTwo(_Tree):
         # and the second hop is a judgment, not a refusal: the main tree lets its own legitimate tick through
         self.activate(self.p)
         self.assertEqual(self.edit(link, "- [ ] g1", "- [x] g1\n  - 12:00 — the first gate's outcome", self.o), 0)
-
-    def test_the_stop_run_in_the_main_tree_keeps_the_first_runs_prompt_generation(self):
-        # codex I (reproduced): the run the hop starts takes the generation the first run read before its input,
-        # not a later prompt's — its turn-end mark carries it
-        record(self.p, DONE)
-        self.activate(self.p)
-        wd = self.session_dir(self.w)
-        (wd / "counters").write_text("writes=3\ntools=9\n", encoding="utf-8")
-        (wd / "prompt_gen").write_text("0 g8\n", encoding="utf-8")            # a prompt that landed meanwhile
-        r = self.run_hook("stop-hook", {"stop_hook_active": False, "cwd": str(self.p)}, self.p,
-                          PB_STOP_HOPPED="1", PB_STOP_ACTIVITY_DIR=str(wd), PB_STOP_PROMPT_GEN="g7")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        mark = (wd / "turn_end").read_text(encoding="utf-8")
-        self.assertIn(" g7-", mark)
-        self.assertNotIn(" g8-", mark)
 
     def test_a_project_in_a_worktrees_subfolder_is_its_own_main_tree(self):
         # codex I (reproduced), opus m: `P/.claude/worktrees/w1/inner` is a project of its own, with its own worktree

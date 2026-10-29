@@ -19,6 +19,7 @@ import json
 import os
 import subprocess
 from tests._bashcheck import bash_or_skip
+from tests._stopcheck import held, released
 import tempfile
 import unittest
 from pathlib import Path
@@ -87,7 +88,7 @@ class StopHookFailClosed(MarkerFailClosedBase):
     def test_stop_blocked_on_malformed_marker(self):
         self.set_marker("alice@evil\n")
         r = self.run_hook("stop-hook", {"stop_hook_active": False})
-        self.assertEqual(r.returncode, 2,
+        self.assertTrue(held(r),
                          f"stop allowed on malformed marker (rc={r.returncode}): "
                          f"{r.stderr}")
 

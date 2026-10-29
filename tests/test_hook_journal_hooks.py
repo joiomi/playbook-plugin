@@ -239,28 +239,28 @@ class TheStopHook(_Project):
         self.one(self.H, {"stop_hook_active": False}, 0, "allow", "released: no active task")
         self.activate()
         self.counted()
-        self.one(self.H, {"stop_hook_active": False}, 2, "block", "held: 2 unchecked gate(s) in task 001")
-        self.one(self.H, {"stop_hook_active": True}, 0, "allow", "valve")
+        # task 340: the stop never blocks — where it held it leaves its memento (the valve went with the block)
+        self.one(self.H, {"stop_hook_active": False}, 0, "allow", "memento: 2 open gate(s) in task 001")
+        self.one(self.H, {"stop_hook_active": True}, 0, "allow", "memento: 2 open gate(s) in task 001")
         self.set_task("in_progress", "- [x] done")
         self.one(self.H, {"stop_hook_active": False}, 0, "allow", "all gates of task 001 checked")
         self.set_task("blocked", "- [ ] open")
         self.one(self.H, {"stop_hook_active": False}, 0, "allow", "task 001 blocked")
-        self.one(self.H, {"stop_hook_active": False}, 2, "block", "held: no session", PLAYBOOK_SESSION_ID=None)
+        self.one(self.H, {"stop_hook_active": False}, 0, "allow", "memento: no session", PLAYBOOK_SESSION_ID=None)
 
     def test_a_chat_reply_is_released(self):
         self.activate()
         self.hook("state-echo-hook", post("Read", {"file_path": "x"}))
         self.one(self.H, {"stop_hook_active": False}, 0, "allow", "a chat reply")
 
-    def test_a_blocked_stop_leaves_no_turn_end_and_a_release_does(self):
-        """The plan panel's Critical (grok; all five): the turn-end action reads the hook's own status."""
+    def test_no_stop_leaves_a_turn_end(self):
+        """Task 340: the turn-end mark (the plan panel's Critical of task 222 read it from the hook's own status) went
+        with the block and the notification release it served — no stop writes it."""
         self.activate()
         self.counted()
-        turn_end = self.session_dir / "turn_end"
-        self.one(self.H, {"stop_hook_active": False}, 2, "block", "held")
-        self.assertFalse(turn_end.exists())
-        self.one(self.H, {"stop_hook_active": True}, 0, "allow", "valve")
-        self.assertTrue(turn_end.exists())
+        self.one(self.H, {"stop_hook_active": False}, 0, "allow", "memento")
+        self.one(self.H, {"stop_hook_active": True}, 0, "allow", "memento")
+        self.assertFalse((self.session_dir / "turn_end").exists())
 
 
 class TheTaskSectionAndSample(_Project):
@@ -362,7 +362,7 @@ class TheTaskSectionAndSample(_Project):
     def test_the_stop_hooks_line_carries_the_sample_and_no_section(self):
         self.activate()
         self.hook(self.E, post("Bash", {"command": "true"}))
-        rec, _ = self.one("stop-hook", {"stop_hook_active": False}, 2, "block", "held")
+        rec, _ = self.one("stop-hook", {"stop_hook_active": False}, 0, "allow", "memento")
         self.assertEqual((rec["task"], rec["section"]), ("001", None))
         self.sample_ok(rec)
 

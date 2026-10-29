@@ -4438,7 +4438,7 @@
     {
       "id": "PB-SESSION-ID",
       "category": "sessions-and-attribution",
-      "statement": "Session identifiers are sanitized so a traversal identifier cannot escape the sessions directory, while valid provider PID and judge identifiers pass through unchanged. A PLAYBOOK_SESSION_ID is no longer honored unconditionally: a value of the form `pid-<digits>` is used only while process N is alive (not a zombie), its comm is an agent (claude*, codex, agy, grok, pi), it is not a Claude Code daemon process, and either the ancestor walk finds no agent at all (the daemon-only and plain-terminal cases — N need not be an ancestor there) or N is one of the agents it found (so `pid-<codex>` from `playbook-codex` run inside a claude stays codex's); an id naming a live agent outside the walked chain (a sibling) is refused — and otherwise it is ignored in favor of the ancestor walk, identically in bash and Python, with the CLI printing one stderr line that names the stale id and the id used; ids of any other form (`judge`, non-numeric names) are unaffected. SessionStart exports the id this session's hooks will use (they see the inherited value, not the env file): the same rule decides, and an inherited `pid-<digits>` is dropped outright when the walk finds no agent at all (non-pid ids such as `judge` or a subagent's id are exported as before). With or without PLAYBOOK_SESSION_ID in its environment, the destructive-command guard follows the id the resolver reaches (task 110 — a normal session's hooks carry no such variable, and the walk resolves the session there) before letting a session's irreversible task acknowledge a dangerous command. The Claude ancestor walk that derives the id when PLAYBOOK_SESSION_ID is unset recognizes `claude`, `claude.exe` and any `claude*` process identically in bash and Python, never takes a Claude Code background-daemon process (the shared `bg-pty-host` pty host or `daemon run`) — nor a `claude*` ancestor whose argv cannot be read — as the session root, and never climbs past one. On Linux both resolvers read the tree from `/proc/<pid>/status` (Name, PPid) and `/proc/<pid>/cmdline` (the exact argv), and the daemon is recognized from that argv: the words of basename(argv[0]) followed by argv[1:] must be `claude`/`claude.exe` then `bg-pty-host`/`--bg-pty-host` or `daemon run` (the pty host rewrites its title into argv[0], measured live 2026-09-28); only where `/proc` is missing do they fall back to `ps`, whose flattened argv line is split on whitespace and fed to the same detector; when it reaches the daemon with no agent process below it, the id is unresolved — no hook or CLI command creates a session directory or touches any session's pointer, and each prints one stderr line. The walk also stops at an ancestor it cannot read (an unreadable `/proc` status or an empty cmdline; on the `ps` path a `ps` error or a miss of the Python probe's 10 s deadline), keeping an agent already found below it and leaving the id unresolved when none was found — never a made-up `pid-<ppid>`; only a missing `ps` binary on the `ps` path keeps the legacy `pid-<ppid>` fallback. With an unresolved id the stop hook blocks once instead of releasing (the `stop_hook_active` valve ends a re-issued stop). Dead `pid-*` session directories are reclaimed by the session GC, and `tasks doctor` names the ones its own CLI-entry sweep reclaimed in that run (the SessionStart sweep is not recorded).",
+      "statement": "Session identifiers are sanitized so a traversal identifier cannot escape the sessions directory, while valid provider PID and judge identifiers pass through unchanged. A PLAYBOOK_SESSION_ID is no longer honored unconditionally: a value of the form `pid-<digits>` is used only while process N is alive (not a zombie), its comm is an agent (claude*, codex, agy, grok, pi), it is not a Claude Code daemon process, and either the ancestor walk finds no agent at all (the daemon-only and plain-terminal cases — N need not be an ancestor there) or N is one of the agents it found (so `pid-<codex>` from `playbook-codex` run inside a claude stays codex's); an id naming a live agent outside the walked chain (a sibling) is refused — and otherwise it is ignored in favor of the ancestor walk, identically in bash and Python, with the CLI printing one stderr line that names the stale id and the id used; ids of any other form (`judge`, non-numeric names) are unaffected. SessionStart exports the id this session's hooks will use (they see the inherited value, not the env file): the same rule decides, and an inherited `pid-<digits>` is dropped outright when the walk finds no agent at all (non-pid ids such as `judge` or a subagent's id are exported as before). With or without PLAYBOOK_SESSION_ID in its environment, the destructive-command guard follows the id the resolver reaches (task 110 — a normal session's hooks carry no such variable, and the walk resolves the session there) before letting a session's irreversible task acknowledge a dangerous command. The Claude ancestor walk that derives the id when PLAYBOOK_SESSION_ID is unset recognizes `claude`, `claude.exe` and any `claude*` process identically in bash and Python, never takes a Claude Code background-daemon process (the shared `bg-pty-host` pty host or `daemon run`) — nor a `claude*` ancestor whose argv cannot be read — as the session root, and never climbs past one. On Linux both resolvers read the tree from `/proc/<pid>/status` (Name, PPid) and `/proc/<pid>/cmdline` (the exact argv), and the daemon is recognized from that argv: the words of basename(argv[0]) followed by argv[1:] must be `claude`/`claude.exe` then `bg-pty-host`/`--bg-pty-host` or `daemon run` (the pty host rewrites its title into argv[0], measured live 2026-09-28); only where `/proc` is missing do they fall back to `ps`, whose flattened argv line is split on whitespace and fed to the same detector; when it reaches the daemon with no agent process below it, the id is unresolved — no hook or CLI command creates a session directory or touches any session's pointer, and each prints one stderr line. The walk also stops at an ancestor it cannot read (an unreadable `/proc` status or an empty cmdline; on the `ps` path a `ps` error or a miss of the Python probe's 10 s deadline), keeping an agent already found below it and leaving the id unresolved when none was found — never a made-up `pid-<ppid>`; only a missing `ps` binary on the `ps` path keeps the legacy `pid-<ppid>` fallback. With an unresolved id the stop hook leaves a memento that the gates could not be checked (since task 340 it never blocks). Dead `pid-*` session directories are reclaimed by the session GC, and `tasks doctor` names the ones its own CLI-entry sweep reclaimed in that run (the SessionStart sweep is not recorded).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
@@ -8672,13 +8672,15 @@
         {
           "type": "executable integration",
           "path": "tests/test_hooks_invoked_integration.py",
-          "reference": "WithAnActiveTask.test_stop_blocks_a_turn_that_wrote_while_gates_are_open",
+          "reference": "WithAnActiveTask.test_stop_reminds_a_turn_that_wrote_while_gates_are_open",
           "boundary": "subprocess",
           "negative_control": {
             "path": "tests/test_hooks_invoked_integration.py",
             "reference": "WithEveryGateChecked.test_control_a_turn_that_wrote_may_end_when_every_gate_is_checked"
           },
-          "limitations": []
+          "limitations": [
+            "Rewritten by task 340: the stop never blocks — a memento (exit 0)."
+          ]
         },
         {
           "type": "live-provider test",
@@ -12090,7 +12092,7 @@
     {
       "id": "PB-PYTHON-FLOOR",
       "category": "compatibility-and-package",
-      "statement": "The documented and diagnosed minimum Python version matches syntax used by every shipped module, and the entry points that check the interpreter — the eight launchers and all ten hooks — fail clearly before import under an incompatible one, each hook with its own polarity: the task gate fails closed (no call but a shell command passes, and with no usable python3 at all not even that: the payload is unreadable and every call is refused; a shell command keeps the judge's guard (the task-dir trigger went with task 197); the gate and the echo ask only inside a project), the stop hook counts the gates without Python and still blocks, codex's apply-patch hook refuses a PreToolUse edit; the others say so and do nothing — the state echo marks the count it did not make, so the stop hook holds the turn (task 194).",
+      "statement": "The documented and diagnosed minimum Python version matches syntax used by every shipped module, and the entry points that check the interpreter — the eight launchers and all ten hooks — fail clearly before import under an incompatible one, each hook with its own polarity: the task gate fails closed (no call but a shell command passes, and with no usable python3 at all not even that: the payload is unreadable and every call is refused; a shell command keeps the judge's guard (the task-dir trigger went with task 197); the gate and the echo ask only inside a project), the stop hook counts the gates without Python and still leaves its memento (since task 340 it never blocks), codex's apply-patch hook refuses a PreToolUse edit; the others say so and do nothing — the state echo marks the count it did not make, so the stop hook leaves its memento (task 194; a hold until task 340).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/tasks",
@@ -14498,10 +14500,6 @@
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
           "reference": "function:_pb_session_dir_ok"
-        },
-        {
-          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
-          "reference": "function:write_session_mark"
         }
       ],
       "failure_consequence": "Medium",
@@ -14734,7 +14732,7 @@
     {
       "id": "PB-HOOK-STOP-CLOSE",
       "category": "risk-and-close",
-      "statement": "Stop enforcement blocks a first stop while task completion requirements remain, fails closed on an unknowable lane, and uses its one-shot valve to avoid permanently trapping the session. The blocked-task release reads `## Status`, and the gate count + first unchecked gate are read, through the CLI's own fence-aware Python readers in ONE spawn (scripts/task-status.py --fields → core._extract_status + core._live_gate_state + core._freehand_release_allowed as a 4-line frame), never an independent awk/grep rule — the Freehand waiver is decided in Python, not by a bash prefix test on the gate text; when that reader cannot run the status is unreadable, the Freehand release is disabled, and gates are counted by a fence-blind LINE grep that is BOM-tolerant like the Python reader (`^(U+FEFF)*[[:space:]]*- \\[ \\]`, byte-wise under LC_ALL=C) and whose exit code is read — a grep failure (exit >= 2, unreadable file, unsupported regex, missing binary) counts as at least one open gate — so over the fixture table the fallback count is >= the Python count and the arm never releases on a count it could not take or under-counts the CLI (fail closed, loud). The one-shot `stop_hook_active` valve is read with a bash-builtin regex when python3 cannot run (no python3, no grep), so a no-python session blocked by this arm can still end its re-issued stop. BOUND, on both arms: the counter-gated conversational bypass (session writes=0 and tools<5, counted from the last USER prompt) releases a low-activity turn of a COUNTED tree regardless of open gates — it is a release for chat replies, not a fail-closed path — and it is disarmed when the fallback count itself failed. An automatic notification — a prompt that begins with `<task-notification>` or `[SYSTEM NOTIFICATION` — does not reset those counters (owner's Q1, 2026-09-24; task 173): one that lands in the middle of a turn changes nothing, so the work of that turn still holds its stop. The same block releases one more turn, by the owner's exception: a turn that a notification STARTED — no tool call had run since the last stop this hook let through for the session's OWN agent (an agent nested under it shares the session, and its stop ends no turn), in the same prompt generation — and that has made no write since — no Edit, Write, MultiEdit, NotebookEdit or Bash call — however many other tool calls it made; one such write and it is held like any other turn. The echo of a command the user ran (`<command-name>`, `<local-command-caveat>`) still resets the counters, as a prompt of theirs does. The counters are written under ONE lock per session (`counters.lock`, flock): a tool call's count, the reset at a prompt and every single write of a key are each one hold of it, so tool calls whose hooks the host runs side by side are each counted (task 182, PLAN S11 item 17). The lock has a time limit (2 seconds; 1 or 2 by `PLAYBOOK_COUNTERS_LOCK_WAIT`; one limit for a hook's two holds together). Where a lock exists and is NOT given — not in time, something that is no plain file in its place, or a lock file that cannot be opened where it could have been made — the call is NOT counted, nothing is written to the counters without the lock, and the session is marked (`counts_unsure` beside the counters): the chat-reply release and the notification exception are both OFF until a prompt of the user's has reset the counts under the lock (task 182, impl rounds 1 to 3). BOUND: on a host with no `flock`, or whose `flock` cannot wait with a limit, there is no lock to take, a call is counted without one and a count can be lost, as before. The stop hook resolves the session and reads the prompt generation before it reads its input (task 193; a held-input test shows a user's prompt that lands while it reads its input no longer lends it the new generation). BOUND (PLAN §S11 item (18)): only that wait moved — bash's start, the lib, the project and the session walk still precede the read, so the window is close to the old one: a user's prompt whose hook completes in it still gives the stop of the turn before it the new generation, and a notification early in the user's turn is then taken for a turn's start — not reproduced. Claude Code's Stop and UserPromptSubmit payloads carry a `prompt_id` (measured 2026-10-13) that would close it; using it is the owner's to schedule. A prompt of an agent nested under the session — a `claude -p` the session's agent starts, which resolves to the same session — resets no count, removes no mark and begins no generation: only the session's own agent (one agent in the hook's chain, or none visible) starts a new count (task 193, #38; measured live before the fix: the nested prompt took the outer turn's `writes=2 tools=3` to 0). The hooks find the active task's record by the task directory's own name (task 192; the `find -path` BOUND this row carried — PLAN §S11 item (23) — is closed, see PB-TASK-ACTIVATE). Since task 302 (audit 3 G1), a session in a Claude Code worktree (`<main>/.claude/worktrees/<name>/`) with no pointer of its own there is held by its task in the main tree: the stop is decided once more in the main tree, on the same payload, and only that run writes its journal line; that run reads the turn's activity — the counters, their marks, the prompt generation, the turn-end note — in the worktree's session folder, where the session's hooks keep it (the main tree's are frozen when the session left), and with the prompt generation the first run read before its input. The main tree is the nearest one, and a project in a worktree's subfolder is its own. A pointer in the worktree decides there (one session, one task, task 298).",
+      "statement": "The stop hook never blocks a stop (task 340, PLAN-PLAYBOOK-2.md 4.1 b; the owner's R14: \"rămâne ca memento, doar blocarea pleacă (214 alarme false din 223)\"): every path exits 0. Where a working turn ends with the active task's gates open — an active, unblocked task with at least one live unchecked gate, not the Freehand gate, and not a chat reply — it prints ONE line of JSON on stdout, Claude Code's `{\"systemMessage\": …}`, shown to the person: the task, the open-gate count and the first open gate (escaped by `_json_str`, the control bytes left dropped, cut at 400 characters). An unresolved session and a malformed `.agent/current_user` get a memento that the gates could not be checked. No memento for a blocked task, a task with every gate checked, no active task, a pointer to no task, or the Freehand gate. The blocked status, the gate count and the first unchecked gate are read through the CLI's own fence-aware Python readers in ONE spawn (scripts/task-status.py --fields → core._extract_status + core._live_gate_state + core._freehand_release_allowed as a 4-line frame), never an independent awk/grep rule — the Freehand waiver is decided in Python, not by a bash prefix test on the gate text; when that reader cannot run (below python 3.10 too) the status is unreadable, the Freehand waiver is off, and the gates are counted by a fence-blind LINE grep that is BOM-tolerant like the Python reader (`^(U+FEFF)*[[:space:]]*- \\[ \\]`, byte-wise under LC_ALL=C) and whose exit code is read — a grep failure counts as at least one open gate — so the fallback count is >= the Python count, and the memento says it was counted without python3. The chat-reply rule: a turn of a COUNTED tree with writes=0 and tools<5, counted from the last USER prompt, gets no memento; it is off when the fallback count itself failed. An automatic notification — a prompt that begins with `<task-notification>` or `[SYSTEM NOTIFICATION` — does not reset those counters (owner's Q1, 2026-09-24; task 173), so a turn it starts gets the memento when the turn before it wrote; the exception that released such a turn from the block, and the marks it rested on (`turn_end`, `notif_start`, `prompt_gen`), went with the block (task 340). The echo of a command the user ran (`<command-name>`, `<local-command-caveat>`) still resets the counters, as a prompt of theirs does. The counters are written under ONE lock per session (`counters.lock`, flock): a tool call's count, the reset at a prompt and every single write of a key are each one hold of it, so tool calls whose hooks the host runs side by side are each counted (task 182, PLAN S11 item 17). The lock has a time limit (2 seconds; 1 or 2 by `PLAYBOOK_COUNTERS_LOCK_WAIT`; one limit for a hook's two holds together). Where a lock exists and is NOT given — not in time, something that is no plain file in its place, or a lock file that cannot be opened where it could have been made — the call is NOT counted, nothing is written to the counters without the lock, and the session is marked (`counts_unsure` beside the counters): the chat-reply rule is OFF until a prompt of the user's has reset the counts under the lock (task 182, impl rounds 1 to 3). BOUND: on a host with no `flock`, or whose `flock` cannot wait with a limit, there is no lock to take, a call is counted without one and a count can be lost, as before. A prompt of an agent nested under the session — a `claude -p` the session's agent starts, which resolves to the same session — resets no count: only the session's own agent (one agent in the hook's chain, or none visible) starts a new count (task 193, #38; measured live before the fix: the nested prompt took the outer turn's `writes=2 tools=3` to 0). The hooks find the active task's record by the task directory's own name (task 192; see PB-TASK-ACTIVATE). Since task 302 (audit 3 G1), a session in a Claude Code worktree (`<main>/.claude/worktrees/<name>/`) with no pointer of its own there is answered for by its task in the main tree: the stop is decided once more in the main tree, on the same payload, and only that run writes its journal line; that run reads the turn's counters in the worktree's session folder, where the session's hooks keep them (the main tree's are frozen when the session left). The main tree is the nearest one, and a project in a worktree's subfolder is its own. A pointer in the worktree decides there (one session, one task, task 298). Codex's Stop runs this hook for an active task and lets the turn end on its exit 0 (the memento is not shown there).",
       "owner": [
         {
           "path": "plugins/playbook/scripts/stop-hook",
@@ -14751,15 +14749,137 @@
         {
           "path": "plugins/playbook/tasks/core.py",
           "reference": "symbol:_live_gate_state"
-        },
-        {
-          "path": "plugins/playbook/scripts/gate-echo-lib.sh",
-          "reference": "function:write_session_mark"
         }
       ],
       "failure_consequence": "Critical",
       "claim_kind": "mechanical",
       "proofs": [
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_memento.py",
+          "reference": "TheMemento.test_a_working_turn_with_open_gates_ends_with_the_memento",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stop_memento.py",
+            "reference": "NoMemento.test_a_chat_reply"
+          },
+          "limitations": [
+            "A working turn (counters tools=12 writes=4), two open gates: exit 0, one JSON line naming task 001, the count and the first gate (red on nested 351ee6e: exit 2)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_memento.py",
+          "reference": "TheMemento.test_no_session_ends_with_a_memento",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "No PLAYBOOK_SESSION_ID and a /proc with no agent: exit 0 and a memento that the gates could not be checked (red on 351ee6e)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_memento.py",
+          "reference": "TheMemento.test_an_invalid_marker_ends_with_a_memento",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`.agent/current_user` = `alice@evil`: exit 0, the memento names current_user (red on 351ee6e)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_memento.py",
+          "reference": "TheMemento.test_below_the_floor_the_memento_comes_from_grep",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "python3 3.9 on PATH: exit 0, the memento from the grep count (red on 351ee6e)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_memento.py",
+          "reference": "TheMemento.test_the_memento_is_json_whatever_the_gate_says",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A quote, a backslash, a tab, a control byte, non-ASCII letters and 10,000 characters in the first gate: one valid JSON object, under 1,000 characters (red on 351ee6e)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_memento.py",
+          "reference": "TheMemento.test_a_reissued_stop_is_no_different",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "`stop_hook_active` true: the memento all the same (the valve went with the block; red on 351ee6e)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_memento.py",
+          "reference": "NoMemento.test_a_blocked_task",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_stop_memento.py",
+            "reference": "TheMemento.test_a_working_turn_with_open_gates_ends_with_the_memento"
+          },
+          "limitations": [
+            "`## Status` blocked: exit 0, nothing on stdout."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_memento.py",
+          "reference": "NoMemento.test_all_gates_checked",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "Every gate checked: exit 0, nothing on stdout."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_memento.py",
+          "reference": "NoMemento.test_no_active_task",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "No pointer: exit 0, nothing on stdout."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_memento.py",
+          "reference": "NoMemento.test_the_freehand_gate",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The first open gate is the Freehand debrief: exit 0, nothing on stdout."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_memento.py",
+          "reference": "TheMarksAreGone.test_no_hook_writes_a_turn_mark",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "A user's prompt, a stop, a notification and a stop: no `turn_end`, `notif_start` or `prompt_gen` in the session directory (red on 351ee6e: `prompt_gen`)."
+          ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_memento.py",
+          "reference": "TheCounters.test_a_prompt_resets_and_a_notification_keeps_the_counts",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": [
+            "The owner's Q1 kept: a notification leaves tools=12 writes=4, a user's prompt resets them to 0."
+          ]
+        },
         {
           "type": "executable integration",
           "path": "tests/test_marker_fail_closed.py",
@@ -14816,19 +14936,6 @@
         {
           "type": "executable integration",
           "path": "tests/test_notification_turn.py",
-          "reference": "AStopAfterANotification.test_work_then_a_notification_in_the_middle_of_the_turn_then_a_stop_is_blocked",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_notification_turn.py",
-            "reference": "AStopAfterANotification.test_control_the_chat_reply_bypass_is_unchanged"
-          },
-          "limitations": [
-            "The three REAL hooks as subprocesses in event order (chat-log-hook for a prompt, state-echo-hook for a tool call, stop-hook for the stop) over a fixture project with an active task and an open gate: prompt, two Bash calls and a Read, a `<task-notification>`, a Read, stop → exit 2. On the unfixed tree: `0 != 2 : released with a gate open and two writes in the turn` — the sequence measured on a live session on 2026-10-10 05:43 (`tools=20 writes=20` → `0 0` between two tool calls of one turn). Local subprocesses; the host's own scheduling of Stop and of a notification is not live-proven beyond that one measurement."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
           "reference": "ANotificationDoesNotResetTheCounters.test_an_automatic_notification_leaves_the_counts_as_they_were",
           "boundary": "subprocess",
           "negative_control": {
@@ -14847,231 +14954,6 @@
           "negative_control": null,
           "limitations": [
             "`<command-name>` and `<local-command-caveat>` reset as a user prompt does. Holds on the unfixed tree; red in a copy that treats them as notifications (`(3, 2) != (0, 0)`)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "AStopAfterANotification.test_a_turn_a_notification_started_may_end_if_it_made_no_write",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_notification_turn.py",
-            "reference": "AStopAfterANotification.test_one_write_in_that_turn_and_the_stop_is_blocked"
-          },
-          "limitations": [
-            "The owner's exception: a user's turn with two writes is let end (blocked once, then the valve), a notification starts the next turn, six Read calls, stop → exit 0 with the gate open. Unfixed tree: `2 != 0` (the reset left tools=6, over the bypass's limit). Red again in a copy whose stop hook has no notification case."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "AStopAfterANotification.test_one_write_in_that_turn_and_the_stop_is_blocked",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "One Bash, Edit, Write, MultiEdit or NotebookEdit call in the notification-started turn → exit 2. Red in a copy where a noted baseline is enough without comparing it (`0 != 2`); the last two were red on the tree before they were counted as writes."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "AStopAfterANotification.test_a_second_notification_during_that_turn_does_not_move_the_baseline",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A notification-started turn writes, a second notification lands in it, stop → exit 2: only a notification with no tool call since a stop that was let through counts as a start. Red in a copy that notes a baseline whenever a mark exists."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "AStopAfterANotification.test_a_stop_that_was_blocked_is_not_the_end_of_a_turn",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A blocked stop (exit 2) leaves no `turn_end` file; a notification after it notes no baseline; the next stop is blocked. Red in a copy that marks every stop, and in one where a notification is a start with no mark at all."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "AStopAfterANotification.test_a_user_prompt_ends_what_the_notification_began",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A notification's baseline of 0 does not survive the user's next prompt: six Read calls after it and the stop is blocked. Red in a copy whose reset keeps the two files (`0 != 2`)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "AStopAfterANotification.test_a_baseline_that_is_not_a_number_releases_nothing",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Beside a valid mark with the same nonce, a baseline whose number is empty, non-numeric, signed, hex, 30 digits or a command substitution, with writes=0 and tools=9 → exit 2 each, and nothing is executed; the control in the same test, a plain `0` with that nonce, releases. Red in a copy that reads the number through `_safe_int` (garbage reads as 0 = writes)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "TheStopHookMarksOnlyAStopItLetThrough.test_each_way_a_stop_is_let_through_leaves_the_mark",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_notification_turn.py",
-            "reference": "TheStopHookMarksOnlyAStopItLetThrough.test_a_blocked_stop_leaves_no_mark_and_says_what_it_said"
-          },
-          "limitations": [
-            "The valve, all gates done, a blocked status, no active task: each exits 0 and leaves `turn_end` whose first word is the tool count; the counts themselves are unchanged. Unfixed tree: `None != '3'`."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "TheStopHookMarksOnlyAStopItLetThrough.test_with_no_counters_file_nothing_is_written",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "No counters file: a blocked stop, the valve and a stop with no active task create neither it nor a mark. Red in a copy whose mark is written without the file test. (Its first version drove only the blocked stop and passed that break — rewritten.)"
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "AFailureWhileMarkingDoesNotChangeTheVerdict.test_a_blocked_stop_stays_blocked_and_an_allowed_one_allowed",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The hook run from a copy of the plugin whose mark writer fails: exit 2 stays 2, exit 0 stays 0, and the failing write is seen to have been reached. Red with the trap unguarded (`1 != 0`): under `set -e` a failing command inside a plain EXIT trap replaces the exit status with 1 (measured on bash 5.1 for 0 and for 2)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "AStopAfterANotification.test_every_tool_that_edits_a_file_is_a_write",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_notification_turn.py",
-            "reference": "AStopAfterANotification.test_control_the_chat_reply_bypass_is_unchanged"
-          },
-          "limitations": [
-            "A prompt, then ONE MultiEdit (or NotebookEdit) through the real state-echo-hook: the counters read tools=1 writes=1 and the stop is blocked. Before the count was widened: `(1, 0) != (1, 1)` — the turn was released as a chat reply."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "TheCountersFileIsNeverRewrittenByTheRule.test_a_stop_let_through_and_a_notification_leave_the_file_as_it_was",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "After a stop that is let through (which writes the mark) and a notification that starts a turn (which notes the baseline), the counters file is the same inode with the same bytes. On the first version (nested `978ff38`, the marks as keys of that file): `(17767222, b'…') != (17767223, b'…')`."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "TheCountersFileIsNeverRewrittenByTheRule.test_a_write_that_lands_while_the_notification_is_read_still_holds_the_stop",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "`cat` and `sed` shimmed first on PATH count each read OF THE COUNTERS FILE by the real chat-log-hook and, after the Nth, do what a tool call's hook does (tools and writes +1): the hook reads the file exactly once, and when the write lands right after that read the stop that follows is held. On the first version: `2 != 1` / `3 != 1 : the notification's hook read the counters file more than once`. A deterministic stand-in for the overlap the panel described; two real hook processes racing are not run against each other."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "AStopAfterANotification.test_a_notification_right_after_a_user_prompt_is_not_a_start",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A reply with no tool call ends (mark: 0 tools); the USER speaks; a notification lands before the first tool call of their turn (tools is 0 again); six Read calls; stop → exit 2: the user's prompt removed the mark. Red in a copy whose reset keeps the two files."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "ANotificationAndAUserPromptAtOnce.test_a_baseline_published_after_the_users_prompt_does_not_release_their_turn",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_notification_turn.py",
-            "reference": "ANotificationAndAUserPromptAtOnce.test_control_with_no_user_prompt_in_between_the_notification_starts_its_turn"
-          },
-          "limitations": [
-            "Two real hook processes, one deterministic interleaving each: `mv` (then `cat`) is shimmed for the chat-log-hook handling a notification, and at that call the USER's prompt hook is run to its END before the shim does its work — so the baseline is renamed into place AFTER the user's reset. Six Read calls in the user's turn, stop → exit 2. On the lock version (nested `4548fe3`) the `mv` case was released after the reset's 5 s wait: `0 != 2 : the user's own turn ended on a notification's baseline` — the single judge's finding, reproduced. Red in a copy whose stop hook honours a baseline without the mark's nonce. Not a stress test."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "AStopAfterANotification.test_a_baseline_counts_only_beside_the_mark_it_was_taken_from",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "writes=0 and nine tool calls, the files written by hand: same nonce of the current generation → exit 0 (two controls: no prompt seen yet, and a named generation); the mark gone, the mark of a later stop, the mark of an OLDER prompt generation, a mark made before any prompt once there has been one, either file without a nonce, a third word, a nonce that is not a plain word (a command substitution — not executed), a 65-character nonce → exit 2 each."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "AStopAfterANotification.test_each_stop_let_through_makes_a_new_nonce",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Three turns ended in a row: three different nonces, each 8-64 characters of letters, digits and dashes, each beginning with the generation of the prompt that turn answered. Red in a copy whose nonce is a constant."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "ANotificationAndAUserPromptAtOnce.test_the_two_exits_that_log_nothing_end_it_too",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A notification has started a turn (baseline on disk); then a user prompt that is empty once the IDE tags are filtered out, or the same message twice within a second — the two prompts the hook logs nothing for: both files are gone after either. On nested `4548fe3`: `True is not false` (the baseline stood). Their counters are NOT reset — unchanged since before task 088, disclosed."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "ANestedAgentsStopIsNotTheSessionsTurnEnd.test_a_nested_agents_stop_leaves_no_mark",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_notification_turn.py",
-            "reference": "ANestedAgentsStopIsNotTheSessionsTurnEnd.test_control_the_sessions_own_stop_does"
-          },
-          "limitations": [
-            "The stop hook run with a /proc fixture in which the process that starts it is an agent whose parent is an agent too (`PLAYBOOK_PROC_ROOT`): after the user's turn has written, the nested agent's stop is held, then let through by the valve — and leaves NO mark; its completion notice notes no baseline; the user's stop is held. On nested `52a7264`: `True is not false : a nested agent's stop marked the session's turn end` (the single judge's finding, run 2). A fixture, not two live agents."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "ANestedAgentsStopIsNotTheSessionsTurnEnd.test_a_nested_stop_does_not_take_away_a_mark_that_is_there",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "A nested agent that stops after the session's own turn ended neither renews nor removes the mark (byte-identical before and after)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "AStopHookOvertakenByAUsersPrompt.test_a_mark_published_after_the_users_prompt_starts_nothing",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The real stop hook with `mv`, then `head`, shimmed: at that call the USER's next prompt hook is run to its END, so the stop hook publishes its mark after that prompt (`mv`), or goes on deciding after it (`head`). A notification before the first tool call of the user's turn then notes no baseline, and six Read calls later the stop is held. On nested `52a7264`: `True is not false : a mark of the turn BEFORE the user's prompt was taken for a start`. The `head` case alone tells a generation read when the hook starts from one read when it ends (a break that read it at the end passed the `mv` case). Two real hook processes, one deterministic interleaving each."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "AStopHookOvertakenByAUsersPrompt.test_every_prompt_of_the_users_begins_a_new_generation",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Four prompts of the user's — two plain, a slash-command echo, one that is empty once the IDE tags are filtered out — leave four different generations; a notification leaves the last one as it was."
           ]
         },
         {
@@ -15291,19 +15173,6 @@
         {
           "type": "executable integration",
           "path": "tests/test_counters_lock.py",
-          "reference": "ACountMadeWithoutTheLockHoldsTheStop.test_the_notification_exception_is_off_too_while_the_mark_stands",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_counters_lock.py",
-            "reference": "ACountMadeWithoutTheLockHoldsTheStop.test_control_a_turn_a_notification_started_may_end_without_a_write"
-          },
-          "limitations": [
-            "Task 182, impl round 2 (opus: untested). Green when written — the first form of the fix already covered it; it is red when the mark is read by the chat-reply release only (break harness)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_counters_lock.py",
           "reference": "OneWaitForAWholeCall.test_what_the_first_hold_waited_is_taken_off_the_second",
           "boundary": "subprocess",
           "negative_control": {
@@ -15427,16 +15296,6 @@
         },
         {
           "type": "executable integration",
-          "path": "tests/test_notification_turn.py",
-          "reference": "TheStopHookReadsTheGenerationFirst.test_a_prompt_that_lands_while_the_stop_hook_reads_its_input_does_not_lend_it_its_generation",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "The hook held on its stdin for 1.5 s while a user's prompt runs; the start-up window before the read is not tested (the BOUND)."
-          ]
-        },
-        {
-          "type": "executable integration",
           "path": "tests/test_state_echo_sinks.py",
           "reference": "TheEchosSinks.test_the_stop_hooks_mark_is_not_written_into_a_linked_session_directory",
           "boundary": "subprocess",
@@ -15513,14 +15372,6 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_task_guards_judge_the_files_project.py",
-          "reference": "RoundTwo.test_the_stop_run_in_the_main_tree_keeps_the_first_runs_prompt_generation",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": []
         }
       ],
       "applicable_platforms": [
@@ -15549,7 +15400,8 @@
         "2026-10-14 (task 194): `write_session_mark` refuses a session directory that is a link (the stop hook's `turn_end` was renamed into the link's target); no mark is the stricter case — a later notification is read as landing mid-turn.",
         "2026-10-14 (task 194, impl panel r1): the stop hook's low-activity releases are also held when `.agent/sessions` itself is a link (`_pb_session_dir_ok`), as the writers refuse it.",
         "Task 302: from a working directory in no project the stop is not decided: no project there holds the session's pointer.",
-        "Task 302: the stop is decided in the main tree for a worktree session, not the other way: a session whose task is open in a worktree, back in the main tree (ExitWorktree) with no pointer there, is released by the main tree's stop."
+        "Task 302: the stop is decided in the main tree for a worktree session, not the other way: a session whose task is open in a worktree, back in the main tree (ExitWorktree) with no pointer there, is released by the main tree's stop.",
+        "2026-10-29 (task 340): the block went (PLAN-PLAYBOOK-2.md 4.1 b, R14). In the older proofs below and in the notes above, 'held', 'blocks' and 'exit 2' of a stop now read 'leaves its memento' (exit 0 and the `systemMessage` line), and 'released' reads 'exit 0 with nothing said' — the tests assert them through tests/_stopcheck.py (`held`, `released`). The proofs of the notification exception, the turn marks, the prompt generation and the valve went with them (their tests are deleted)."
       ],
       "follow_up_phases": [
         8
@@ -19020,10 +18872,12 @@
         {
           "type": "executable integration",
           "path": "tests/test_enforcement_journal.py",
-          "reference": "StopJournal.test_block_writes_line",
+          "reference": "StopJournal.test_a_memento_is_no_enforcement_record",
           "boundary": "subprocess",
           "negative_control": null,
-          "limitations": []
+          "limitations": [
+            "Rewritten by task 340: the stop never blocks — a memento (exit 0)."
+          ]
         },
         {
           "type": "executable integration",
@@ -19190,7 +19044,7 @@
     {
       "id": "PB-HOOK-JOURNAL",
       "category": "providers-and-hooks",
-      "statement": "Every run of a playbook hook that finds a playbook project appends ONE line to the lane's `journal/hooks.jsonl` — Claude's and grok's eight bash hooks, the project's `monitor-nudge.sh`, codex's three python hooks and `command_guard.py` (Claude's and grok's through command-guard-hook's `exec`, codex's directly) — with the keys ts (UTC, at exit), hook, event, tool (the name the call was sent with: the task gate judges a Monitor as Bash and journals it as Monitor — task 307), tool_use_id (the host's id of the tool call), session_id (playbook's), host_session_id, agent_id (a subagent's), decision (allow/block/context/ok/skip/error), detail, ms (from the hook's first line), exit, error, task (on the state echo's and the stop hook's lines the task their read was for, elsewhere the session's pointer read by the writer itself; \"\" where the session is known and has none; null where the writer does not know the session — the command guard's allow line, which resolves no session (the same call's task-gate line names it), monitor-nudge without PLAYBOOK_SESSION_ID — or the pointer the writer reads is a link or not a regular file; the state echo and the stop hook follow a linked pointer and name the task they acted on), section (on the state echo's line only: the open gate's `##` heading from that call's accepted read, \"\" when it found none, null on a read another hook overtook; a failed call reads task.md as it is then, never a memory), susp / sts / boot (one bracketed reading — wall, MONOTONIC, BOOTTIME, MONOTONIC, wall — kept only when both brackets span at most 5 ms: CLOCK_BOOTTIME − CLOCK_MONOTONIC in whole seconds, the wall time of that reading, the boot id's first 8), and no command, path or prompt; the one text from a file is that heading, cut at 64 bytes. null means not on this line, \"\" means read and none. The bash runner keeps the hook's exit status exactly and gives each exit action the hook's own status as `$?` (a blocked stop leaves no turn-end mark); a failing write or action changes nothing. The ids come from the normalizer's frame (v4) where the hook reads it, so a key nested in a tool's input or response cannot stand in for them; elsewhere `tool_use_id` is the last match in the payload's last 4 KiB. Each line is one append of at most 2,048 bytes (a line past it drops detail, error and section — section null — and keeps every key), so writers side by side tear none, made under a shared lock on the journal directory that renaming and compressing take exclusively (the owner, 2026-10-16 22:21), so no line is in flight while a closed file is compressed; the lock is taken before the duration, and past a 1 s wait the line goes to a spool file that the next exclusive holder moves into the journal — never an unlocked append (the owner, 2026-10-17 00:13), a dead writer's temporary taken the same way and a living one's never removed, the directory made before the lock; nothing is written in the fresh-clone shape, with an invalid marker, into a lane that is a link or not writable, through a linked `journal/`, or into a `hooks.jsonl` that is a link or not a regular file. About one run in 32 looks at the journal directory under a lock taken without waiting: past 20 MB, after a second look, the file is renamed to `hooks.jsonl.archived-<stamp>-<epoch>-<pid>` (the name records the rename time, written by the rename itself); a closed file is compressed beside it only 10 minutes after the rename its name records and after its last write, and never when its name records no rename time (a hook that opened it before the rename can still append), and every archive is kept (the owner, 2026-10-16 18:04); since task 259 the compression runs after the rotation's hold is let go, one archive a pass and one compressor per archive, its temporary fsynced and checked to decompress to exactly the closed file's bytes, and under the lock held exclusively (python ≤ 1 s, bash `flock -w 1`) the `.gz` and the directory are fsynced before the closed file is removed — any failure keeps it, and a closed file beside a `.gz` that holds it exactly is removed the same way; the python writer rotates the same way, and both take the duration after that work. No line is written for a review's session (judge, tail-cert) or a nested run (PLAYBOOK_HOOK_NESTED=1, codex's Stop calling the stop hook); the pattern reads the event, session and agent only in the payload's head (before its first tool input, within 4 KiB); a python error is named by its type. A task-gate or stop run that is decided in another tree of the repository (task 302) writes its one line in that tree's journal, and the working directory's project gets none.",
+      "statement": "Every run of a playbook hook that finds a playbook project appends ONE line to the lane's `journal/hooks.jsonl` — Claude's and grok's eight bash hooks, the project's `monitor-nudge.sh`, codex's three python hooks and `command_guard.py` (Claude's and grok's through command-guard-hook's `exec`, codex's directly) — with the keys ts (UTC, at exit), hook, event, tool (the name the call was sent with: the task gate judges a Monitor as Bash and journals it as Monitor — task 307), tool_use_id (the host's id of the tool call), session_id (playbook's), host_session_id, agent_id (a subagent's), decision (allow/block/context/ok/skip/error), detail, ms (from the hook's first line), exit, error, task (on the state echo's and the stop hook's lines the task their read was for, elsewhere the session's pointer read by the writer itself; \"\" where the session is known and has none; null where the writer does not know the session — the command guard's allow line, which resolves no session (the same call's task-gate line names it), monitor-nudge without PLAYBOOK_SESSION_ID — or the pointer the writer reads is a link or not a regular file; the state echo and the stop hook follow a linked pointer and name the task they acted on), section (on the state echo's line only: the open gate's `##` heading from that call's accepted read, \"\" when it found none, null on a read another hook overtook; a failed call reads task.md as it is then, never a memory), susp / sts / boot (one bracketed reading — wall, MONOTONIC, BOOTTIME, MONOTONIC, wall — kept only when both brackets span at most 5 ms: CLOCK_BOOTTIME − CLOCK_MONOTONIC in whole seconds, the wall time of that reading, the boot id's first 8), and no command, path or prompt; the one text from a file is that heading, cut at 64 bytes. null means not on this line, \"\" means read and none. The bash runner keeps the hook's exit status exactly and gives each exit action the hook's own status as `$?`; a failing write or action changes nothing. The ids come from the normalizer's frame (v4) where the hook reads it, so a key nested in a tool's input or response cannot stand in for them; elsewhere `tool_use_id` is the last match in the payload's last 4 KiB. Each line is one append of at most 2,048 bytes (a line past it drops detail, error and section — section null — and keeps every key), so writers side by side tear none, made under a shared lock on the journal directory that renaming and compressing take exclusively (the owner, 2026-10-16 22:21), so no line is in flight while a closed file is compressed; the lock is taken before the duration, and past a 1 s wait the line goes to a spool file that the next exclusive holder moves into the journal — never an unlocked append (the owner, 2026-10-17 00:13), a dead writer's temporary taken the same way and a living one's never removed, the directory made before the lock; nothing is written in the fresh-clone shape, with an invalid marker, into a lane that is a link or not writable, through a linked `journal/`, or into a `hooks.jsonl` that is a link or not a regular file. About one run in 32 looks at the journal directory under a lock taken without waiting: past 20 MB, after a second look, the file is renamed to `hooks.jsonl.archived-<stamp>-<epoch>-<pid>` (the name records the rename time, written by the rename itself); a closed file is compressed beside it only 10 minutes after the rename its name records and after its last write, and never when its name records no rename time (a hook that opened it before the rename can still append), and every archive is kept (the owner, 2026-10-16 18:04); since task 259 the compression runs after the rotation's hold is let go, one archive a pass and one compressor per archive, its temporary fsynced and checked to decompress to exactly the closed file's bytes, and under the lock held exclusively (python ≤ 1 s, bash `flock -w 1`) the `.gz` and the directory are fsynced before the closed file is removed — any failure keeps it, and a closed file beside a `.gz` that holds it exactly is removed the same way; the python writer rotates the same way, and both take the duration after that work. No line is written for a review's session (judge, tail-cert) or a nested run (PLAYBOOK_HOOK_NESTED=1, codex's Stop calling the stop hook); the pattern reads the event, session and agent only in the payload's head (before its first tool input, within 4 KiB); a python error is named by its type. A task-gate or stop run that is decided in another tree of the repository (task 302) writes its one line in that tree's journal, and the working directory's project gets none.",
       "owner": [
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
@@ -19262,11 +19116,12 @@
         {
           "type": "executable integration",
           "path": "tests/test_hook_journal_hooks.py",
-          "reference": "TheStopHook.test_a_blocked_stop_leaves_no_turn_end_and_a_release_does",
+          "reference": "TheStopHook.test_no_stop_leaves_a_turn_end",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
-            "The real stop hook: exit 2 leaves no `turn_end`, the valve's release (exit 0) writes it."
+            "The real stop hook: exit 2 leaves no `turn_end`, the valve's release (exit 0) writes it.",
+            "Rewritten by task 340: the stop never blocks — a memento (exit 0)."
           ]
         },
         {

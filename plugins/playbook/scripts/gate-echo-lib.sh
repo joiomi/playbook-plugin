@@ -810,7 +810,7 @@ is_code_file_path() {
 # Measured with the real state-echo-hook: 40 Bash calls two at a time were
 # counted as tools=20 writes=20; each pair read the same file and the second
 # rename dropped the first's increment. A `writes` that is too low is the
-# releasing side of the stop hook. So every read-modify-write of the file
+# silent side of the stop hook (no memento; until task 340, a release). So every read-modify-write of the file
 # happens under ONE lock per session: `<counters>.lock`, flock, descriptor 204,
 # taken in the CALLING shell, so that what a step sets stays set.
 #
@@ -944,8 +944,8 @@ write_counter() {
     local tmp="${file}.tmp.$$"
     # Not inside a linked session directory, not over a link or a non-regular counters
     # file (task 194): the temp file and its rename landed in the link's target. The count
-    # is not made, and a count not made is marked (the stop hook also holds its releases
-    # on a linked session directory, task 193).
+    # is not made, and a count not made is marked (the stop hook also skips its chat-reply
+    # rule on a linked session directory, task 193).
     # Nor through a linked `sessions` (task 194, impl panel r1), nor over a temp path that is a
     # link or not a regular file (codex, reproduced: a link planted at `counters.tmp.<pid>` was
     # written through, then renamed onto the counters). A refused write is said (gemini).
@@ -1032,13 +1032,13 @@ reset_counters() {
     # A counters file that is a link or not a regular one, or a linked session directory,
     # is not ours (task 193, impl panel r1, fable and sonnet; measured: the reset wrote
     # `tools=0` through a link, a FIFO held the prompt): no reset — the counts of the turn
-    # before stay, the side that holds a stop.
+    # before stay, the side that shows the stop's memento.
     _pb_session_dir_ok "$(_counters_dir "$file")" || return 0     # nor a linked `sessions` (task 194)
     _pb_sink_ok "" "$file" || return 0
     counters_lock "$file"
     if [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ]; then
         # not reset without the lock either: the counts stay those of the turn
-        # before — the side that holds a stop — and the mark stays with them
+        # before — the side that shows the stop's memento — and the mark stays with them
         _counters_mark "$file"
         counters_unlock
         return 0
@@ -1058,123 +1058,6 @@ reset_counters() {
     # there is no mark to remove)
     rm -f "$(_counters_dir "$file")/counts_unsure" 2>/dev/null || true
     counters_unlock
-}
-
-# Owner's Q1 (task 173): two one-line files beside a session's `counters` —
-# `turn_end`, the tool count at the last stop the stop hook let through, and
-# `notif_start`, the write count when a notification started a turn. Files of
-# their own, NOT keys of `counters`: write_counter sets a key by copying the
-# whole file and renaming the copy over it, so a hook that overlaps a tool
-# call's hook can rename a stale copy over that call's increment (impl panel
-# r1). Nothing that serves the rule rewrites `counters`. (Since task 182 the
-# writers of `counters` take a lock; these two stay files of their own — that
-# lock has a time limit, and the rule must not hang on it.)
-# Each holds `<number> <nonce>`: the stop hook makes a new nonce for every stop
-# it lets through, the notification's baseline carries the nonce of the mark it
-# was taken from, and the baseline counts only beside the mark with that nonce
-# (post-D6 run 1). So a baseline that reaches the disk LATE — after a user's
-# prompt removed the mark, or after a later stop replaced it — is a dead letter,
-# in whatever order the two hooks ran; nothing here depends on a lock.
-#
-# write_session_mark FILE VALUE — temp file + rename in the same directory.
-# Never fails the caller; a mark that cannot be written is simply not there.
-write_session_mark() {
-    local file="$1" value="$2"
-    # never renamed onto a link or a directory — `mv` moved the temp file INTO one (task 193, the
-    # single judge after round 2, codex); such a target keeps what it is, and no mark is written.
-    # Nor inside a session directory that is a link (task 194, measured: the stop hook's
-    # `turn_end` landed in the link's target) — no mark, the stricter case for each reader.
-    _pb_session_dir_ok "$(_counters_dir "$file")" || return 0
-    _pb_sink_ok "" "$file" || return 0
-    local tmp="${file}.tmp.$$"
-    # nor over a temp path that is a link or not a regular file (impl panel r1, codex, reproduced)
-    _pb_sink_ok "" "$tmp" || return 0
-    if ! { printf '%s\n' "$value" > "$tmp" 2>/dev/null && mv "$tmp" "$file" 2>/dev/null; }; then
-        rm -f "$tmp" 2>/dev/null || true
-    fi
-    return 0
-}
-
-# read_session_mark FILE — prints `<number> <nonce>` when the file's first line
-# is exactly that: a plain number of at most 18 digits, one space-separated
-# word of letters, digits and dashes (at most 64), nothing more. Nothing
-# otherwise — missing, empty, signed, a third word, anything else: the bytes
-# are `.agent/`-resident and untrusted, like the counters.
-read_session_mark() {
-    local number="" nonce="" rest=""
-    [ -f "$1" ] || return 0
-    read -r number nonce rest < "$1" 2>/dev/null || true
-    case "$number" in ''|*[!0-9]*) return 0 ;; esac
-    [ "${#number}" -le 18 ] || return 0
-    case "$nonce" in ''|*[!A-Za-z0-9-]*) return 0 ;; esac
-    [ "${#nonce}" -le 64 ] || return 0
-    [ -z "$rest" ] || return 0
-    printf '%s %s' "$number" "$nonce"
-}
-
-# The PROMPT GENERATION of a session (task 173, post-D6 run 2): one word in the
-# file `prompt_gen`, renewed by every prompt of the user's. The stop hook puts
-# the generation it saw when it STARTED at the head of the nonce it makes, and a
-# mark counts — for the notification's hook and for the stop hook's bypass —
-# only while that is still the session's generation. So a stop hook that a
-# user's prompt overtook publishes a mark that starts nothing. `none` = the
-# session has seen no prompt of the user's yet.
-#
-# read_prompt_generation SESSION_DIR — the word, or `none`.
-read_prompt_generation() {
-    local mark
-    mark=$(read_session_mark "$1/prompt_gen")
-    if [ -n "$mark" ]; then
-        printf '%s' "${mark#* }"
-    else
-        printf 'none'
-    fi
-}
-
-# prompt_generation_unreadable SESSION_DIR — true when `prompt_gen` is there but holds no
-# generation (a directory, a link, a FIFO, garbage): `none` then is NOT the generation of a
-# session that has seen no prompt of the user's, and it starts or releases no turn (task 193,
-# the single judge after round 2, codex — a planted `prompt_gen` directory kept it at `none`).
-prompt_generation_unreadable() {
-    if [ -e "$1/prompt_gen" ] || [ -L "$1/prompt_gen" ]; then
-        [ -z "$(read_session_mark "$1/prompt_gen")" ] && return 0
-        [ -L "$1/prompt_gen" ] && return 0
-    fi
-    return 1
-}
-
-# new_prompt_generation SESSION_DIR — begin a new one: twelve characters of a
-# fresh nonce, letters and digits only (its tail — the random end of either
-# form new_session_nonce gives). The file's shape is a mark's, `0 <word>`.
-new_prompt_generation() {
-    local word
-    word=$(new_session_nonce)
-    word="${word//-/}"
-    [ "${#word}" -le 12 ] || word="${word: -12}"
-    write_session_mark "$1/prompt_gen" "0 $word"
-    # A generation that could not be published is withdrawn (task 193, the single judge
-    # after round 2, run 2, codex: with the rename failed the OLD one stayed readable, and
-    # a stop hook's late mark of it was taken for current). With no `prompt_gen` the
-    # generation reads `none`, which no mark of an older generation matches; an entry
-    # that is not a plain file stays and reads as unreadable (prompt_generation_unreadable).
-    if [ "$(read_session_mark "$1/prompt_gen")" != "0 $word" ]; then
-        if [ -f "$1/prompt_gen" ] || [ -L "$1/prompt_gen" ]; then
-            rm -f "$1/prompt_gen" 2>/dev/null || true
-        fi
-    fi
-    return 0
-}
-
-# new_session_nonce — a value that does not repeat from one mark to the next:
-# the kernel's random UUID (one builtin read, no process); where that file
-# cannot be read, the pid, the clock in nanoseconds and three draws of $RANDOM.
-new_session_nonce() {
-    local nonce=""
-    IFS= read -r nonce < /proc/sys/kernel/random/uuid 2>/dev/null || true
-    case "$nonce" in
-        ''|*[!A-Za-z0-9-]*) nonce="$$-$(date '+%s%N' 2>/dev/null || echo 0)-$RANDOM$RANDOM$RANDOM" ;;
-    esac
-    printf '%s' "$nonce"
 }
 
 # format_context TASK_NUM DONE TOTAL GATE_TEXT GATE_LINE REL_PATH

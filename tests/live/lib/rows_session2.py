@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 
 from common import PLUGIN, Run, claude_session, clean_env, journal, session_project, tempdir, tool_results
-from rows_session import RULES, blocked, hook_responses, stop_rounds
+from rows_session import RULES, hook_responses, reminded, stop_rounds
 
 NORMALIZER = PLUGIN / "scripts" / "hook-payload-normalize.py"
 EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd")
@@ -153,9 +153,9 @@ def capability_degrade(out: Path) -> int:
                and any("Working on task" in json.dumps(x) for x in hook_responses(ev, "PostToolUse")),
                f"advertised {caps.get('has_post_tool_hook')}; {len(hook_responses(ev, 'PostToolUse'))} responses")
     stops = stop_rounds(ev)
-    run.clause("has_stop_hook: the stop hook held the end of a turn that wrote with gates open",
-               caps.get("has_stop_hook") is True and bool(stops) and blocked(stops[0]),
-               f"advertised {caps.get('has_stop_hook')}; stops blocked {[blocked(s) for s in stops]}")
+    run.clause("has_stop_hook: the stop hook ran at the end of a turn that wrote with gates open (its memento; task "
+               "340: it never blocks)", caps.get("has_stop_hook") is True and bool(stops) and reminded(stops[0]),
+               f"advertised {caps.get('has_stop_hook')}; stops reminded {[reminded(s) for s in stops]}")
     caught = _payloads(cap)
     ids = {d.get("session_id") for _f, _b, d in caught}
     run.clause("session_id_in_payload: every payload carries the session's id", caps.get("session_id_in_payload") is True

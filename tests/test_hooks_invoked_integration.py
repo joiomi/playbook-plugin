@@ -103,6 +103,10 @@ class _Project(unittest.TestCase):
     def blocked(self, results) -> bool:
         return any(r.returncode == 2 for r in results)
 
+    def reminded(self, results) -> bool:
+        """A stop's memento (task 340: the stop never blocks — exit 0 and a `systemMessage`)."""
+        return any(r.returncode == 0 and '"systemMessage"' in r.stdout for r in results)
+
 
 class WithNoActiveTask(_Project):
     active = False
@@ -146,17 +150,20 @@ class WithAnActiveTask(_Project):
         self.assertIn("please add the feature", log)
         self.assertIn(SESSION, log)
 
-    def test_stop_blocks_a_turn_that_wrote_while_gates_are_open(self):
+    def test_stop_reminds_a_turn_that_wrote_while_gates_are_open(self):
         self.prompt("build it")
         self.edit()
         self.after_edit()
         r = self.stop()
-        self.assertTrue(self.blocked(r))
-        self.assertIn("2 unchecked gate(s) in task 001", "".join(x.stderr for x in r))
+        self.assertFalse(self.blocked(r))
+        self.assertTrue(self.reminded(r))
+        self.assertIn("task 001 has 2 open gate(s)", "".join(x.stdout for x in r))
 
     def test_control_a_turn_that_wrote_nothing_may_end(self):
         self.prompt("what is the plan?")
-        self.assertFalse(self.blocked(self.stop()))
+        r = self.stop()
+        self.assertFalse(self.blocked(r))
+        self.assertFalse(self.reminded(r))
 
 
 class WithEveryGateChecked(_Project):
@@ -166,7 +173,9 @@ class WithEveryGateChecked(_Project):
         self.prompt("build it")
         self.edit()
         self.after_edit()
-        self.assertFalse(self.blocked(self.stop()))
+        r = self.stop()
+        self.assertFalse(self.blocked(r))
+        self.assertFalse(self.reminded(r))
 
 
 if __name__ == "__main__":
