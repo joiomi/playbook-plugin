@@ -358,22 +358,36 @@ migrate_if_needed "$LOCAL_LOG" "$COUNTER_FILE"
 LOG_SESSION_TAG="${SESSION_ID:-no-session}"
 PROVIDER="${PLAYBOOK_PROVIDER:-claude}"
 
-# Dedup guard: skip only the hook's own double run — the newest `M` entry has this second, this session and this text.
-# Task 337 (grave E): the key had no session, so a second session's identical prompt in the same second was not logged
-# and an owner's message was lost; with the session unresolved, two sessions cannot be told apart, so nothing is
-# skipped (a duplicate entry loses nothing). Only `M` headers are read: a gate entry (`G…`) is not a prompt.
-if [ -n "$SESSION_ID" ]; then
-    LAST_HDR=$(tail -10 "$LOCAL_LOG" 2>/dev/null | grep -E '^\*\*\[M[0-9]+\]\*\* \[' | tail -1)
-    LAST_TS=$(printf '%s\n' "$LAST_HDR" | grep -o '\[[0-9-]* [0-9:]* UTC\]' | head -1)
-    LAST_WHO=$(printf '%s\n' "$LAST_HDR" | grep -o '([^()]*)$' | tail -1)    # a pipeline's last step: set -e and no match
-    LAST_MSG=$(tail -3 "$LOCAL_LOG" 2>/dev/null | grep -v '^$' | grep -v '^\*\*\[' | grep -v '^---' | tail -1)
-    if [ -n "$LAST_HDR" ] && [ "[$TIMESTAMP]" = "$LAST_TS" ] && [ "($PROVIDER/$LOG_SESSION_TAG)" = "$LAST_WHO" ] \
-            && [ "$USER_MESSAGE" = "$LAST_MSG" ]; then
-        drop_notification_marks     # the user's prompt all the same (task 173)
-        PB_HJ_DECISION=ok; PB_HJ_DETAIL="not logged: a duplicate"
-        exit 0
-    fi
-fi
+# Dedup guard (task 337, grave E): skip only the hook's own double run — the newest `M` entry, read whole (its header
+# and its own body, never another entry's line), has this second, this `(provider/session)` and this text. It runs in
+# `append_message`, under the log's lock, so no entry can land between the read and the append (impl round 1, codex).
+# The key had no session, so a second session's identical prompt in the same second was not logged; with the session
+# unresolved two sessions cannot be told apart, so nothing is skipped (a duplicate entry loses nothing).
+_is_double_run() {
+    [ -n "$SESSION_ID" ] || return 1
+    local entry hdr body
+    entry=$(tac "$LOCAL_LOG" 2>/dev/null | awk '
+        /^\*\*\[M[0-9]+\]\*\* \[/ { print; found = 1; exit }
+        { line[n++] = $0 }
+        END {
+            if (!found) exit 1
+            # the lines after the header, in file order: one blank line, the body, then a blank line before `---`
+            i = n - 1
+            if (i >= 0 && line[i] == "") i--
+            out = ""; first = 1
+            for (; i >= 0; i--) { if (line[i] == "---") break; out = out (first ? "" : "\n") line[i]; first = 0 }
+            sub(/\n+$/, "", out)
+            printf "%s", out
+        }') || return 1
+    hdr=${entry%%$'\n'*}
+    body=${entry#*$'\n'}
+    [ "$hdr" != "$entry" ] || body=""
+    case "$hdr" in
+        *"[$TIMESTAMP] \`HOST\` ($PROVIDER/$LOG_SESSION_TAG)") ;;
+        *) return 1 ;;
+    esac
+    [ "$body" = "$USER_MESSAGE" ]
+}
 
 # Append to local chat log with message ID and PID tag.
 #
@@ -390,6 +404,10 @@ fi
 # between, so the file held M11 before M10. One hold, so the ids follow the file. Prints the id it wrote.
 append_message() {
     local n
+    if _is_double_run; then
+        printf 'DUPLICATE'
+        return 0
+    fi
     if [ ! -s "$LOCAL_LOG" ]; then
         printf '# Project Chat Log\n\nUser messages logged with timestamps.\n\n' >> "$LOCAL_LOG"
     fi
@@ -415,6 +433,12 @@ if command -v flock &>/dev/null; then
     )
 else
     MSG_ID=$(set -e; append_message)
+fi
+
+if [ "$MSG_ID" = "DUPLICATE" ]; then
+    drop_notification_marks     # the user's prompt all the same (task 173)
+    PB_HJ_DECISION=ok; PB_HJ_DETAIL="not logged: a duplicate"
+    exit 0
 fi
 
 # Reset tool/write counters for this session (new user prompt = fresh count)
