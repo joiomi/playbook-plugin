@@ -274,9 +274,41 @@ class UnsavedRoundKept(unittest.TestCase):
         failed, note = review._save_panel_round(judge_md, "# Panel Impl Review — new\n\npaid findings\n", "abc123def456")
         self.assertTrue(failed)
         self.assertEqual(judge_md.read_bytes(), judge)
-        kept = self.dir / "judge.unsaved-abc123def456.md"
-        self.assertEqual(kept.read_text(encoding="utf-8"), "# Panel Impl Review — new\n\npaid findings\n")
-        self.assertIn(kept.name, note)
+        kept = list(self.dir.glob("judge.unsaved-abc123def456-*.md"))
+        self.assertEqual(len(kept), 1, kept)
+        self.assertEqual(kept[0].read_text(encoding="utf-8"), "# Panel Impl Review — new\n\npaid findings\n")
+        self.assertIn(kept[0].name, note)
+
+    def test_a_lock_timeout_at_the_save_keeps_the_round(self):
+        """Row 18 (post-panel run 3, codex): `stack_judge_round` raises `LockTimeout` when the task lock stays held;
+        the round goes to its own file, as for any other failed save."""
+        from tasks import core, review
+        from tasks.filelock import LockTimeout
+        real = core.stack_judge_round
+
+        def held(*a, **k):
+            raise LockTimeout("another playbook holder has held the lock")
+
+        core.stack_judge_round = held
+        try:
+            failed, note = review._save_panel_round(self.dir / "judge.md", "# Panel — r\n\npaid\n", "abc123def456")
+        finally:
+            core.stack_judge_round = real
+        self.assertTrue(failed)
+        kept = list(self.dir.glob("judge.unsaved-*.md"))
+        self.assertEqual(len(kept), 1, kept)
+        self.assertEqual(kept[0].read_text(encoding="utf-8"), "# Panel — r\n\npaid\n")
+
+    def test_two_failed_saves_keep_two_files(self):
+        """Row 19 (post-panel run 3, codex): a taskless panel has no round id; two failed saves keep two files,
+        each created exclusively, so neither answer replaces the other."""
+        from tasks import review
+        judge_md = self.dir / "judge.md"
+        judge_md.write_bytes(b"caf\xe9\n")
+        review._save_panel_round(judge_md, "first answer\n", None)
+        review._save_panel_round(judge_md, "second answer\n", None)
+        kept = sorted(p.read_text(encoding="utf-8") for p in self.dir.glob("judge.unsaved-*.md"))
+        self.assertEqual(kept, ["first answer\n", "second answer\n"])
 
     def test_a_saved_round_writes_judge_md_only(self):
         from tasks import review

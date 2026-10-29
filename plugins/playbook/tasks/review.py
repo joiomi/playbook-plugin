@@ -1739,29 +1739,45 @@ _PD6_PANEL_PENDING: "list[tuple]" = []
 _PD6_PANEL_ENDED: "dict[str, dict]" = {}
 
 
-def _save_panel_round(judge_md, round_text: str, round_id: str) -> "tuple[bool, str]":
-    """Stack a panel round into judge.md; (failed, the note to print). When that save fails (judge.md cannot be written,
-    or is no longer valid UTF-8 — task 335, post-panel run 2: it can change after the preflight while the judges read
-    their sealed copy), the whole round is kept in a new file beside it, `judge.unsaved-<round id>.md`, so the paid
-    answers are never lost; when even that fails, the round is printed."""
+def _save_panel_round(judge_md, round_text: str, round_id: "str | None") -> "tuple[bool, str]":
+    """Stack a panel round into judge.md; (failed, the note to print). When that save fails — judge.md cannot be
+    written, is no longer valid UTF-8 (task 335, post-panel run 2: it can change after the preflight while the judges
+    read their sealed copy), or its task lock stays held (`LockTimeout`, post-panel run 3) — the whole round is kept in
+    a new file beside it, `judge.unsaved-<round id>-<random>.md`, created exclusively so two failed saves (a taskless
+    panel has no round id) never replace each other; when even that fails, the round is printed. The paid answers are
+    never lost."""
+    import secrets
     from tasks.atomic import NotUtf8Error
     from tasks.core import stack_judge_round
+    from tasks.filelock import LockTimeout
     try:
         stack_judge_round(judge_md, round_text)
         return False, f"\nSaved: {judge_md}"
-    except (OSError, NotUtf8Error) as e:
+    except (OSError, NotUtf8Error, LockTimeout) as e:
         why = " ".join(str(e).split())
-    keep = judge_md.parent / f"judge.unsaved-{round_id or 'round'}.md"
-    try:
-        if keep.exists():
-            raise FileExistsError(str(keep))
-        atomic_write(keep, round_text)
-        return True, (f"\n(could not write {judge_md.name}: {why}) — the whole round is kept in {keep}; move it into "
-                      f"{judge_md.name} once that file is fixed")
-    except (OSError, NotUtf8Error) as e2:
-        print(round_text, flush=True)
-        return True, (f"\n(could not write {judge_md.name}: {why}; nor {keep.name}: {' '.join(str(e2).split())}) — the "
-                      "whole round is printed above")
+    err: "Exception | None" = None
+    for _ in range(5):
+        keep = judge_md.parent / f"judge.unsaved-{round_id or 'round'}-{secrets.token_hex(4)}.md"
+        try:
+            fd = os.open(keep, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            continue
+        except OSError as e2:
+            err = e2
+            break
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(round_text)
+                fh.flush()
+                os.fsync(fh.fileno())
+            return True, (f"\n(could not write {judge_md.name}: {why}) — the whole round is kept in {keep}; move it "
+                          f"into {judge_md.name} once that file is fixed")
+        except OSError as e2:
+            err = e2
+            break
+    print(round_text, flush=True)
+    return True, (f"\n(could not write {judge_md.name}: {why}; nor a judge.unsaved file: "
+                  f"{' '.join(str(err).split()) if err else 'no free name'}) — the whole round is printed above")
 
 
 def cmd_panel_review(cmd_args):
