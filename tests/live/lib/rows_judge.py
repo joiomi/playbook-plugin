@@ -356,8 +356,8 @@ def names_the_defect(answer: str) -> bool:
     write `**Critical** — src/calc.py:2 …`, or `**Critical: …**` with the file on the next line (haiku, task 170's
     run of 21:32), or a blank line between them (round 2, Q2); a finding that only names the file ("Unable to
     inspect src/calc.py") or names another one (`other_calc.py`) is not the planted defect found."""
-    # a finding starts where the PRODUCT's own reader of a judge's answer says it does (`post_d6._FINDING_RE`, the
-    # marker the post-D6 count uses: any case, a list item, glued after a sentence) — not a reading of the harness's
+    # a finding starts where the PRODUCT's own reader of a judge's answer says it does (`stop_rule._FINDING_RE`, the
+    # marker the round cap counts — `post_d6`'s until task 343: any case, a list item, glued after a sentence) — not a reading of the harness's
     # own (the final run of 22:48: haiku's `**CRITICAL**` in capitals)
     finding_re = _product_finding_re()
     starts = [ln.start() + fm.start() for ln in re.finditer(r"(?m)^.*$", answer)
@@ -378,7 +378,7 @@ def _product_finding_re():
     import sys
     if str(PLUGIN) not in sys.path:
         sys.path.insert(0, str(PLUGIN))
-    from tasks.post_d6 import _FINDING_RE
+    from tasks.stop_rule import _FINDING_RE
     return _FINDING_RE
 
 

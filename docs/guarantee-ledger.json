@@ -7350,7 +7350,7 @@
             "reference": "ClosePathMatrix.test_missing_stamp_reversible_still_advisory"
           },
           "limitations": [
-            "Task 060: NO-STAMP blocks a carrying high-consequence close in a git repo — detected by `.git` ancestor OR `git rev-parse --is-inside-work-tree` (an external GIT_DIR worktree counts); reversible stays advisory."
+            "Task 060: an unstamped round (NO-STAMP until task 343, STALE since) blocks a carrying high-consequence close in a git repo — detected by `.git` ancestor OR `git rev-parse --is-inside-work-tree` (an external GIT_DIR worktree counts); reversible stays advisory."
           ]
         },
         {
@@ -20012,7 +20012,7 @@
             "reference": "AppendReviewError.test_ok_record_never_carries_error"
           },
           "limitations": [
-            "Task 096: the panel runner is driven in-process with a stubbed ClaudeAdapter whose sonnet seat returns a `(FAILED — exit 1)` block; its JSONL line carries `error: exit 1: HTTP 402 Payment Required` and the ok seat's line carries none. The single-judge failure and timeout sites are pinned by SingleSpendErrorE2E, the codex/grok single path (already-formatted text, stderr beats a stdout progress line) by StructuredUsageE2E.test_single_grok_failure_records_the_stderr_reason_once, and the tail-cert site by the error assertions in StructuredUsageE2E.test_tail_cert_usage_is_per_call_never_stale (impl panel r1). The whole-line bound is AppendReviewError.test_every_field_at_cap_plus_a_hostile_error_stays_within_512_bytes; the redaction is a pattern, not a secret scanner — a key with no known prefix that is shorter than 32 characters, or contains `_`, is not caught (the trade that keeps paths and snake_case test ids readable)."
+            "Task 096: the panel runner is driven in-process with a stubbed ClaudeAdapter whose sonnet seat returns a `(FAILED — exit 1)` block; its JSONL line carries `error: exit 1: HTTP 402 Payment Required` and the ok seat's line carries none. The single-judge failure and timeout sites are pinned by SingleSpendErrorE2E, the codex/grok single path (already-formatted text, stderr beats a stdout progress line) by StructuredUsageE2E.test_single_grok_failure_records_the_stderr_reason_once (impl panel r1; the tail-cert site and its test went with task 343). The whole-line bound is AppendReviewError.test_every_field_at_cap_plus_a_hostile_error_stays_within_512_bytes; the redaction is a pattern, not a secret scanner — a key with no known prefix that is shorter than 32 characters, or contains `_`, is not caught (the trade that keeps paths and snake_case test ids readable)."
           ]
         },
         {

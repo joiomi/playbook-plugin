@@ -852,7 +852,7 @@ class RoundOneFindings(unittest.TestCase):
     def test_the_display(self):
         c = {"closed_at": "x", "window": {}, "time": None, "judges_wall": 0,
              "rounds": {"panels": [{"mode": "impl", "outcome": "void", "critical": None, "important": None}],
-                        "post_panel": [], "single": 0, "tail_cert": 0},
+                        "single": 0},
              "seats": {"s": {"runs": 2, "ok": 1, "failed": 1, "seconds": 90.5, "in": 1, "out": 1, "cache_read": 0,
                              "cache_write": 0, "unknown": 0, "kinds": {}}},
              "verify": {"runs": 1, "ran": 1, "reused": 0, "failed": 0, "seconds": 83.75}, "owner": {}, "close": None}

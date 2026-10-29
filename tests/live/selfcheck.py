@@ -612,7 +612,7 @@ def triage_answer() -> None:
             ("the defect at the end of a sentence, `src/calc.py.`",
              "**Critical** — add() subtracts instead of adding in src/calc.py.\n", True),
             # the final run of 22:48: haiku wrote the marker in capitals and the file in bold — the product's own
-            # finding marker (`post_d6._FINDING_RE`) reads both; so does a list item
+            # finding marker (`stop_rule._FINDING_RE`) reads both; so does a list item
             ("haiku's real answer of 22:48 (`**CRITICAL** — **src/calc.py:2** —`)",
              "**CRITICAL** — **src/calc.py:2** — Function `add()` returns `a - b` instead of `a + b`, implementing "
              "subtraction rather than addition as required by the Intent.\n\nCAP: 1/5 reported, exhausted\n", True),

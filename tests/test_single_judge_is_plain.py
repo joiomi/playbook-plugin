@@ -90,8 +90,11 @@ class Plain(unittest.TestCase):
             self.assertEqual(code, 0, (n, out))
             self.assertEqual(len(prompts), 1, (n, out))
             self.assertIn("TASK-INTENT-MARK", prompts[0])
-            self.assertIn("SETTLED", prompts[0])
-            self.assertIn("RULING-MARK", prompts[0])
+            # the block itself, before the task — the bare word is also in the prompt's `[SETTLED]` tag rule, and the
+            # ruling in task.md's own text (task 343's mutant M15)
+            block = prompts[0].find("=== SETTLED (owner rulings")
+            self.assertGreaterEqual(block, 0, prompts[0][:400])
+            self.assertIn("RULING-MARK", prompts[0][block:prompts[0].index("TASK-INTENT-MARK")])
             self.assertNotIn("post-panel delta", prompts[0].lower())
             self.assertNotIn("POST-D6", out)
             self.assertNotIn("post-D6", out)

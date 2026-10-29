@@ -255,13 +255,17 @@ class Stale(_Close):
         self.assertNotIn("EXCLUDE-COVERS-CODE", out)
 
     def test_a_mind_map_change_after_the_round_is_stale(self):
-        """Row 23: the mind map committed with the task's records after the round is no record."""
-        self.setup_task()
-        (self.d / "MIND_MAP.md").write_text("[1] **Code** - x, updated\n", encoding="utf-8")
-        self.g("add", "-A")
-        self.g("commit", "-qm", "the records and the map")
-        r, out = self.close()
-        self.assert_blocked_stale(out, CHANGED)
+        """Row 23: the mind map changed after the round is no record — left in the tree, or committed with the
+        task's records (the uncommitted case: task 343's mutant M23)."""
+        for commit in (False, True):
+            with self.subTest(commit=commit):
+                self.setup_task()
+                (self.d / "MIND_MAP.md").write_text("[1] **Code** - x, updated\n", encoding="utf-8")
+                if commit:
+                    self.g("add", "-A")
+                    self.g("commit", "-qm", "the records and the map")
+                r, out = self.close()
+                self.assert_blocked_stale(out, CHANGED)
 
     def test_at_the_cap_the_block_names_the_owners_round(self):
         """Row 24: an assertive task with its two rounds spent — the block offers a round past the cap with the

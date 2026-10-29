@@ -1030,15 +1030,16 @@ class ClosePathMatrix(unittest.TestCase):
         env["GIT_WORK_TREE"] = str(d)
         r = self._close(d, env)
         self.assertNotIn("Task 001 done.", r.stdout,
-                         f"NO-STAMP bypassed via an external GIT_DIR: {r.stdout} {r.stderr}")
+                         f"an unstamped round passed via an external GIT_DIR: {r.stdout} {r.stderr}")
         self.assertIn("no tree stamp", (r.stdout + r.stderr).lower())
 
 
-    def test_failed_verify_does_not_spend_a_tail_cert_judge(self):
+    def test_failed_verify_blocks_before_the_freshness_gate(self):
         # Task 073 finding C13: the close printed "[FAIL exit 1]" for the declared
         # verify, then STILL ran the paid single-judge tail certification, then
         # blocked on the failed verify anyway. A close that will block regardless
-        # must not spend a judge.
+        # says so first (task 343: no judge is left to spend — the failed verify's
+        # block comes before the freshness gate's).
         d, td, env = self._setup(risk="assertive", panel_cfg=["assertive"],
                                  change_after=False,
                                  tracked_files={"docs/note.md": "a\n"},
@@ -1048,8 +1049,8 @@ class ClosePathMatrix(unittest.TestCase):
         r = self._close(d, env)
         self.assertNotIn("Task 001 done.", r.stdout)
         self.assertIn("verification failed", r.stdout + r.stderr)
-        self.assertNotIn("tail certification", r.stdout + r.stderr,
-                         "a tail-cert judge was attempted although verify had already failed")
+        self.assertNotIn("no longer describes the code", r.stdout + r.stderr,
+                         "the freshness gate spoke although verify had already failed")
 
 
     def test_unreadable_git_at_close_blocks_instead_of_reading_fresh(self):
