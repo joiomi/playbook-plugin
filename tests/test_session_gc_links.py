@@ -286,20 +286,6 @@ class TheDeletionsHoldTheirDirectory(unittest.TestCase):
         self.assertIn("Task 001 done.", r.stdout + r.stderr)
         self.assertTrue((v / "other" / "keep.txt").is_file(), "the close removed a directory through the link")
 
-    def test_merge_prep_unlinks_nothing_through_a_linked_sessions_directory(self):
-        v = self.victim_with("other")
-        (v / "other" / "chat_log_offset").write_text("12\n", encoding="utf-8")
-        p = self.tmp / "p"
-        (p / ".agent" / "tasks").mkdir(parents=True)
-        (p / ".agent" / "sessions").symlink_to(v, target_is_directory=True)
-        code = ("import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path\n"
-                "import tasks.merge_prep as m\n"
-                "m._rename_colliding_tasks(Path(sys.argv[2]), Path(sys.argv[2]) / '.agent', {}, {})\n")
-        r = subprocess.run([sys.executable, "-c", code, str(PLUGIN), str(p)], env=self.env(), text=True,
-                           capture_output=True, timeout=60)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertTrue((v / "other" / "chat_log_offset").is_file(), "merge-prep unlinked through the link")
-
     def cd_swapping(self, at, path, to):
         """An env whose bash `cd` (an exported function) swaps `path` for a link to `to` just before the first `cd` to
         `at` — the window between the containment check and the `cd` that only `_pb_cwd_is` closes (impl panel r3,
@@ -382,7 +368,7 @@ class TheDeletionsHoldTheirDirectory(unittest.TestCase):
                            text=True, capture_output=True, timeout=30)
         self.assertEqual(r.stdout.split(), ["REAL", "LINKED-REFUSED", "OTHER-REFUSED"], r.stderr)
 
-    def test_control_the_close_and_merge_prep_in_a_plain_project(self):
+    def test_control_the_close_in_a_plain_project(self):        # merge-prep's half went with it (task 338)
         p = self.tmp / "plain"
         (p / ".agent" / "tasks").mkdir(parents=True)
         cli = [bash_or_skip(), str(SCRIPTS / "tasks")]
@@ -391,12 +377,6 @@ class TheDeletionsHoldTheirDirectory(unittest.TestCase):
             subprocess.run(cli + args, cwd=p, env=env, text=True, capture_output=True, timeout=120)
         sess = p / ".agent" / "sessions" / "sweep-sess"
         self.assertEqual((sess / "current_state").read_text(encoding="utf-8").strip(), "001")
-        (sess / "chat_log_offset").write_text("3\n", encoding="utf-8")
-        code = ("import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path\n"
-                "import tasks.merge_prep as m\n"
-                "m._rename_colliding_tasks(Path(sys.argv[2]), Path(sys.argv[2]) / '.agent', {}, {})\n")
-        subprocess.run([sys.executable, "-c", code, str(PLUGIN), str(p)], env=env, timeout=60)
-        self.assertFalse((sess / "chat_log_offset").exists(), "merge-prep left the offset in a plain project")
         subprocess.run(cli + ["work", "done", "--force", "--reason", "test of a close"], cwd=p, env=env,
                        text=True, capture_output=True, timeout=120)
         self.assertFalse(sess.exists(), "the close left its session in a plain project")

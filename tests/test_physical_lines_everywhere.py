@@ -389,17 +389,6 @@ class ALoneCarriageReturnIsNotALineBreak(_Dir):
             raw = fh.read()
         self.assertNotIn("\r", raw)
 
-    def test_the_merge_renumber_keeps_it_inside_its_line(self):
-        """L5: `prepare-merge` rewrites every task.md that names a renumbered task; it read through `read_text()`."""
-        from tasks import merge_prep
-        self.tf.write_text(task("## Notes\nsee task 133\n" + self.QUOTE), encoding="utf-8", newline="")
-        merge_prep._rewrite_task_refs(self.d, self.d / ".agent", {133: 135})
-        text = raw(self.tf)
-        self.assertIn("see task 135", text)
-        self.assertIn("> q: x\r## Status\rdone\r- [ ] fake gate", text)
-        self.assertEqual(core._extract_status(self.tf), "in_progress")
-
-
 class TheCliReadsLikeItsWriters(unittest.TestCase):
     """Impl round 2, U5 (opus, sonnet, codex, grok): K4 left the close, the SETTLED block, the judges' payloads, the
     review write-back, freehand and the stub expansion reading task.md WITH newline translation, against the

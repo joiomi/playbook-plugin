@@ -4,7 +4,24 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+### Removed
+- **`tasks prepare-merge`** (task 338; PLAN-PLAYBOOK-2.md 4.1 c). It renumbered colliding tasks with regexes over every
+  task.md and chat_log.md, so ordinary text changed too ("2-hour" became "3-hour"), and chat_log.md is git-ignored. No
+  skill or command called it; `tasks merge-doctor` stays. Merging lanes comes back with the lanes.
+- **The worktree check of the close and `tasks verify`** (task 321, never released). Audit 6 found it too loose where a
+  worktree holds `.agent/tasks` and too tight where it holds none; the model uses no worktrees.
+
 ### Fixed
+- **A task record that is not valid UTF-8 is refused, never rewritten** (task 335). Read leniently, a byte that is not
+  UTF-8 became U+FFFD at the first CLI write. Now every command that writes a task's records checks them first and
+  says `Refused:` with the byte's place, and the write primitive refuses too. A panel round whose save fails late is
+  kept whole in `judge.unsaved-<round>-<random>.md` (or printed), never dropped.
+- **The verify command runs without git's repository variables** (task 336). Started from a git hook or
+  `git rebase -x`, a verify inherited `GIT_DIR` / `GIT_INDEX_FILE`, and a suite that makes temporary repositories
+  committed into the real one. The verify runners now drop the seven variables that name where a repository is.
+- **The chat log keeps a second session's identical prompt** (task 337). Two sessions that sent the same text in the
+  same second logged one entry. The duplicate check now reads the newest prompt entry whole, under the log's lock, and
+  needs the same session too; with the session unresolved nothing is skipped.
 - **A judge's answer counts as a review only when it is one** (task 320, audit 5's G6). A panel counted any exit-0
   text as a judge that succeeded, and a single judge saved it as findings. Real judges had returned refusals, a filter
   block, plan-only stops and waits for a command they had started. Now an answer must open a line with a
@@ -12,13 +29,6 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   must say it found nothing (not "yet") or cite a `file:line` it read, and must be neither a plan nor a wait. Otherwise it is recorded as `(FAILED — not a review: …)`: it does
   not count toward the quorum, a single review fails with exit 1, and a post-panel run is released. Such an answer is
   never read as the provider's outage or a dead model. A `--prompt` consultation is unchanged.
-- **A close certifies only the code it runs verify on** (task 321, audit 5's G1). From inside a Claude Code worktree
-  that holds no task records, `tasks work done` ran the verify contract in the main tree and closed `[PASS]` on code
-  that was not the task's, and so did a close from the main tree while the worktree still held its work. Now both
-  `tasks work done` and `tasks verify` refuse, naming the worktree, while a lane-less `.claude/worktrees/` checkout of
-  the project's repository or of a `code_roots` one holds work the main tree does not have. Work is an uncommitted or
-  index-hidden change, or a commit made in the worktree that the main HEAD does not have, pushed upstream or not. The
-  close checks again just before its commit, `tasks verify` after its run, and the close takes `--force --reason`.
 
 ## [1.6.9] — 2026-10-26
 

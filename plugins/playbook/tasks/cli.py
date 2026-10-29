@@ -6,8 +6,8 @@ else. Command bodies live in: tasks/lifecycle.py (work/close/new/blocked/
 parked/freehand), tasks/review.py (panel + single-judge), tasks/history.py
 (context/intent/timeline/tagger/tag/retro/log), tasks/diagnostics.py
 (doctor/audit), tasks/project_setup.py (init/bootstrap), tasks/mindmap.py
-(mindmap-sync + map parsing), tasks/merge_prep.py (prepare-merge/
-merge-doctor); shared helpers in tasks/shared.py. The trivial list/status/
+(mindmap-sync + map parsing), tasks/merge_prep.py
+(merge-doctor); shared helpers in tasks/shared.py. The trivial list/status/
 models delegates stay inline. Dispatch branches import lazily (house style;
 also keeps startup flat and cycles impossible). The if/elif chain's shape is
 load-bearing: tests/test_cli_dispatch.py parses it against COMMANDS, and the
@@ -31,7 +31,7 @@ COMMANDS = (
     "models", "plan-review", "impl-review", "judge", "context", "intent",
     "timeline", "tagger", "tag", "retro", "status", "audit", "blocked",
     "handoff", "parked", "freehand", "adopt", "doctor", "environment", "detect-verify", "merge-doctor",
-    "mindmap-sync", "log", "prepare-merge", "compact", "recall", "dashboard", "guide", "ruling", "verify", "numbers",
+    "mindmap-sync", "log", "compact", "recall", "dashboard", "guide", "ruling", "verify", "numbers",
     "red",
 )
 
@@ -126,7 +126,7 @@ def _main():
     # dead session dirs — a read-only screen must not have that side effect.
     # Nor may the dry runs and merge-doctor, which promise to write nothing
     # (task 148, impl panel r1: the GC deleted a legacy `.agent/current_state`
-    # before `compact`/`prepare-merge`/`tag --dry-run` and `merge-doctor` ran).
+    # before `compact`/`tag --dry-run` and `merge-doctor` ran; `prepare-merge` is gone since task 338).
     if cmd != "dashboard" and not _writes_nothing(cmd, cmd_args):
         _gc_dead_sessions(find_project_root())
 
@@ -253,9 +253,6 @@ def _main():
         from tasks.history import cmd_log
         cmd_log(cmd_args)
 
-    elif cmd == "prepare-merge":
-        from tasks.merge_prep import cmd_prepare_merge
-        cmd_prepare_merge(cmd_args)
 
     elif cmd == "compact":
         # Move agent-marked cold review narrative out of a bloated task.md into
@@ -382,7 +379,7 @@ def _writes_nothing(cmd: str, cmd_args: list) -> bool:
         return True
     if "--check" in cmd_args and cmd == "red":      # task 281 (plan panel: codex): the check prints, never writes
         return True
-    return cmd in ("compact", "prepare-merge", "tag") and "--dry-run" in cmd_args
+    return cmd in ("compact", "tag") and "--dry-run" in cmd_args
 
 
 def _wrong_usage(cmd: str, args: list) -> "str | None":

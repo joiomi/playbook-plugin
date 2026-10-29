@@ -941,19 +941,6 @@ def cmd_work(cmd_args):
                               "count. Finish them, or override with --force --reason.",
                               file=sys.stderr)
                         sys.exit(1)
-                # Task 321 (audit 5's G1): the work must be where verify runs. From inside a lane-less Claude Code
-                # worktree, or while one holds work the main tree's HEAD does not have, verify ran on the main tree's
-                # code and a `[PASS]` described code that is not the task's. A close check: `--force --reason` passes it.
-                from tasks import worktree_scope as _wts
-                _stray = _wts.stray_work(Path(project_path))
-                if _stray and not force:
-                    print("Blocked: this close would certify code that is not where the work is:", file=sys.stderr)
-                    for _st in _stray:
-                        print(f"  - {_st}", file=sys.stderr)
-                    print(f"{_wts.advice(Path(project_path))} Override with --force --reason.", file=sys.stderr)
-                    sys.exit(1)
-                elif _stray:
-                    print("note (forced past it): " + "; ".join(_stray), file=sys.stderr)
                 # Task 286 (PHASE-B 9b part 7; the owner, 2026-10-22 08:26: "Doar ce e sigur greșit"): the test
                 # contract's check — BEFORE verify, so a certain block spends no verify run and no judge (sonnet). A
                 # check that cannot judge refuses (fail closed); only `--force --reason` goes through, recorded.
@@ -1563,16 +1550,6 @@ def cmd_work(cmd_args):
                 # before the commit — a contract written, base.json changed or code a verify command wrote while the
                 # close ran is judged here; the commit then compares this check's digest, by files.
                 _rc286 = _contract_check(Path(project_path), task_file, prev_task, force, before=_rc286)
-                # Task 321 impl round 1 (codex): and the worktree check again — work a verify command or another
-                # session wrote into a worktree while the close ran is judged here, just before the commit.
-                _stray = _wts.stray_work(Path(project_path))
-                if _stray and not force:
-                    print("Blocked: work landed in a worktree while this close ran, and the close would certify code "
-                          "that is not where the work is:", file=sys.stderr)
-                    for _st in _stray:
-                        print(f"  - {_st}", file=sys.stderr)
-                    print(f"{_wts.advice(Path(project_path))} Override with --force --reason.", file=sys.stderr)
-                    sys.exit(1)
                 receipt = format_verify_receipt(
                     entries, _head, risk, reason=(reason if force else None),
                     dirty_files=_dirty, freshness=_freshness, post_d6=_pd6_receipt,
@@ -2225,8 +2202,8 @@ def cmd_work(cmd_args):
     # only the Python one, which is part of how the hook's contradictory
     # mtime-only policy went unnoticed until task 027.
     #
-    # NOTE: only ACTIVATION writes `current_state` — this line, the freehand
-    # orchestrator arm, and prepare-merge's pointer rewrite. Nothing refreshes
+    # NOTE: only ACTIVATION writes `current_state` — this line and the freehand
+    # orchestrator arm (prepare-merge's pointer rewrite went with it, task 338). Nothing refreshes
     # it while the session works, so its mtime means "when the task was
     # activated" and is never a liveness signal. Deleting sessions by that
     # mtime is what task 027 fixed; don't reintroduce it.

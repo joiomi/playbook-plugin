@@ -228,13 +228,6 @@ class NoUnapprovedDirectWriters(unittest.TestCase):
             "every run kept, only on a clean tree), judge-single.md (appended under the task lock, 304), the "
             "tail-cert logs and the post-D6 patch and context (fresh per run), and the findings write-back into "
             "task.md; a key this broad lets a new review.py writer through (task 312, impl round 1, grok)",
-        ("merge_prep.py", "atomic_write(chat_log"):
-            "offline merge preparation — single-process by construction",
-        ("merge_prep.py", "atomic_write(state_file"):
-            "offline merge preparation renumbering session pointers",
-        ("merge_prep.py", "atomic_write(task_md"):
-            "offline merge preparation — single-process by construction, and it "
-            "renumbers whole task trees rather than editing a live record",
         # task 213: `tasks audit` keeps the newest receipt in task.md and moves the older ones to audit-log.md
         ("core.py", "atomic_write(p, _compose_upsert(text, marker, entry))"):
             "inside record_audit_receipt's two-file move, which holds the task lock across the read and "
@@ -257,7 +250,7 @@ class NoUnapprovedDirectWriters(unittest.TestCase):
         # The modules that own task/judge records. Others (dashboard, mindmap,
         # intent, project_setup…) write their own files and are out of scope.
         RECORD_MODULES = {"core.py", "lifecycle.py", "review.py", "compact.py",
-                          "history.py", "merge_prep.py", "registry.py"}
+                          "history.py", "registry.py"}   # merge_prep.py writes nothing since task 338
         for pyfile in sorted(pkg.glob("*.py")):
             if pyfile.name not in RECORD_MODULES:
                 continue

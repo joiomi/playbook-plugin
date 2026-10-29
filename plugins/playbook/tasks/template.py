@@ -1291,9 +1291,6 @@ Commands:
   tagger              Internal retro-support: tag tasks for retro analysis
   tag                 Internal retro-support: apply a retro tag
   log [N] [--width W]  Compact one-line-per-message chat log (last N, body cropped to W; default all/500)
-  prepare-merge [--target <branch>] [--dry-run]
-                      Renumber tasks, re-sequence chat_log, report MIND_MAP collisions
-                      so the branch merges cleanly into target (default: main)
   merge-doctor        Audit a multi-user repo before/after a merge (contamination,
                       stranded conflict markers, legacy .agent paths)
   mindmap-sync        Mind-map merge support (conflict-marker-safe sync)

@@ -215,59 +215,14 @@ class SessionGcSkipsOnlyTheWriteNothingInvocations(unittest.TestCase):
     def test_exempt_set(self):
         from tasks.cli import _writes_nothing
         yes = [("merge-doctor", []), ("merge-doctor", ["a", "b"]), ("compact", ["12", "--dry-run"]),
-               ("prepare-merge", ["--target", "main", "--dry-run"]), ("tag", ["--dry-run"])]
-        no = [("compact", ["12"]), ("prepare-merge", ["--target", "main"]), ("tag", []),
+               ("tag", ["--dry-run"])]
+        no = [("compact", ["12"]), ("tag", []),
+              ("prepare-merge", ["--target", "main", "--dry-run"]),   # gone since task 338: no exemption left for it
               ("work", ["done", "--dry-run"]), ("new", ["light", "x", "--dry-run"]), ("audit", [])]
         self.assertEqual([c for c, a in yes if not _writes_nothing(c, a)], [])
         self.assertEqual([(c, a) for c, a in no if _writes_nothing(c, a)], [])
 
 
-# ── PB-CLI-DRY-MERGE-PREP ─────────────────────────────────────────────────────
-class PrepareMergeDryRunWritesNothing(_Project):
-    """Both early returns of the dry run: the colliding task directory (tasks
-    arm) and the chat-log re-sequence (chat-log arm) are previewed, and the
-    whole working tree stays byte-identical."""
-
-    def _chat(self, *ids):
-        log = self.project / ".agent" / "chat_log.md"
-        log.write_text("# Chat Log\n\n---\n\n" + "\n---\n\n".join(
-            f"**[M{i:03d}]** [2026-10-0{i} 10:00:00 UTC] `HOST` (claude/pid-1)\n\nmsg {i}\n"
-            for i in ids), encoding="utf-8")
-
-    def setUp(self):
-        super().setUp()
-        (self.project / "README").write_text("x\n", encoding="utf-8")
-        self._chat(1)
-        git(self.project, "add", "-A")
-        git(self.project, "commit", "-qm", "base")
-        write_task(self.project, "002", "on-main", "pending", "- [ ] g")
-        self._chat(1, 2)
-        git(self.project, "add", "-A")
-        git(self.project, "commit", "-qm", "main work")
-        git(self.project, "checkout", "-q", "-b", "feature", "HEAD~1")
-        write_task(self.project, "002", "on-feature", "pending", "- [ ] g")
-        self._chat(1, 2)
-        git(self.project, "add", "-A")
-        git(self.project, "commit", "-qm", "feature work")
-
-    def test_prepare_merge_dry_run_previews_both_arms_and_writes_nothing(self):
-        before = snapshot(self.project)
-        r = self.cli("prepare-merge", "--target", "main", "--dry-run")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertIn("[dry-run] rename", r.stdout)
-        self.assertIn("Chat log: re-sequencing", r.stdout)
-        self.assertIn("(dry-run — no files written)", r.stdout)
-        self.assertEqual(snapshot(self.project), before,
-                         "prepare-merge --dry-run wrote to the working tree")
-
-    def test_prepare_merge_without_dry_run_renames_and_resequences(self):
-        # Negative control: the applying run changes both things the dry run
-        # previewed.
-        r = self.cli("prepare-merge", "--target", "main")
-        self.assertEqual(r.returncode, 0, r.stderr)
-        names = sorted(p.name for p in (self.project / ".agent" / "tasks").iterdir())
-        self.assertIn("003-on-feature", names)
-        self.assertIn("**[M003]**", (self.project / ".agent" / "chat_log.md").read_text(encoding="utf-8"))
 
 
 # ── PB-CLI-SANDBOX-INSPECTION ─────────────────────────────────────────────────

@@ -5924,7 +5924,7 @@
           "boundary": "subprocess",
           "negative_control": {
             "path": "tests/test_session_gc_links.py",
-            "reference": "TheDeletionsHoldTheirDirectory.test_control_the_close_and_merge_prep_in_a_plain_project"
+            "reference": "TheDeletionsHoldTheirDirectory.test_control_the_close_in_a_plain_project"
           },
           "limitations": [
             "`tasks new/work/work done --force` through the tree CLI; red on `2956845` (another checkout's session on the closed number removed in the target)."
@@ -12020,101 +12020,6 @@
       "violation_reproduction": null
     },
     {
-      "id": "PB-MERGE-PREP",
-      "category": "merge",
-      "statement": "tasks prepare-merge computes collision-free, pad-preserving task renumbers and rewrites task and session-pointer references so the renumbered tasks stay glob-reachable. Its clearing of the sessions' `chat_log_offset` removes nothing through a link: only session directories physically inside the project, through descriptors (task 194, impl panel r2, sonnet).",
-      "owner": [
-        {
-          "path": "plugins/playbook/tasks/merge_prep.py",
-          "reference": "symbol:cmd_prepare_merge"
-        },
-        {
-          "path": "plugins/playbook/tasks/shared.py",
-          "reference": "symbol:_clear_in_sessions"
-        }
-      ],
-      "failure_consequence": "High",
-      "claim_kind": "mechanical",
-      "proofs": [
-        {
-          "type": "executable integration",
-          "path": "tests/test_merge_prep_renumber.py",
-          "reference": "TestRenumberPadPreserving.test_renumber_keeps_padding_and_is_glob_reachable",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_merge_prep_renumber.py",
-            "reference": "TestRenumberPadPreserving.test_dry_run_preview_matches_action"
-          },
-          "limitations": [
-            "Synthetic branch/task fixture; concurrent merge writers are not exercised."
-          ]
-        },
-        {
-          "type": "executable unit",
-          "path": "tests/test_merge_prep_writers.py",
-          "reference": "RewriteTaskRefs.test_rewrites_t_refs_and_task_refs",
-          "boundary": "unit",
-          "negative_control": null,
-          "limitations": []
-        },
-        {
-          "type": "executable unit",
-          "path": "tests/test_merge_prep_writers.py",
-          "reference": "RewriteTaskRefs.test_descending_order_avoids_cascade",
-          "boundary": "unit",
-          "negative_control": null,
-          "limitations": []
-        },
-        {
-          "type": "executable unit",
-          "path": "tests/test_merge_prep_writers.py",
-          "reference": "RewriteTaskRefs.test_rewrites_current_state_in_dead_sessions",
-          "boundary": "unit",
-          "negative_control": null,
-          "limitations": []
-        },
-        {
-          "type": "executable unit",
-          "path": "tests/test_merge_prep_writers.py",
-          "reference": "RenumberedDirName.test_pad_width_table",
-          "boundary": "unit",
-          "negative_control": null,
-          "limitations": []
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_session_gc_links.py",
-          "reference": "TheDeletionsHoldTheirDirectory.test_merge_prep_unlinks_nothing_through_a_linked_sessions_directory",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_session_gc_links.py",
-            "reference": "TheDeletionsHoldTheirDirectory.test_control_the_close_and_merge_prep_in_a_plain_project"
-          },
-          "limitations": [
-            "`_rename_colliding_tasks` with no renames (only the clearing runs); red on `2956845`."
-          ]
-        }
-      ],
-      "applicable_platforms": [
-        "linux"
-      ],
-      "applicable_providers": [
-        "claude",
-        "codex",
-        "grok"
-      ],
-      "status": "verified_by_current_executable_evidence",
-      "missing_evidence_or_limitation": [
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
-        "Task 100 (PLAN S8 binding audit, 2026-09-27) NARROWED: chat_log.md reference rewriting (merge_prep.py `_prepare_merge_chatlog`, the `Rewrite chat_log.md` step) is asserted by no test; removed from the statement. S12 cli-contracts candidate.",
-        "2026-10-14 (task 195): a renumbered folder's task-registry line follows it (`registry.rename`)."
-      ],
-      "follow_up_phases": [],
-      "required_live_evidence": [],
-      "semantic_protocol": null,
-      "violation_reproduction": null
-    },
-    {
       "id": "PB-MERGE-VERIFY",
       "category": "merge",
       "statement": "Merge verification classifies a declared command as GREEN or FAILED, an absent declaration as SKIPPED, and a broken declaration as BLOCKED without ever reporting it as SKIPPED, preserves shell command transport verbatim, and cannot report GREEN for an early failing step.",
@@ -14142,68 +14047,6 @@
         "Byte identity is now proved (task 148 (PLAN S12)): a whole-project path→bytes snapshot is equal after `tasks compact <N> --dry-run`; task 100's mutation (the dry-run arm appends a line) turns it red while the older substring proof stays green.",
         "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
         "Task 148 impl panel r1 (codex-high): the session GC every tasks command ran first deleted a reclaimable legacy `.agent/current_state` before this command — the no-write claim was false in such a project. cli.py::_writes_nothing now exempts the dry runs and merge-doctor from the GC (as dashboard already was); the proof's fixture carries such a file."
-      ],
-      "follow_up_phases": [
-        3
-      ],
-      "required_live_evidence": [],
-      "semantic_protocol": null,
-      "violation_reproduction": null
-    },
-    {
-      "id": "PB-CLI-DRY-MERGE-PREP",
-      "category": "cli-contracts",
-      "statement": "tasks prepare-merge --dry-run performs no writes and prints the same renumber plan the applying run executes when no live session holds a colliding task (the applying run then aborts and renames nothing; the dry run does not check for it).",
-      "owner": [
-        {
-          "path": "plugins/playbook/tasks/merge_prep.py",
-          "reference": "symbol:cmd_prepare_merge"
-        }
-      ],
-      "failure_consequence": "High",
-      "claim_kind": "mechanical",
-      "proofs": [
-        {
-          "type": "executable integration",
-          "path": "tests/test_merge_prep_renumber.py",
-          "reference": "TestRenumberPadPreserving.test_dry_run_preview_matches_action",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_merge_prep_renumber.py",
-            "reference": "TestRenumberPadPreserving.test_renumber_keeps_padding_and_is_glob_reachable"
-          },
-          "limitations": [
-            "Establishes preview == action only. It cannot establish the no-write clause: it scrapes the preview, runs the applying command, then asserts the previewed directory exists, which passes identically if the dry-run had already performed the rename."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_no_live_row_proofs.py",
-          "reference": "PrepareMergeDryRunWritesNothing.test_prepare_merge_dry_run_previews_both_arms_and_writes_nothing",
-          "boundary": "subprocess",
-          "negative_control": {
-            "path": "tests/test_no_live_row_proofs.py",
-            "reference": "PrepareMergeDryRunWritesNothing.test_prepare_merge_without_dry_run_renames_and_resequences"
-          },
-          "limitations": [
-            "The working-tree snapshot excludes .git/."
-          ]
-        }
-      ],
-      "applicable_platforms": [
-        "linux"
-      ],
-      "applicable_providers": [
-        "claude",
-        "codex",
-        "grok"
-      ],
-      "status": "verified_by_current_executable_evidence",
-      "missing_evidence_or_limitation": [
-        "No-write is now proved (task 148 (PLAN S12)): with a colliding task AND overlapping chat ids pending, `--dry-run` previews both and leaves the working tree byte-identical; removing either early return (merge_prep.py::_prepare_merge_tasks, ::_prepare_merge_chatlog) turns it red.",
-        "Owner decision 2026-08-21: antigravity and pi are experimental everywhere (adapter code retained, no support claim, no live evidence) and are removed from applicable_providers here; supported providers are Claude (agent+judge) and grok/codex (judge-seat, live-verified 2026-08-22).",
-        "Task 148 impl panel r1 (codex-high): the session GC every tasks command ran first deleted a reclaimable legacy `.agent/current_state` before this command — the no-write claim was false in such a project. cli.py::_writes_nothing now exempts the dry runs and merge-doctor from the GC (as dashboard already was); the proof's fixture carries such a file.",
-        "Narrowed (task 148 (PLAN S12), impl panel r2, codex-high): the dry run returns before the applying run's live-session preflight (merge_prep.py::_prepare_merge_tasks), so with a live session holding a colliding task the preview names a rename the applying run will refuse. That case is not tested."
       ],
       "follow_up_phases": [
         3
@@ -24952,7 +24795,7 @@
     {
       "id": "PB-TASK-REGISTRY",
       "category": "task-lifecycle",
-      "statement": "Every task directory the CLI makes is named in its lane's task registry (`.agent[/<lane>]/task-registry`, beside `tasks/`, machine-local): `tasks new`, `tasks freehand` and `tasks retro` reserve a number, build the directory under a temporary name in the lane, rename it into `tasks/` and only then register its origin — under one per-lane lock that also takes the number, so two creators at once never take one number nor share a directory, and the number counts the registry's (a reservation burned by a crash is never reused). A reservation is never membership; a name already standing under `tasks/` is never published over. Reads never write: a directory is known when it is registered or its task.md is a regular blob in a COMMIT — HEAD, or the commit a stopped merge, cherry-pick, revert or rebase is bringing in (`git ls-tree`, never the index: a staged one is not); the writers (the creators, `tasks adopt`, `prepare-merge`'s renames) enrol the lane's existing directories that hold a task.md when they find no registry, and so do a session's start and `tasks work <N>` in a lane that has `tasks/` and none (task 197: through the lane held open, as a creator holds it — a lane swapped for a link meanwhile keeps the replacement's registry; never a failure of either; a registry that exists, readable or not, is left alone). An `enrolled` row is no knowledge of a folder a standing task-folder flag of the lane names (task 197, impl panel r1): `unknown_now` reads every session's `task_dir_flag` and pending entries, never through a link, and one it cannot read makes every uncommitted `enrolled` folder it is asked about unknown; each session's main flag is read before its pending entries, and a flag that vanishes between the listing and its read restarts the scan (three tries, then unreadable). Given `before` — the folders that stood before a call still running — an `enrolled` row of a folder outside it is unknown too (the close passes `standing_before`: every session's standing snapshots younger than a day). `tasks adopt <folder>` registers a real folder with a task.md and a `<number>-<slug>` name whose number no other folder present holds, once (taking over an `enrolled` row of that name, with a new time — task 197: a re-enrolment is no release of a flagged folder, an adoption is), dropping a row of that number whose folder is gone (a renamed folder's old name); `prepare-merge` reads the registry before it moves anything (refusing a target name another row holds, dropping a reserved one) and renumbers under the lane lock, carrying each renamed folder's line — a folder known only by the git rule gets one under its new name. A folder whose name falls outside `<number>-<slug>` (a newline in it, say) is never registered and lists as unknown. A creator opens its lane and `tasks/` once under the lock and does all of a build — the temporary directory, its task.md, the final-name check, the rename and a failed build's cleanup — through those descriptors, so a swap of either path afterwards changes nothing it writes, renames or removes. A system that offers no `/proc/self/fd` (through which the held directories are reached) makes a creator REFUSE, creating nothing — never the unanchored fall-back to the lane's path (the single judge's run 3, 2026-10-14). A title with nothing to slug gets the slug `task`, and a name the reader would refuse is never written. An unreadable registry (a link, not a regular file, another format) stops a creator before it creates anything, naming the repair. BOUNDS: a directory present when a lane's registry is first written is trusted (since task 197 that is normally a session's start in the lane); deleting the registry re-enrols what is there; a creator killed after its rename and before its registration leaves a folder `tasks adopt` must take in; a folder an older CLI makes after the registry exists is unknown until adopted or committed; the instant between the creator's last check of the final name and its rename is not closed; between the rename and the origin's rewrite a finished folder is still `reserved`, so a lock-free reader in another session at that instant reads it unknown (task 196's detector must not flag a `reserved` folder while the lane lock is held); a repo whose `.gitignore` predates these entries shows the registry and its lock as untracked until `scripts/init` refreshes its ignore block (and the close's uncommitted-work warning counts the two — since task 197 a session's start writes the registry, so in such a repo they show at its first close) — the freshness fingerprint excludes `.agent`, but the panel's tamper guard hashes untracked files there, so in such a repo a registry write during a panel (a lock holder rewrites the lock's pid) voids that round; the registry is keyed by NAME, so a folder removed and made again by hand under the same name reads known through its old row — what reads unknown is a hand-made folder under a NEW name. It is ENFORCED by task 196's watch and close check (PB-TASK-DIR-WATCH).",
+      "statement": "Every task directory the CLI makes is named in its lane's task registry (`.agent[/<lane>]/task-registry`, beside `tasks/`, machine-local): `tasks new`, `tasks freehand` and `tasks retro` reserve a number, build the directory under a temporary name in the lane, rename it into `tasks/` and only then register its origin — under one per-lane lock that also takes the number, so two creators at once never take one number nor share a directory, and the number counts the registry's (a reservation burned by a crash is never reused). A reservation is never membership; a name already standing under `tasks/` is never published over. Reads never write: a directory is known when it is registered or its task.md is a regular blob in a COMMIT — HEAD, or the commit a stopped merge, cherry-pick, revert or rebase is bringing in (`git ls-tree`, never the index: a staged one is not); the writers (the creators and `tasks adopt`) enrol the lane's existing directories that hold a task.md when they find no registry, and so do a session's start and `tasks work <N>` in a lane that has `tasks/` and none (task 197: through the lane held open, as a creator holds it — a lane swapped for a link meanwhile keeps the replacement's registry; never a failure of either; a registry that exists, readable or not, is left alone). An `enrolled` row is no knowledge of a folder a standing task-folder flag of the lane names (task 197, impl panel r1): `unknown_now` reads every session's `task_dir_flag` and pending entries, never through a link, and one it cannot read makes every uncommitted `enrolled` folder it is asked about unknown; each session's main flag is read before its pending entries, and a flag that vanishes between the listing and its read restarts the scan (three tries, then unreadable). Given `before` — the folders that stood before a call still running — an `enrolled` row of a folder outside it is unknown too (the close passes `standing_before`: every session's standing snapshots younger than a day). `tasks adopt <folder>` registers a real folder with a task.md and a `<number>-<slug>` name whose number no other folder present holds, once (taking over an `enrolled` row of that name, with a new time — task 197: a re-enrolment is no release of a flagged folder, an adoption is), dropping a row of that number whose folder is gone (a renamed folder's old name). A folder whose name falls outside `<number>-<slug>` (a newline in it, say) is never registered and lists as unknown. A creator opens its lane and `tasks/` once under the lock and does all of a build — the temporary directory, its task.md, the final-name check, the rename and a failed build's cleanup — through those descriptors, so a swap of either path afterwards changes nothing it writes, renames or removes. A system that offers no `/proc/self/fd` (through which the held directories are reached) makes a creator REFUSE, creating nothing — never the unanchored fall-back to the lane's path (the single judge's run 3, 2026-10-14). A title with nothing to slug gets the slug `task`, and a name the reader would refuse is never written. An unreadable registry (a link, not a regular file, another format) stops a creator before it creates anything, naming the repair. BOUNDS: a directory present when a lane's registry is first written is trusted (since task 197 that is normally a session's start in the lane); deleting the registry re-enrols what is there; a creator killed after its rename and before its registration leaves a folder `tasks adopt` must take in; a folder an older CLI makes after the registry exists is unknown until adopted or committed; the instant between the creator's last check of the final name and its rename is not closed; between the rename and the origin's rewrite a finished folder is still `reserved`, so a lock-free reader in another session at that instant reads it unknown (task 196's detector must not flag a `reserved` folder while the lane lock is held); a repo whose `.gitignore` predates these entries shows the registry and its lock as untracked until `scripts/init` refreshes its ignore block (and the close's uncommitted-work warning counts the two — since task 197 a session's start writes the registry, so in such a repo they show at its first close) — the freshness fingerprint excludes `.agent`, but the panel's tamper guard hashes untracked files there, so in such a repo a registry write during a panel (a lock holder rewrites the lock's pid) voids that round; the registry is keyed by NAME, so a folder removed and made again by hand under the same name reads known through its old row — what reads unknown is a hand-made folder under a NEW name. It is ENFORCED by task 196's watch and close check (PB-TASK-DIR-WATCH).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/registry.py",
@@ -24969,10 +24812,6 @@
         {
           "path": "plugins/playbook/tasks/registry.py",
           "reference": "symbol:adopt"
-        },
-        {
-          "path": "plugins/playbook/tasks/registry.py",
-          "reference": "symbol:rename"
         },
         {
           "path": "plugins/playbook/tasks/registry.py",
@@ -25003,16 +24842,8 @@
           "reference": "symbol:cmd_retro"
         },
         {
-          "path": "plugins/playbook/tasks/merge_prep.py",
-          "reference": "symbol:_rename_colliding_tasks"
-        },
-        {
           "path": "plugins/playbook/scripts/claude-md-merge.py",
           "reference": "symbol:GITIGNORE_ENTRIES"
-        },
-        {
-          "path": "plugins/playbook/tasks/registry.py",
-          "reference": "symbol:ready_for_renames"
         },
         {
           "path": "plugins/playbook/tasks/registry.py",
@@ -25189,14 +25020,6 @@
         {
           "type": "executable integration",
           "path": "tests/test_task_registry.py",
-          "reference": "Renames.test_prepare_merge_renames_a_registered_directory_in_the_registry",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": []
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_task_registry.py",
           "reference": "Renames.test_the_freehand_rename_gate_names_adopt",
           "boundary": "subprocess",
           "negative_control": null,
@@ -25236,16 +25059,6 @@
           "type": "executable integration",
           "path": "tests/test_task_registry.py",
           "reference": "RoundOneFixes.test_adopt_refuses_a_number_another_present_folder_has",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Red on nested `ad74aa4` (task 195, impl panel r1)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_task_registry.py",
-          "reference": "RoundOneFixes.test_prepare_merge_refuses_before_moving_anything",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
@@ -25316,26 +25129,6 @@
           "type": "executable integration",
           "path": "tests/test_task_registry.py",
           "reference": "RoundTwoFixes.test_an_empty_name_list_asks_git_nothing",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Red on nested `cddfa3f` (task 195, impl panel r2)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_task_registry.py",
-          "reference": "RoundTwoFixes.test_prepare_merge_keeps_a_folder_known_only_by_git",
-          "boundary": "subprocess",
-          "negative_control": null,
-          "limitations": [
-            "Red on nested `cddfa3f` (task 195, impl panel r2)."
-          ]
-        },
-        {
-          "type": "executable integration",
-          "path": "tests/test_task_registry.py",
-          "reference": "RoundTwoFixes.test_a_rename_over_a_reserved_row_of_the_new_name",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": [
@@ -25491,8 +25284,7 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "2026-10-14 (task 195, PLAN S14 T5b first half; the owner's B31 answers of 2026-10-13 12:27): the dry run on copies of both real trees (this repo 186 folders, WoW 40) enrolled them all with 0 unknown; a planted folder unknown, staged or not (task 195's `evidence/dryrun.txt`).",
-        "2026-10-14 (task 195, impl panel r2): prepare-merge's own planning predates the registry and is a Phase B input — its targets start at max(target)+1 without the current branch's folders or the registry's numbers, they are computed before the lane lock, and a kill after `git mv` before the registry's rename leaves the moved folder to `tasks adopt`.",
-        "2026-10-14 (task 195, impl panel r3): routed to Phase B, not grave — a creator failing in process burns a number on each retry (only a crash needs the burn); five `git ls-tree` spawns per known-check; prepare-merge's name conflict prints the unreadable-registry repair; an unreadable `tasks/` enrols as empty."
+        "2026-10-14 (task 195, impl panel r3): routed to Phase B, not grave — a creator failing in process burns a number on each retry (only a crash needs the burn); five `git ls-tree` spawns per known-check; an unreadable `tasks/` enrols as empty."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],

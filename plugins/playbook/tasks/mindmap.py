@@ -8,7 +8,7 @@ nodes notice) and the bootstrap INDEX loader (`_bootstrap_mind_map` +
 orientation costs an index not a full dump), the fence-aware node-boundary family (`_node_starts` is THE
 shared detector; `_partition_overflow` / `sort_overflow_by_id` /
 `_scan_overflow_ids` / the unnumbered-tail notice build on it), `_parse_nodes`
-(the byte-exact collision-detector parser consumed by prepare-merge), and the
+(the byte-exact node parser; prepare-merge, its first reader, was removed in task 338), and the
 `mindmap-sync` arm. Imports stdlib + tasks.shared only (leaf order:
 shared < mindmap < command modules — design-1.5.9.md §4 ⟦C4⟧); never a
 command module. Consumers: review/bootstrap (context), merge_prep

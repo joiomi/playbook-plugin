@@ -556,16 +556,6 @@ class TheDoctorAdvisory(_Project):
 
 
 class Renames(_Project):
-    def test_prepare_merge_renames_a_registered_directory_in_the_registry(self):
-        self.cli("new", "quick", "a", check=True)
-        code = ("import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path\n"
-                "import tasks.merge_prep as m\n"
-                "m._rename_colliding_tasks(Path(sys.argv[2]), Path(sys.argv[2]) / '.agent', {1: '001-a'}, {1: 7})\n")
-        r = subprocess.run([sys.executable, "-c", code, str(PLUGIN), str(self.p)], env=self.env(), text=True,
-                           capture_output=True, timeout=60)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(self.task_dirs(), ["007-a"])
-        self.assertEqual(self.registered(), {"007-a": "new"})
 
     def test_the_freehand_rename_gate_names_adopt(self):
         self.cli("freehand", check=True)
@@ -628,22 +618,6 @@ class RoundOneFixes(_Project):
         self.assertNotEqual(r.returncode, 0, r.stdout)
         self.assertIn("005", r.stdout + r.stderr)
         self.assertNotIn("005-y", self.registered())
-
-    def test_prepare_merge_refuses_before_moving_anything(self):
-        # I4 (opus, codex): an unreadable registry stopped the renumbering halfway (folders moved, refs not rewritten)
-        self.cli("new", "quick", "a", check=True)
-        (self.agent / "task-registry").write_text("not a registry\n", encoding="utf-8")
-        code = ("import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path\n"
-                "import tasks.merge_prep as m\n"
-                "from tasks.registry import RegistryUnreadable\n"
-                "try:\n"
-                "    m._rename_colliding_tasks(Path(sys.argv[2]), Path(sys.argv[2]) / '.agent', {1: '001-a'}, {1: 7})\n"
-                "except RegistryUnreadable:\n"
-                "    sys.exit(3)\n")
-        r = subprocess.run([sys.executable, "-c", code, str(PLUGIN), str(self.p)], env=self.env(), text=True,
-                           capture_output=True, timeout=60)
-        self.assertEqual(r.returncode, 3, r.stdout + r.stderr)
-        self.assertEqual(self.task_dirs(), ["001-a"], "a folder was moved before the registry was read")
 
     def test_a_render_error_is_not_taken_for_a_collision(self):
         # I5 (sonnet): a FileExistsError raised inside render looped, reserving and burning numbers
@@ -844,39 +818,6 @@ class RoundTwoFixes(_Project):
         subprocess.run(self.git + ["commit", "-qm", "a"], cwd=self.p, check=True)
         reg = self.registry_module()
         self.assertEqual(reg._committed_task_mds(self.p, self.agent, []), set())
-
-    def test_prepare_merge_keeps_a_folder_known_only_by_git(self):
-        # J3 (gemini, fable, opus): a folder pulled in after the registry existed has no row; after `git mv` its new
-        # path is staged, not in HEAD
-        subprocess.run(self.git + ["init", "-q"], cwd=self.p, check=True)
-        self.cli("new", "quick", "first", check=True)
-        self.handmade("005-x")
-        subprocess.run(self.git + ["add", "-A"], cwd=self.p, check=True)
-        subprocess.run(self.git + ["commit", "-qm", "pulled"], cwd=self.p, check=True)
-        self.assertNotIn("005-x", self.registered())
-        code = ("import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path\n"
-                "import tasks.merge_prep as m\n"
-                "m._rename_colliding_tasks(Path(sys.argv[2]), Path(sys.argv[2]) / '.agent', {5: '005-x'}, {5: 9})\n")
-        r = subprocess.run([sys.executable, "-c", code, str(PLUGIN), str(self.p)], env=self.env(), text=True,
-                           capture_output=True, timeout=60)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        reg = self.registry_module()
-        self.assertTrue(reg.is_known(self.p, self.agent, "009-x"), "the renamed folder reads unknown")
-
-    def test_a_rename_over_a_reserved_row_of_the_new_name(self):
-        # J4 (fable): two rows of one name, the later (reserved) one won
-        self.cli("new", "quick", "a", check=True)
-        f = self.agent / "task-registry"
-        f.write_text(f.read_text(encoding="utf-8") + "007-a\treserved\t2026-10-14T00:00:00Z\n", encoding="utf-8")
-        code = ("import sys; sys.path.insert(0, sys.argv[1]); from pathlib import Path\n"
-                "import tasks.merge_prep as m\n"
-                "m._rename_colliding_tasks(Path(sys.argv[2]), Path(sys.argv[2]) / '.agent', {1: '001-a'}, {1: 7})\n")
-        r = subprocess.run([sys.executable, "-c", code, str(PLUGIN), str(self.p)], env=self.env(), text=True,
-                           capture_output=True, timeout=60)
-        self.assertEqual(r.returncode, 0, r.stderr)
-        names = [ln.split("\t")[0] for ln in self.registry_lines()[1:]]
-        self.assertEqual(names.count("007-a"), 1, self.registry_lines())
-        self.assertEqual(self.registered()["007-a"], "new")
 
     def test_a_stopped_merge_brings_its_folders_known(self):
         # J5 (opus): the other side's committed folders are in the tree but not in HEAD until the merge commit

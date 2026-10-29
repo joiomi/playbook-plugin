@@ -26,8 +26,8 @@ a temporary name in the lane, renames it into `tasks/`, then writes its origin o
 sees a half-made task.
 
 Reads never write and never wait on the lock (plan panel T2): `read` and `is_known` only look; `unknown_now` tries
-the lock SHARED without waiting, never creating its file, to tell a creation in progress from a crash's leftover. The writers — the creators,
-`tasks adopt`, `prepare-merge`'s renames — enrol what exists when they find no registry. `is_known` also counts a
+the lock SHARED without waiting, never creating its file, to tell a creation in progress from a crash's leftover. The writers — the creators and
+`tasks adopt` — enrol what exists when they find no registry. `is_known` also counts a
 directory whose task.md is in the COMMITTED tree (`git ls-tree HEAD`, a regular blob — never the index: a staged
 hand-made task.md is not provenance; plan panel T4).
 
@@ -827,37 +827,3 @@ def adopt(project_path, agent_dir, name: str) -> str:
             rows.append([name, "adopt", _now()])
         _write(agent_dir, rows)
     return "adopted"
-
-
-def ready_for_renames(agent_dir, new_names=()) -> None:
-    """Before `prepare-merge` moves any folder: read the registry (RegistryUnreadable now, before anything moved —
-    task 195, impl panel r1), enrol the lane as it stands when it has none, refuse a target name another row already
-    holds, and drop a crashed creator's `reserved` row of a target name (impl panel r2, fable: two rows of one name,
-    the later reserved one winning). Call it holding the lane lock, which the renumbering keeps until its last rename."""
-    rows = _rows_locked(agent_dir)
-    targets = set(new_names)
-    taken = [r[0] for r in rows if r[0] in targets and r[1] != "reserved"]
-    if taken:
-        raise RegistryUnreadable(f"the task registry already names {taken[0]}, a folder prepare-merge would rename to")
-    kept = [r for r in rows if not (r[0] in targets and r[1] == "reserved")]
-    if len(kept) != len(rows):
-        _write(agent_dir, kept)
-
-
-def rename(project_path, agent_dir, old: str, new: str) -> None:
-    """A registered directory renamed by the CLI (`prepare-merge`) keeps its line under the new name (plan panel T8);
-    one known only by the git rule gets a row under the new name. Enrols first when the lane has no registry; a
-    `reserved` row of the new name is dropped; an unknown `old` stays unknown."""
-    from tasks.filelock import named_lock
-    with named_lock(lock_path(agent_dir)):
-        rows = [r for r in _rows_locked(agent_dir) if not (r[0] == new and r[1] == "reserved")]
-        moved = False
-        for r in rows:
-            if r[0] == old:
-                r[0] = new
-                moved = True
-        if not moved and old in _committed_task_mds(project_path, agent_dir, [old]):
-            # known only by the git rule (pulled in after the registry existed): after `git mv` its new path is staged,
-            # not committed — it gets a row (impl panel r2, gemini, fable, opus)
-            rows.append([new, "enrolled", _now()])
-        _write(agent_dir, rows)

@@ -81,9 +81,6 @@ APPROVED = {
         "an mkstemp'd script for the declared merge_verify command, run by bash and deleted — ephemeral",
     ("tasks/intent.py", '(Path(td) / "evidence.md").write_text('):
         "evidence for a judge inside a TemporaryDirectory — ephemeral, never state",
-    ("tasks/merge_prep.py", '(agent_dir / "chat_log_counter").write_text('):
-        "the chat-log-hook flock-protocol DATA file: an os.replace would swap the inode "
-        "out from under a concurrent locked incrementer (documented exception)",
     ("scripts/pb_journal.py", 'with os.fdopen(fd, "wb") as f:'):
         "the hook journal's spool (task 222, the owner's 'Bilet în cutie'): one line written to a NEW temporary "
         "opened O_CREAT|O_EXCL|O_NOFOLLOW, then os.link()ed to its spool name (no clobber) — never a live file",
@@ -274,7 +271,7 @@ class EveryTruncatingWriterIsRoutedOrDocumented(unittest.TestCase):
         # The modules the ledger row names as routed: each must import the primitive
         # and, by the sweep above, own no undocumented direct write.
         for rel in ("tasks/core.py", "tasks/lifecycle.py", "tasks/review.py", "tasks/models_check.py",
-                    "tasks/project_setup.py", "tasks/compact.py", "tasks/history.py", "tasks/merge_prep.py",
+                    "tasks/project_setup.py", "tasks/compact.py", "tasks/history.py",
                     "tasks/mindmap.py", "provider/adapters/grok.py", "provider/adapters/codex.py",
                     "provider/adapters/antigravity.py", "provider/adapters/pi.py", "scripts/init",
                     "scripts/init_txn.py", "scripts/claude-md-merge.py"):

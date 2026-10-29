@@ -94,7 +94,6 @@ _BASELINE = {
     "merge-doctor": (2, "Usage: tasks merge-doctor"),
     "mindmap-sync": (1, "MIND_MAP.md not found"),
     "log": (1, ".agent/chat_log.md not found"),
-    "prepare-merge": (1, "could not compute merge base"),
     "compact": (1, "'compact' requires a task number"),
     "recall": (1, "'recall' requires a node id or keyword"),
     "dashboard": (0, "PLAYBOOK DASHBOARD"),
