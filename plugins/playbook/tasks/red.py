@@ -9,14 +9,18 @@ imposibile, ca sa ma asigur ca codul pe care il voi scrie urmeaza path-ul lor". 
   id through `red_run` in `.agent/config.json`) in the PROJECT as it is now — as `tasks verify` runs the verify command:
   its own process group, `red_timeout` seconds, a scrubbed environment and a throwaway HOME, the command guard on each
   command — and appends one record per row to `<task>/red-receipt.jsonl` (format v2): its status, the tree's
-  fingerprint (`core.tree_state_fingerprint`) and the time. A run during which the tree changed is marked `moved` and
-  counts for nothing. `--mutant "<why>"` says the code is broken on purpose: its red counts, with its reason shown.
-- A row is PROVED when its records (those of its test cell) hold a red and, later, a green on another tree, and its
-  newest is green. The close (`close_check`) blocks each row not proved — not run, never red, red now, red and green on
-  the same tree, skipped, run badly — and on a receipt line it cannot read; `--force --reason` overrides.
-- `record_base` writes `<task>/base.json` at the first activation: each repository's HEAD commit only — no temporary
-  index, nothing written into `.git/objects` (E023.11). Only `No behavior changes: <why>` reads it: no code file changed
-  since then, `__pycache__` / `*.pyc` not counted (E059.7).
+  fingerprint (`tree_fingerprint`) and the test files' digest (`tests_digest`), both read for that row, and the time. A
+  row during which the tree changed is marked `moved` and counts for nothing. `--mutant "<why>"` says the code is
+  broken on purpose: its red counts, with its reason shown.
+- A row is PROVED when its records (those of its test cell) end green and its newest red is followed by a green on the
+  same test files and another tree (impl round 1: an older pair proves nothing about tests changed since). The close
+  (`close_check`) blocks each row not proved — not run, never red, red now, red and green on the same tree, red on other
+  test files, skipped, run badly — and on a receipt line it cannot read; `--force --reason` overrides. Limits: a test
+  edited after its row was proved keeps the proof, and code changed after the newest green is caught only if `verify`
+  runs that test (the receipt cannot tell which files a row's test reads).
+- `record_base` writes `<task>/base.json` at the first activation: each repository's HEAD commit and the files that
+  already differed from it, by content — no temporary index, nothing written into `.git/objects` (E023.11). Only `No
+  behavior changes: <why>` reads it: no code file changed since then, `__pycache__` / `*.pyc` not counted (E059.7).
 - `## Red receipt` in task.md shows each row's state; its own lines are replaced by their digest and every line the
   agent wrote there stays (task 303, audit 3 G3).
 
@@ -59,11 +63,12 @@ _GIT_OVERRIDES = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRE
 
 
 def _git(repo: Path, args: "list[str]", *, text: bool = True, timeout: float = 120):
-    """git in `repo` — whatever repository a caller's GIT_DIR / GIT_WORK_TREE names (impl round 1, agy)."""
+    """git in `repo` — whatever repository a caller's GIT_DIR / GIT_WORK_TREE names (impl round 1, agy). Its text keeps
+    a name's bytes (`surrogateescape`: a Linux name that is not UTF-8 opens as itself — task 342's impl round 1, I6)."""
     env = {k: v for k, v in os.environ.items() if k not in _GIT_OVERRIDES}
     if text:
         return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True, encoding="utf-8",
-                              errors="replace", timeout=timeout, env=env)
+                              errors="surrogateescape", timeout=timeout, env=env)
     return subprocess.run(["git", "-C", str(repo), *args], capture_output=True, timeout=timeout, env=env)
 
 
@@ -952,9 +957,10 @@ def _read_records(path: Path, bad: "list[int] | None" = None) -> "list[dict]":
 
 def row_state(row: dict, records: "list[dict]") -> dict:
     """One row's state from its records — those of its test cell (its key: rewording the behavior keeps them, changing
-    the test starts it over), a run whose tree moved left out. `proved`: a red and, on a later line, a green on the
-    same test files (`tests`) and another tree, and the newest is green. Otherwise `not run`, `run badly`, `skipped`,
-    `red now`, `never red`, `same tree` or `other test files`."""
+    the test starts it over), a run whose tree moved left out. `proved`: the newest is green, and the newest red is
+    followed, on a later line, by a green on the same test files (`tests`) and another tree — an older pair proves
+    nothing about tests changed since (impl round 1, I3: codex); a test file changed after that green keeps it (I1).
+    Otherwise `not run`, `run badly`, `skipped`, `red now`, `never red`, `same tree` or `other test files`."""
     recs = [r for r in records if r.get("test") == row["test"] and not r.get("moved")]
     out = {"row": row["row"], "kind": row["kind"], "test": row["test"], "state": "not run", "red": None, "green": None,
            "newest": recs[-1] if recs else None}
@@ -977,12 +983,12 @@ def row_state(row: dict, records: "list[dict]") -> dict:
     elif out["red"] is None:
         out["state"] = "never red"
     else:
-        pairs = [(r, g) for i, r in enumerate(recs) if r.get("status") == "red"
-                 for g in recs[i + 1:] if g.get("status") == "green"]
-        proof = next((r for r, g in pairs if g.get("tests") == r.get("tests") and g.get("tree") != r.get("tree")), None)
-        if proof is not None:
-            out["state"], out["red"] = "proved", proof
-        elif any(g.get("tests") == r.get("tests") for r, g in pairs):
+        last = max(i for i, r in enumerate(recs) if r.get("status") == "red")
+        red = recs[last]
+        after = [g for g in recs[last + 1:] if g.get("status") == "green" and g.get("tests") == red.get("tests")]
+        if any(g.get("tree") != red.get("tree") for g in after):
+            out["state"] = "proved"
+        elif after:
             out["state"] = "same tree"
         else:
             out["state"] = "other test files"
@@ -994,8 +1000,9 @@ _WHY = {"not run": "not run — run `tasks red`",
                      "--mutant \"<why>\"`, then green",
         "red now": "its newest run is red",
         "same tree": "its red and its green ran on the same tree (a flaky test?) — green after the code changed proves it",
-        "other test files": "its red ran on other test files than its green (seen red before the test was written, or "
-                            "the test changed since) — watch it red on the tests as they are, or on a mutant",
+        "other test files": "its newest red ran on other test files than the greens after it (seen red before the test "
+                            "was written, or a test file changed between them) — watch it red on the test files as "
+                            "they are (on a mutant: `tasks red --mutant \"<why>\"`), then green",
         "skipped": "its newest run passed no test (skipped)",
         "run badly": "its newest run did not run its test (refused, unrunnable, launch failed or timeout)"}
 
@@ -1098,12 +1105,18 @@ def _problems(rows: "list[dict]") -> "list[str]":
     return out
 
 
+def _shown(name: str) -> str:
+    """A path as it can be printed: a byte that is not UTF-8 (kept by `_git`) replaced."""
+    return name.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
+
+
 def _code_changed(project: Path, task_dir: Path, cfg: dict) -> "tuple[list[str] | None, str]":
     """The CODE files changed since the task's start (base.json): per scope, the paths that differ from the start
-    commit now (`_scope_state`'s listing against that commit: no rename detection, untracked files, the flagged files
-    by content), minus each file that already differed at the start and still holds the same bytes (`dirty`), kept
-    only when `core.classify_delta_paths` calls it behavioral (docs, tests, `.agent` and the root's `.md` are not).
-    Reads only. None with why when it cannot be read."""
+    commit in the work tree or in HEAD (a commit undone in the work tree still changed the code — impl round 1, I7) —
+    no rename detection, untracked files, the flagged files by content — and every file that differed at the start
+    (`dirty`: one restored or deleted since changed too — I4), minus each of those that still holds its start bytes;
+    kept only when `core.classify_delta_paths` calls it behavioral (docs, tests, `.agent` and the root's `.md` are not).
+    Reads only. None with why when it cannot be read. A name that is not UTF-8 is shown with its bad bytes replaced."""
     from tasks.core import _fingerprint_exclude_pathspecs, classify_delta_paths
     base = _load_base(Path(task_dir))
     if not base or not isinstance(base.get("scopes"), dict) or "failed" in base:
@@ -1119,7 +1132,12 @@ def _code_changed(project: Path, task_dir: Path, cfg: dict) -> "tuple[list[str] 
         tagged = _git(repo, ["ls-files", "-v", "-z", "--", ".", *exclude])
         if tracked.returncode != 0 or others.returncode != 0 or tagged.returncode != 0:
             return None
-        paths = set(_z(tracked.stdout)) | set(_z(others.stdout))
+        paths = set(_z(tracked.stdout)) | set(_z(others.stdout)) | set(dirty)
+        if start and _git(repo, ["rev-parse", "--verify", "-q", "HEAD^{commit}"]).returncode == 0:
+            moved = _git(repo, ["diff", "--name-only", "--no-renames", "-z", start, "HEAD", "--", ".", *exclude])
+            if moved.returncode != 0:
+                return None
+            paths |= set(_z(moved.stdout))
         for e in _z(tagged.stdout):                     # git hides a flagged file's edit: read its bytes
             if len(e) > 2 and (e[0].islower() or e[0] == "S"):
                 rel = e[2:]
@@ -1145,20 +1163,20 @@ def _code_changed(project: Path, task_dir: Path, cfg: dict) -> "tuple[list[str] 
             if got is None:
                 return None, f"whether code changed in {where} could not be read"
             code, _docs = classify_delta_paths(got, is_outer_scope=not scope)
-            changed += [f"{scope + '/' if scope else ''}{n}" for n in code]
+            changed += [_shown(f"{scope + '/' if scope else ''}{n}") for n in code]
         for scope in sorted(set(scopes) - set(base["scopes"])):   # a code root added since the start
             got = differ(scopes[scope], None, {})
             if got is None:
                 return None, f"whether {scope}'s code changed could not be read"
             code, _docs = classify_delta_paths(got, is_outer_scope=False)
-            changed += [f"{scope}/{n}" for n in code]
+            changed += [_shown(f"{scope}/{n}") for n in code]
     return changed, ""
 
 
 def close_check(project: Path, task_file: Path, budget: float = 20.0) -> dict:
     """The close's check of the test contract: {"applies": False, …} for a task with no contract, no contract gate and
     none recorded at its activation; else {"applies", "lines", "blocks", "digest", "config"} — each row's state and a
-    block for each row not proved (task 342: seen red, then green on another tree), any reason the receipt cannot be
+    block for each row not proved (task 342: its newest red, then a green on another tree), any reason the receipt cannot be
     judged (fail closed), and `close_digest` of what was read. `budget` is kept for the callers (no git runs long)."""
     from tasks.core import load_config, read_task_text
     project, task_file = Path(project), Path(task_file)
@@ -1217,7 +1235,8 @@ def close_way(blocks: "list[str]") -> str:
     """The way through a block, by its causes."""
     text = " ".join(blocks)
     ways = []
-    if any(w in text for w in (": not run", ": never red", ": same tree", ": red now", ": skipped", ": run badly")):
+    if any(w in text for w in (": not run", ": never red", ": same tree", ": red now", ": skipped", ": run badly",
+                               ": other test files")):
         ways.append("run each row with `tasks red` — seen red before its code (or red on a mutant: `tasks red "
                     "--mutant \"<why>\"` with the code broken on purpose), then green on the code")
     if "refuses the contract" in text or "`## Test contract` has no row" in text or "is not a number" in text \
@@ -1241,9 +1260,13 @@ def numbers_line(project: Path, task_dir: Path, budget: float = 10.0) -> "str | 
     """`tasks numbers`'s contract line, read live (never written into numbers.json): each row's state. None for a task
     without a live `## Test contract`."""
     from tasks.core import read_task_text
-    rows, _why = parse_contract(read_task_text(Path(task_dir) / "task.md"))
+    text = read_task_text(Path(task_dir) / "task.md")
+    rows, _why = parse_contract(text)
     if rows is None:
         return None
+    reason = _no_change_reason(text) if not rows else None
+    if reason is not None:
+        return f"contract: No behavior changes: {reason}"
     try:
         records = _read_records(Path(task_dir) / RECEIPT_NAME)
     except OSError as e:
@@ -1348,15 +1371,27 @@ def _cmd_red(cmd_args: "list[str]") -> None:
         timeout = DEFAULT_TIMEOUT
     if not tree_fingerprint(project, cfg):
         _refuse("the tree's fingerprint cannot be read (git status / diff failed) — a run must say which code it ran on")
-    tests = tests_digest(project, cfg)
+    if not tests_digest(project, cfg):
+        _refuse("the test files' digest cannot be read (git ls-files failed) — a run must say which test files it ran "
+                "on")
     run = hashlib.sha256(f"{os.getpid()} {time.time_ns()}".encode()).hexdigest()[:12]
     at = _now()
     print(f"tasks red — task {d.name}, run {run}" + (f" — on a mutant: {mutant}" if mutant else ""))
     home = Path(tempfile.mkdtemp(prefix="pb-red-home-"))
+    old_handlers = {}
+
+    def _stop(signum, _frame):                          # SIGTERM / SIGHUP take the interrupt's path: the row's process
+        raise KeyboardInterrupt(f"signal {signum}")     # group is killed (impl round 1, I5: codex)
+    for sig in (signal.SIGTERM, signal.SIGHUP):
+        try:
+            old_handlers[sig] = signal.signal(sig, _stop)
+        except (ValueError, OSError):
+            pass
     try:
         for row in rows:
             cmds, why_r = resolve(row["test"], cfg)
             before = tree_fingerprint(project, cfg)
+            tests = tests_digest(project, cfg)          # for each row: an earlier row may change them (I2)
             if not cmds:
                 sides = [{"status": "unrunnable", "exit": None, "seconds": 0.0, "last": why_r, "error": "",
                           "reader": "", "skips": 0}]
@@ -1370,6 +1405,7 @@ def _cmd_red(cmd_args: "list[str]") -> None:
                         continue
                     sides.append(dict(_run_row(cmd, project, home, float(timeout)), cmd=cmd))
             after = tree_fingerprint(project, cfg)
+            tests_after = tests_digest(project, cfg)
             top = _row_status(sides)
             rec = {"v": RECORD_V, "run": run, "at": _now(), "row": row["row"], "kind": row["kind"],
                    "test": row["test"], "status": top.get("status"), "exit": top.get("exit"),
@@ -1378,19 +1414,29 @@ def _cmd_red(cmd_args: "list[str]") -> None:
                    "tree": before, "tests": tests, "sides": sides}
             if mutant:
                 rec["mutant"] = mutant
-            if not before or after != before:
+            if not before or after != before or not tests or tests_after != tests:
                 rec["moved"] = True                     # the code it ran on is not one tree: it counts for nothing
             _append(task_file, rec)
             said = rec["status"] + (f" (mutant: {mutant})" if mutant and rec["status"] == "red" else "")
             if rec.get("moved"):
-                said += " — the tree changed while it ran: it counts for nothing"
+                said += (" — the tree changed while it ran: it counts for nothing (a file the test itself writes can be "
+                         "left out with `fingerprint_exclude` in .agent/config.json)")
             detail = rec["error"] or rec["last"]
             print(_one_line(f"  row {row['row']} ({row['kind']}): {said}" + (f" — {detail}" if detail else "")))
             if mutant and rec["status"] == "green":
                 print(f"  note: row {row['row']} came out green on the mutant — the break did not reach its test, so "
                       "it is no red")
+    except KeyboardInterrupt:
+        print(f"  interrupted: the rows that ended are in {RECEIPT_NAME}; task.md was not written.", file=sys.stderr,
+              flush=True)
+        raise SystemExit(130)
     finally:
         shutil.rmtree(home, ignore_errors=True)
+        for sig, h in old_handlers.items():
+            try:
+                signal.signal(sig, h)
+            except (ValueError, OSError):
+                pass
     why_w, states = _write_section(task_file, run, at)
     if states is None:
         print(f"  ## Red receipt not written: {why_w}", file=sys.stderr)

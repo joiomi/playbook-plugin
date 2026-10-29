@@ -3,7 +3,7 @@
 
 The owner's rule stays (M1415, 2026-10-21: the tests are written first, so the code follows their path); its check is
 simpler. `tasks red` runs each `## Test contract` row in the project as it is now and records the result with the
-tree's fingerprint (`core.tree_state_fingerprint`) and the time. The close passes a row seen red and later green on a
+tree's fingerprint (`red.tree_fingerprint`), the test files' digest and the time. The close passes a row seen red and later green on a
 different tree — the red may come from a mutant (code broken on purpose, `--mutant "<why>"`). The copy of the old code
 (`--base`), `--drop`, the late-row rules and the state carried between runs are gone; `base.json` keeps each
 repository's start commit only and the activation writes nothing into `.git/objects` (E023.11); `No behavior changes:`
@@ -12,18 +12,24 @@ does not count `__pycache__` (E059.7).
 Real temporary git projects (an outer repository and a nested `code_roots` one), the CLI as `python3 -m tasks.cli`.
 Each test names the row of task 342's contract it proves. Pure stdlib unittest.
 """
+import contextlib
+import io
 import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 _PLAYBOOK = _HERE.parent / "plugins" / "playbook"
+sys.path.insert(0, str(_PLAYBOOK))
 GIT = ["git", "-c", "user.email=a@b", "-c", "user.name=p", "-c", "commit.gpgsign=false"]
 NEW = "`tests.test_new.N.test_two`"
 OLD = "`tests.test_old.T.test_one`"
@@ -139,12 +145,18 @@ class _Project(unittest.TestCase):
         out = self.g("count-objects", "-v", cwd=repo).stdout
         return {k: v for k, v in (ln.split(": ") for ln in out.splitlines()) if k in ("count", "in-pack")}
 
-    def fingerprint(self):
-        code = ("import sys, json; sys.path.insert(0, sys.argv[1]); from pathlib import Path; "
-                "from tasks.red import tree_fingerprint as t; "
-                "print(t(Path(sys.argv[2]), json.loads((Path(sys.argv[2]) / '.agent' / 'config.json').read_text())))")
-        return subprocess.run([sys.executable, "-c", code, str(_PLAYBOOK), str(self.d)], env=self.env(),
+    def call(self, code):
+        """`code` in a child process with `red` (tasks.red), `p` (the project) and `cfg` (its config) — what it prints."""
+        prog = ("import sys, json; sys.path.insert(0, sys.argv[1]); from pathlib import Path; from tasks import red; "
+                "p = Path(sys.argv[2]); cfg = json.loads((p / '.agent' / 'config.json').read_text()); " + code)
+        return subprocess.run([sys.executable, "-c", prog, str(_PLAYBOOK), str(self.d)], env=self.env(),
                               capture_output=True, text=True, check=True).stdout.strip()
+
+    def fingerprint(self):
+        return self.call("print(red.tree_fingerprint(p, cfg))")
+
+    def tests_now(self):
+        return self.call("print(red.tests_digest(p, cfg))")
 
 
 class Run(_Project):
@@ -172,9 +184,10 @@ class Run(_Project):
     def test_a_tree_that_moved_during_the_run_counts_for_nothing(self):
         """Row 14: a run during which the tree changed is recorded as moved and proves nothing."""
         self.light([("1", "normal", "f returns 2", "`echo '# x' >> code/src.py; false`")])
-        self.red()
+        r = self.red()
         recs = self.records()
         self.assertTrue(recs and recs[-1].get("moved") is True, recs)
+        self.assertIn("fingerprint_exclude", r.stdout)          # row 33: what the row writes may be left out
         self.config(red_run="cd code && python3 -m unittest {test}")
         self.set_rows([("1", "normal", "f returns 2", "`test 1 = 1`")])
         self.red()
@@ -221,6 +234,62 @@ class Run(_Project):
         r = self.red()
         self.assertNotEqual(r.returncode, 0, r.stdout)
         self.assertIn("same test", r.stdout + r.stderr)
+        self.assertEqual(self.records(), [])
+
+    def test_each_row_records_the_test_files_it_ran_on(self):
+        """Row 27 (impl round 1, I2: opus, codex, grok): the test files' digest is read for each row — a row that edits
+        a test file moves its own run, and the next row records the test files as it ran on them."""
+        self.light([("1", "normal", "edits a test file", "`echo '# edited' >> code/tests/test_old.py`"),
+                    ("2", "normal", "f returns 2", NEW)])
+        self.write_new_test()
+        self.red()
+        recs = self.records()
+        self.assertEqual(len(recs), 2, recs)
+        self.assertTrue(recs[0].get("moved"), recs)
+        self.assertFalse(recs[1].get("moved"), recs)
+        self.assertNotEqual(recs[0]["tests"], recs[1]["tests"], recs)
+        self.assertEqual(recs[1]["tests"], self.tests_now(), recs)
+
+    def test_a_terminated_run_stops_its_row(self):
+        """Row 32 (impl round 1, I5: codex): SIGTERM or SIGHUP to `tasks red` kills the running row's process group —
+        the row writes nothing after it."""
+        marks = Path(tempfile.mkdtemp(prefix="pb342-sig-"))
+        self.addCleanup(shutil.rmtree, marks, True)
+        started, finished = marks / "started", marks / "finished"
+        self.light([("1", "normal", "slow", f"`touch {started}; sleep 3; touch {finished}`")])
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            for f in (started, finished):
+                if f.exists():
+                    f.unlink()
+            p = subprocess.Popen([sys.executable, "-m", "tasks.cli", "red", "1"], cwd=self.d, env=self.env(),
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            deadline = time.monotonic() + 60
+            while not started.exists() and p.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(started.exists(), sig)
+            p.send_signal(sig)
+            out, err = p.communicate(timeout=60)
+            self.assertNotEqual(p.returncode, 0, (sig, out, err))
+            time.sleep(4)
+            self.assertFalse(finished.exists(), (sig, out, err))
+
+    def test_an_unreadable_tests_digest_refuses(self):
+        """Row 34 (impl round 1, opus m): a run that cannot say which test files it ran on refuses, writing nothing."""
+        self.light([("1", "normal", "f returns 2", NEW)])
+        from tasks import red
+        out = io.StringIO()
+        cwd = os.getcwd()
+        with mock.patch.object(red, "tests_digest", return_value=""), \
+                mock.patch.dict(os.environ, self.env(), clear=True), contextlib.redirect_stdout(out), \
+                contextlib.redirect_stderr(out):
+            os.chdir(self.d)
+            try:
+                with self.assertRaises(SystemExit) as cm:
+                    red.cmd_red(["1"])
+            finally:
+                os.chdir(cwd)
+        self.assertNotEqual(cm.exception.code, 0, out.getvalue())
+        self.assertIn("test files", out.getvalue())
         self.assertEqual(self.records(), [])
 
 
@@ -327,6 +396,42 @@ class Close(_Project):
         r, out = self.close()
         self.assertNotEqual(r.returncode, 0, out)
         self.assertIn("other test files", out)
+        self.assertIn("tasks red --mutant", out.split("The way through:", 1)[-1])   # row 33 (impl round 1, I8)
+
+    def test_an_old_pair_does_not_prove_a_green_on_changed_tests(self):
+        """Row 28 (impl round 1, I3: codex): red and green on tests A, a red on tests B, then a green on tests C — C was
+        never seen red, and the older pair proves nothing about it."""
+        self.light([("1", "normal", "f returns 2", NEW)])
+        self.write_new_test()
+        self.red()                                                # red on A
+        self.fix_code()
+        self.red()                                                # green on A
+        t = self.code / "tests" / "test_new.py"
+        t.write_text(t.read_text(encoding="utf-8").replace("src.f(), 2)", "src.f(), 3)"), encoding="utf-8")
+        self.red()                                                # red on B
+        t.write_text(t.read_text(encoding="utf-8").replace("self.assertEqual(src.f(), 3)", "self.assertTrue(src.f())"),
+                     encoding="utf-8")
+        self.red()                                                # green on C
+        self.assertEqual([x["status"] for x in self.records()], ["red", "green", "red", "green"])
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("other test files", out)
+
+    def test_a_test_file_added_after_the_proof_keeps_it(self):
+        """Row 28 (impl round 1, I1: opus, sonnet): a test file written for a later row after this row was proved does
+        not undo its proof."""
+        self.light([("1", "normal", "f returns 2", NEW)])
+        self.write_new_test()
+        self.red()
+        self.fix_code()
+        self.red()
+        (self.code / "tests" / "test_later.py").write_text(
+            "import unittest\n\n\nclass L(unittest.TestCase):\n    def test_l(self):\n        pass\n", encoding="utf-8")
+        self.red()
+        recs = self.records()
+        self.assertNotEqual(recs[1]["tests"], recs[2]["tests"], recs)
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
 
 
 class Mutant(_Project):
@@ -415,6 +520,8 @@ class NoChange(_Project):
         r, out = self.close()
         self.assertEqual(r.returncode, 0, out)
         self.assertTrue(self.done(), out)
+        line = self.call("print(red.numbers_line(p, next((p / '.agent' / 'tasks').glob('001-*'))))")
+        self.assertIn("No behavior changes: a records-only task", line)     # row 33 (impl round 1, agy m)
 
     def test_a_code_change_blocks(self):
         """Row 10: a tracked edit, or a new untracked code file, still blocks `No behavior changes:`."""
@@ -471,6 +578,48 @@ class NoChange(_Project):
         self.g("checkout", "src.py", cwd=self.code)
         self.g("update-index", "--skip-worktree", "src.py", cwd=self.code)
         self.fix_code()
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("src.py", out)
+
+    def test_a_file_dirty_at_the_start_and_restored_counts(self):
+        """Row 29 (impl round 1, I4: codex): a code file dirty at the activation and restored to HEAD since, or an
+        untracked one deleted since, changed the code."""
+        self.fix_code()                                           # dirty before the activation
+        (self.code / "wip.py").write_text("x = 1\n", encoding="utf-8")
+        self.light(no_change="claims no code change")
+        self.g("checkout", "src.py", cwd=self.code)               # back to HEAD's bytes
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("src.py", out)
+        self.fix_code()                                           # as at the start again
+        (self.code / "wip.py").unlink()                           # an untracked code file gone
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("wip.py", out)
+
+    def test_a_name_that_is_not_utf8_counts(self):
+        """Row 30 (impl round 1, I6: codex, grok): a Linux file name that is not UTF-8, dirty at the start and edited
+        since, moves the tree and counts under `No behavior changes:`."""
+        name = os.fsencode(str(self.code)) + b"/legacy-\xff.py"
+        with open(name, "wb") as fh:
+            fh.write(b"X = 1\n")
+        self.light(no_change="claims no code change")
+        before = self.fingerprint()
+        with open(name, "wb") as fh:
+            fh.write(b"X = 2\n")
+        self.assertNotEqual(self.fingerprint(), before)
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("legacy-", out)
+
+    def test_a_committed_edit_undone_in_the_work_tree_counts(self):
+        """Row 31 (impl round 1, I7: grok): HEAD holds a code edit even when the work tree is back to the start's
+        bytes."""
+        self.light(no_change="claims no code change")
+        self.fix_code()
+        self.g("commit", "-qam", "the edit", cwd=self.code)
+        (self.code / "src.py").write_text("def f():\n    return 1\n", encoding="utf-8")
         r, out = self.close()
         self.assertNotEqual(r.returncode, 0, out)
         self.assertIn("src.py", out)

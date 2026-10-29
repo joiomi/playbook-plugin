@@ -6,11 +6,13 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Changed
 - **The red receipt is simple** (task 342, PLAN-PLAYBOOK-2.md 4.1 d). `tasks red` runs each `## Test contract` row in
-  the project as it is now and records it with the tree it ran on and the digest of the test files; the close passes a
-  row seen red, then green on newer code with the same tests (a red on code broken on purpose: `tasks red --mutant
-  "<why>"`). `base.json` keeps each repository's start commit and the files dirty then, by content — nothing is written
+  the project as it is now and records it with the tree it ran on and the digest of the test files, both read for each
+  row; the close passes a row whose newest red is followed by a green on newer code with the same tests (a red on code
+  broken on purpose: `tasks red --mutant "<why>"`); SIGTERM or SIGHUP stops the running row. `base.json` keeps each repository's start commit and the files dirty then, by content — nothing is written
   into `.git/objects` any more (it was every untracked file); `No behavior changes:` counts code only, not Python's
-  caches. Limit: the close does not compare the newest green's tree with the tree it closes (`verify` runs the suite).
+  caches, and counts a start-dirty file restored since, a commit undone in the work tree, a name that is not UTF-8.
+  Limits: the close does not compare the newest green's tree with the tree it closes (`verify` runs the suite), and a
+  test edited after its row was proved keeps the proof.
 
 ### Removed
 - **`tasks red --base` and `--drop`**, the run on a copy of the task's base, the late rows' own bases, the state

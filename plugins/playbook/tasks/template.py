@@ -199,7 +199,8 @@ def contract_note() -> str:
 > - Write the tests, then watch each new behavior's test fail on the code as it is before you write the code.
 > - `tasks red` runs each row on the code as it is now and records the result with the tree it ran on.
 > - Run it once the tests are written, before the code (each row red), and again after the code (each row green).
-> - The close passes a row seen red, then green on newer code, with the same test files; anything else blocks.
+> - The close passes a row whose newest red is followed by a green on newer code with the same test files; anything
+>   else blocks.
 > - A must-not or stay-the-same row shows its sensitivity with a mutant it catches; so does a row added after the code:
 >   break the code on purpose, run `tasks red --mutant "<what you broke>"`, restore it, run `tasks red` again.
 > - Nothing to test? `No behavior changes: <why>` (the close checks no code file changed since the start).

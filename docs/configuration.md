@@ -70,7 +70,7 @@ Two keys tune `tasks red` (task 280, PHASE-B.md item 9b; `docs/cli.md` has the c
 }
 ```
 
-- `red_run` — the command a `## Test contract` row's **test id** runs through: a string holding `{test}`, replaced by the id (a backticked span with no white space; a span with white space is run as a command itself). Absent, or without `{test}`, a row that names an id is recorded `unrunnable` ("no red_run"); command rows still run. It runs with the copy's project root as its working directory — a `code_roots` project's command starts there (`cd playbook-plugin && python3 -m unittest {test}` in this repository).
+- `red_run` — the command a `## Test contract` row's **test id** runs through: a string holding `{test}`, replaced by the id (a backticked span with no white space; a span with white space is run as a command itself). Absent, or without `{test}`, a row that names an id is recorded `unrunnable` ("no red_run"); command rows still run. It runs with the project root as its working directory — a `code_roots` project's command starts there (`cd playbook-plugin && python3 -m unittest {test}` in this repository).
 - `red_timeout` — seconds one row's command may run (default 300); past it the row is `timeout`, never red. A non-number or a value ≤ 0 means the default.
 
 ## `.agent/config.json` — `merge_verify` (project policy)
