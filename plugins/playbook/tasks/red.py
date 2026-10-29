@@ -751,17 +751,29 @@ def _load_base(task_dir: Path) -> "dict | None":
 
 # ---------------------------------------------------------------------------- a run (task 342)
 
-# SIGTERM / SIGHUP / SIGINT while `tasks red` runs take the interrupt's path: the row's process group is killed (impl
-# round 1, I5: codex). While a row's process is being started they are held — a list of those that came — and the
-# run raises them once it can kill the group (post-panel run 1, codex: a signal in that window left the row running).
+# SIGTERM / SIGHUP / SIGINT while `tasks red` runs take the interrupt's path (impl round 1, I5: codex), and the handler
+# itself first kills the process group of the row that runs (`_ROW`) — wherever the interrupt lands, after the wait
+# too (post-panel run 2, codex: a signal between the wait and the kill left a child of the row running). While a
+# row's process is being started they are held — a list of those that came — and raised once `_ROW` is known (post-
+# panel run 1, codex: a signal in that window left the row running).
 _HELD: "list[int] | None" = None
+_ROW: "int | None" = None
 _STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+
+
+def _kill_group(pid: int) -> None:
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except OSError:
+        pass
 
 
 def _stop(signum, _frame):
     if _HELD is not None:
         _HELD.append(signum)
         return
+    if _ROW is not None:
+        _kill_group(_ROW)
     raise KeyboardInterrupt(f"signal {signum}")
 
 
@@ -779,46 +791,41 @@ def _run_row(cmd: str, project: Path, home: Path, timeout: float) -> "dict":
     env = _row_env(dict(os.environ), home, Path(project).parent,
                    caged=os.environ.get("PLAYBOOK_SANDBOXED") == "1")
     env["PYTHONDONTWRITEBYTECODE"] = "1"                # a row writes no cache into the tree (plan panel P1)
-    global _HELD
+    global _HELD, _ROW
     t0 = time.monotonic()
     _HELD = []
     try:
         p = subprocess.Popen([bash, "-c", cmd], cwd=str(project), env=env, stdin=subprocess.DEVNULL,
                              stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+        _ROW = p.pid                                    # still held: from here the handler can kill the group
     except BaseException:
         _HELD = None
         raise
     try:
-        held, _HELD = _HELD, None                       # inside the try: from here a signal reaches the kill below
+        held, _HELD = _HELD, None
         if held:
             raise KeyboardInterrupt(f"signal {held[0]}")
-        out, _ = p.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
         try:
-            os.killpg(p.pid, signal.SIGKILL)
-        except OSError:
-            pass
-        try:
-            out, _ = p.communicate(timeout=5)
-        except subprocess.TimeoutExpired:            # a child outside the group keeps the pipe
-            if p.stdout is not None:
-                p.stdout.close()
-            p.wait()
-            out = b"(a child of the row kept its output open after the time-out; the output was cut)"
-        return {"status": "timeout", "exit": None, "seconds": round(time.monotonic() - t0, 2),
-                "last": _last_line(out or b""), "error": _first_error(out or b""), "reader": "", "skips": 0}
+            out, _ = p.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            _kill_group(p.pid)
+            try:
+                out, _ = p.communicate(timeout=5)
+            except subprocess.TimeoutExpired:            # a child outside the group keeps the pipe
+                if p.stdout is not None:
+                    p.stdout.close()
+                p.wait()
+                out = b"(a child of the row kept its output open after the time-out; the output was cut)"
+            return {"status": "timeout", "exit": None, "seconds": round(time.monotonic() - t0, 2),
+                    "last": _last_line(out or b""), "error": _first_error(out or b""), "reader": "", "skips": 0}
+        code = p.returncode
+        _kill_group(p.pid)                              # a child the row left behind goes with it
     except BaseException:
-        try:
-            os.killpg(p.pid, signal.SIGKILL)            # an interrupt stops the row's process group too
-        except OSError:
-            pass
+        _kill_group(p.pid)                              # an interrupt stops the row's process group too
         p.wait()
         raise
-    code = p.returncode
-    try:
-        os.killpg(p.pid, signal.SIGKILL)                # a child the row left behind goes with it
-    except OSError:
-        pass
+    finally:
+        _ROW = None
     status, reader, skips = _side_status(code, out or b"")
     if status == "green" and skips:
         status = "partly skipped"                       # a green that skipped a test proves nothing (task 281)
@@ -861,7 +868,8 @@ def _is_test_file(path: str) -> bool:
 
 
 def _content(repo: Path, rel: str) -> str:
-    """A file's bytes as a sha256, read by Python (never `git hash-object -w`: nothing is written to `.git`); a link
+    """A file's bytes as a sha256, read by Python (never `git hash-object -w`: nothing is written to `.git`), with
+    `+x` when it is executable (git keeps that bit: a script that loses it changed — post-panel run 2, codex); a link
     by its target; a path that is gone, `deleted`."""
     p = Path(repo) / rel
     try:
@@ -871,7 +879,8 @@ def _content(repo: Path, rel: str) -> str:
         with open(p, "rb") as fh:
             for chunk in iter(lambda: fh.read(1 << 20), b""):
                 h.update(chunk)
-        return h.hexdigest()
+            x = "+x" if os.fstat(fh.fileno()).st_mode & stat.S_IXUSR else ""
+        return h.hexdigest() + x
     except FileNotFoundError:
         return "deleted"
     except IsADirectoryError:
@@ -1128,14 +1137,25 @@ def _problems(rows: "list[dict]") -> "list[str]":
     return out
 
 
-def _head_content(repo: Path, rel: str) -> str:
-    """`_content` of a file as HEAD holds it (`git cat-file`, reads only): its bytes' sha256, `deleted` when HEAD has
-    none. A link's blob is not read as `link:`: it never matches a start's link, so it counts (fails closed)."""
-    there = _git(repo, ["rev-parse", "-q", "--verify", f"HEAD:{rel}"])
-    if there.returncode != 0:
+def _rev_content(repo: Path, rev: str, rel: str) -> str:
+    """`_content` of a file as commit `rev` holds it (`git ls-tree`, `git cat-file`: reads only): its bytes' sha256
+    with `+x` for mode 100755, a link by its target, `deleted` when `rev` has none, the kind and object otherwise (a
+    submodule: never a file's)."""
+    ls = _git(repo, ["--literal-pathspecs", "ls-tree", "-z", rev, "--", rel])
+    if ls.returncode != 0:
+        return "unreadable"
+    entry = ls.stdout.split("\0", 1)[0]
+    if not entry:
         return "deleted"
-    blob = _git(repo, ["cat-file", "blob", there.stdout.strip()], text=False)
-    return hashlib.sha256(blob.stdout).hexdigest() if blob.returncode == 0 else "unreadable"
+    mode, kind, obj = entry.split("\t", 1)[0].split(" ")
+    if kind != "blob":
+        return f"{kind}:{obj}"
+    blob = _git(repo, ["cat-file", "blob", obj], text=False)
+    if blob.returncode != 0:
+        return "unreadable"
+    if mode == "120000":
+        return "link:" + blob.stdout.decode("utf-8", "surrogateescape")
+    return hashlib.sha256(blob.stdout).hexdigest() + ("+x" if mode == "100755" else "")
 
 
 def _shown(name: str) -> str:
@@ -1175,18 +1195,15 @@ def _code_changed(project: Path, task_dir: Path, cfg: dict) -> "tuple[list[str] 
             if moved is None or moved.returncode != 0:
                 return None
             committed = set(_z(moved.stdout))
-        for e in _z(tagged.stdout):                     # git hides a flagged file's edit: read its bytes
+        for e in _z(tagged.stdout):                     # git hides a flagged file's edit: read its bytes and mode
             if len(e) > 2 and (e[0].islower() or e[0] == "S"):
                 rel = e[2:]
-                blob = _git(repo, ["rev-parse", "-q", "--verify", f"{start}:{rel}"]) if start else None
-                now = _git(repo, ["hash-object", "--", rel])             # no -w: nothing is written
-                if blob is None or blob.returncode != 0 or now.returncode != 0 \
-                        or blob.stdout.strip() != now.stdout.strip():
+                if not start or _rev_content(repo, start, rel) != _content(repo, rel):
                     paths.add(rel)
         out = {n for n in paths if not _cache_file(n) and not (n in dirty and dirty[n] == _content(repo, n))}
         # a commit since the start counts on its own — the work tree's bytes do not hide it — unless it holds exactly
         # the bytes the file had at the start (post-panel run 1, codex)
-        out |= {n for n in committed if not _cache_file(n) and not (n in dirty and dirty[n] == _head_content(repo, n))}
+        out |= {n for n in committed if not _cache_file(n) and not (n in dirty and dirty[n] == _rev_content(repo, "HEAD", n))}
         return sorted(out)
     with _no_git_overrides():
         for scope, r in sorted(base["scopes"].items()):

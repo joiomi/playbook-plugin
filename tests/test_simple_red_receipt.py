@@ -313,6 +313,64 @@ class Run(_Project):
             self.assertFalse(finished.exists(), (sig, out.getvalue()))
             signal.signal(sig, old)
 
+    def test_a_signal_after_the_wait_kills_the_group(self):
+        """Row 38 (post-panel run 2, codex): SIGTERM or SIGHUP after the row's shell ended — its wait over, the group
+        not yet killed — still kills the group: a background child of the row writes nothing after."""
+        marks = Path(tempfile.mkdtemp(prefix="pb342-after-"))
+        self.addCleanup(shutil.rmtree, marks, True)
+        finished = marks / "finished"
+        self.light([("1", "normal", "leaves a child", f"`(sleep 2; touch {finished}) >/dev/null 2>&1 &`")])
+        from tasks import red
+
+        class Row(subprocess.Popen):
+            """The row's process: its exit code, read once its wait is over, brings the signal."""
+            sig = None
+            armed = False
+
+            @property
+            def returncode(self):
+                if self.armed:
+                    self.armed = False
+                    os.kill(os.getpid(), self.sig)
+                return self.__dict__.get("_rc")
+
+            @returncode.setter
+            def returncode(self, value):
+                self.__dict__["_rc"] = value
+
+            def communicate(self, *a, **k):
+                out = super().communicate(*a, **k)
+                self.armed = True
+                return out
+        real = subprocess.Popen
+
+        def guard(signum, _frame):                          # the test runner never dies of a signal left unhandled
+            raise AssertionError(f"signal {signum} reached no handler of `tasks red`")
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            if finished.exists():
+                finished.unlink()
+            old = signal.signal(sig, guard)
+            self.addCleanup(signal.signal, sig, old)
+            Row.sig = sig
+
+            def launch(*a, **k):
+                return (Row if k.get("start_new_session") else real)(*a, **k)
+            out = io.StringIO()
+            cwd = os.getcwd()
+            with mock.patch.object(red.subprocess, "Popen", launch), \
+                    mock.patch.dict(os.environ, self.env(), clear=True), contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(out):
+                os.chdir(self.d)
+                try:
+                    with self.assertRaises(SystemExit) as cm:
+                        red.cmd_red(["1"])
+                finally:
+                    os.chdir(cwd)
+            self.assertEqual(cm.exception.code, 130, (sig, out.getvalue()))
+            time.sleep(3)
+            self.assertFalse(finished.exists(), (sig, out.getvalue()))
+            signal.signal(sig, old)
+
     def test_an_unreadable_tests_digest_refuses(self):
         """Row 34 (impl round 1, opus m): a run that cannot say which test files it ran on refuses, writing nothing."""
         self.light([("1", "normal", "f returns 2", NEW)])
@@ -684,6 +742,28 @@ class NoChange(_Project):
         r, out = self.close()
         self.assertNotEqual(r.returncode, 0, out)
         self.assertIn("src.py", out)
+
+    def test_a_lost_executable_bit_counts(self):
+        """Row 37 (post-panel run 2, codex): a script dirty at the start loses its executable bit — in the work tree,
+        then committed — and the code changed; committed with the bit kept, it is no change."""
+        sh = self.code / "run.sh"
+        sh.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
+        os.chmod(sh, 0o755)                                        # untracked, dirty at the start
+        self.light(no_change="claims no code change")
+        os.chmod(sh, 0o644)
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("run.sh", out)
+        self.g("add", "run.sh", cwd=self.code)
+        self.g("commit", "-qm", "the script, not executable", cwd=self.code)
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("run.sh", out)
+        os.chmod(sh, 0o755)
+        self.g("add", "run.sh", cwd=self.code)
+        self.g("commit", "-qm", "the script as it was", cwd=self.code)
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
 
     def test_a_committed_edit_undone_in_the_work_tree_counts(self):
         """Row 31 (impl round 1, I7: grok): HEAD holds a code edit even when the work tree is back to the start's
