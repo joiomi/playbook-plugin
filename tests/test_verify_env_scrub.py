@@ -80,6 +80,13 @@ class VerifyEnvScrub(unittest.TestCase):
                 else:
                     os.environ[k] = v
         self.assertEqual([k for k in names if k in env], [])
+        # the same seven as merge-verify's runners (impl round 1, sonnet): one list, pinned
+        import importlib.util as _ilu
+        _mv = _HERE.parent / "plugins" / "playbook" / "skills" / "merge" / "merge-verify.py"
+        _spec = _ilu.spec_from_file_location("_pb_mv_for_scrub", _mv)
+        _mod = _ilu.module_from_spec(_spec)
+        _spec.loader.exec_module(_mod)
+        self.assertEqual(names, tuple(_mod.GIT_REPOSITORY_VARIABLES))
 
     def test_verify_env_turns_off_git_background_maintenance(self):
         """Task 143 (retro 134 (c)): a test repo's auto-maintenance can still be writing

@@ -103,21 +103,25 @@ class EndToEnd(unittest.TestCase):
     its HEAD, its index and its config."""
 
     def test_a_verify_under_git_hook_variables_leaves_the_real_repository(self):
+        # the fixture's own git calls run without any GIT_* (impl round 1, grok): run from a hook, `git init <dir>`
+        # would otherwise reinitialize the hook's repository
+        clean = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
         with tempfile.TemporaryDirectory() as d:
             real = Path(d) / "real"
             real.mkdir()
             git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"]
-            subprocess.run(["git", "init", "-q", str(real)], check=True)
+            subprocess.run(["git", "init", "-q", str(real)], check=True, env=clean)
             (real / "a.txt").write_text("a\n", encoding="utf-8")
-            subprocess.run([*git, "-C", str(real), "add", "a.txt"], check=True)
-            subprocess.run([*git, "-C", str(real), "commit", "-q", "-m", "one"], check=True)
+            subprocess.run([*git, "-C", str(real), "add", "a.txt"], check=True, env=clean)
+            subprocess.run([*git, "-C", str(real), "commit", "-q", "-m", "one"], check=True, env=clean)
             head = subprocess.run(["git", "-C", str(real), "rev-parse", "HEAD"], capture_output=True, text=True,
-                                  check=True).stdout.strip()
+                                  check=True, env=clean).stdout.strip()
             config = (real / ".git" / "config").read_bytes()
             index = (real / ".git" / "index").read_bytes()
             project = Path(d) / "project"
             (project / ".agent").mkdir(parents=True)
-            verify = ("t=$(mktemp -d) && cd \"$t\" && git init -q && git -c user.name=t -c user.email=t@t "
+            # the suite's temporary repository inside the project (impl round 1, agy, codex: not a leak under /tmp)
+            verify = ("t=$(mktemp -d -p \"$PWD\") && cd \"$t\" && git init -q && git -c user.name=t -c user.email=t@t "
                       "-c commit.gpgsign=false commit -q --allow-empty -m from-the-suite && git config core.bare true")
             (project / ".agent" / "config.json").write_text(
                 '{"verify": {"_always": [%s]}}' % __import__("json").dumps(verify), encoding="utf-8")
@@ -128,8 +132,7 @@ class EndToEnd(unittest.TestCase):
                                capture_output=True, timeout=300)
             self.assertIn("[PASS]", r.stdout + r.stderr, r.stdout + r.stderr)
             after = subprocess.run(["git", "-C", str(real), "rev-parse", "HEAD"], capture_output=True, text=True,
-                                   env={k: v for k, v in os.environ.items() if not k.startswith("GIT_")},
-                                   check=True).stdout.strip()
+                                   env=clean, check=True).stdout.strip()
             self.assertEqual(after, head)
             self.assertEqual((real / ".git" / "config").read_bytes(), config)
             self.assertEqual((real / ".git" / "index").read_bytes(), index)
