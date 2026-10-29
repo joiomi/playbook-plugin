@@ -26,14 +26,14 @@ from pathlib import Path
 # The lifecycle registrations the plugin ships. Event name -> the script
 # basename(s) expected under the sibling scripts/ dir. Most events run one hook;
 # PreToolUse runs three (the task gate, the destructive-command guard and the
-# task-folder watch — task 196), so the value is a LIST — every listed script
-# must be registered for that event.
+# dialog log), so the value is a LIST — every listed script must be registered
+# for that event.
 EXPECTED_HOOKS = {
     "SessionStart": ["session-start-hook"],
-    "PreToolUse": ["task-gate-hook", "command-guard-hook", "task-dir-watch-hook", "dialog-log-hook"],
+    "PreToolUse": ["task-gate-hook", "command-guard-hook", "dialog-log-hook"],
     "UserPromptSubmit": ["chat-log-hook"],
-    "PostToolUse": ["state-echo-hook", "task-dir-watch-hook", "dialog-log-hook"],
-    "PostToolUseFailure": ["state-echo-hook", "task-dir-watch-hook"],
+    "PostToolUse": ["state-echo-hook", "dialog-log-hook"],
+    "PostToolUseFailure": ["state-echo-hook"],
     "Stop": ["stop-hook", "agent-usage-hook"],          # task 244: the agent's tokens, recorded at each turn's end
     "SessionEnd": ["session-end-hook"],
 }

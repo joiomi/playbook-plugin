@@ -126,10 +126,12 @@ if [ -n "$PROJECT_DIR" ]; then
     # of exiting: session start is where the user can actually see and fix it.
     LANES_NO_MARKER=$(lanes_without_marker "$PROJECT_DIR" | tr '\n' ' ')
     # Task 197 (its plan panel P1): a lane with `tasks/` and no task registry gets one now, from what stands — the
-    # task-folder watch and the close judge provenance by it. Never a failure of the session start.
+    # close judges provenance by it. Never a failure of the session start. (Through task-dir-watch.py until task 339
+    # removed the watch: the plugin root is the first argument, so `tasks.registry` is the plugin's own.)
     if [ -z "$LANES_NO_MARKER" ] && [ -d "$AGENT_DIR/tasks" ] && [ ! -e "$AGENT_DIR/task-registry" ] \
        && [ ! -L "$AGENT_DIR/task-registry" ]; then
-        python3 -E -s "$HOOK_DIR/task-dir-watch.py" --enrol "$PROJECT_DIR" "$AGENT_DIR" > /dev/null 2>&1 || true
+        python3 -I -c 'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); from tasks.registry import ensure_enrolled; ensure_enrolled(Path(sys.argv[2]), Path(sys.argv[3]))' \
+            "$HOOK_DIR/.." "$PROJECT_DIR" "$AGENT_DIR" > /dev/null 2>&1 || true
     fi
     PB_HJ_DETAIL="session set up"
     if [ -z "$SESSION_ID" ]; then

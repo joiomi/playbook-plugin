@@ -10,6 +10,11 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   skill or command called it; `tasks merge-doctor` stays. Merging lanes comes back with the lanes.
 - **The worktree check of the close and `tasks verify`** (task 321, never released). Audit 6 found it too loose where a
   worktree holds `.agent/tasks` and too tight where it holds none; the model uses no worktrees.
+- **The task-folder watch** (`task-dir-watch-hook`, `task-dir-watch.py` and their three hooks.json entries; task 339,
+  PLAN-PLAYBOOK-2.md 4.1 b). It ran on every tool call and held the session that made a task folder by hand until the
+  folder was removed or adopted; the audits' journals show no real hold of it. `tasks work done` still refuses while a
+  hand-made task folder stands (ledger PB-TASK-DIR-CLOSE), now the only check, and a session's start still writes a
+  lane's missing task registry. Bound: with the registry deleted, a re-enrolment takes in a hand-made folder too.
 
 ### Fixed
 - **A task record that is not valid UTF-8 is refused, never rewritten** (task 335). Read leniently, a byte that is not

@@ -1,9 +1,9 @@
 """The task registry — which task directories the CLI made (task 195, PLAN §S14 T5b).
 
 B31's provenance, by the owner's answer of 2026-10-13 12:27 — "Registru scris de CLI, folder creat atomic
-(Recomandat)": a directory under `tasks/` that the registry does not name is hand-made. Detecting one after a shell
-command or a Write, and holding the session that made it, is task 196's watch (`scripts/task-dir-watch.py`); it and
-the close read this module through `unknown_now`.
+(Recomandat)": a directory under `tasks/` that the registry does not name is hand-made. The close (`tasks work done`)
+refuses while one stands, reading this module through `unknown_now` (task 196's after-the-call watch read it too, and
+held the session that made one, until task 339 removed it — PLAN-PLAYBOOK-2.md 4.1 b).
 
 One file per lane, BESIDE `tasks/` — `.agent[/<lane>]/task-registry` — never inside it: about ten readers list
 `tasks/` itself and must not meet anything that is not a task directory. It is MACHINE-LOCAL (gitignored with its lock
@@ -51,12 +51,6 @@ REGISTRY_NAME = "task-registry"
 LOCK_NAME = "task-registry.lock"
 _PROC_SELF_FD = "/proc/self/fd"           # the held directories are reached through it (a test may point it away)
 TEMP_PREFIX = ".task-creating."
-FLAG_NAME = "task_dir_flag"                  # a session's task-folder flag (scripts/task-dir-watch.py, task 196)
-FLAG_PENDING = "task_dir_flag.pending."     # a detection its post wrote without the flag's lock
-SNAPSHOT_NAME = "task_dirs_before"          # the watch's listing before a call (`….<tool_use_id>`)
-_FLAG_MAX = 1 << 20
-_GONE = object()                            # a file listed and then removed before it was read
-SNAPSHOT_MAX_AGE = 86400                    # the watch's own (a call another hook denied leaves its snapshot)
 # a task directory's name: its number, a dash, a slug — no whitespace, no separator, nothing bash cannot carry.
 # Always `fullmatch`: `$` alone accepts a trailing newline, and a name with one would split its registry line (task
 # 195, impl panel r2).
@@ -291,19 +285,16 @@ def unknown_now(project_path, agent_dir, names: "list[str] | None" = None, *,
     rename and its registration), and while a creator holds it, a `reserved` folder is that creation (task 196, plan
     panel P14; read under the lock, a creator that registers and lets go between two reads cannot make a folder look
     hand-made). With no registry: None (`no_registry="none"`), or what the git rule alone does not know (`"git"`, the
-    watch — a call during which the registry vanished, a hold that outlives it: task 196's impl panel r1 I6 — and,
-    since task 197, the close: its plan panel P4). Only DIRECTORIES count (a file `12-notes.md` is no task
+    close since task 197: its plan panel P4). Only DIRECTORIES count (a file `12-notes.md` is no task
     folder — impl panel r1 I11). A name the git rule cannot answer within `git_timeout` is unknown. Never waits, never
     writes. Raises RegistryUnreadable, and LaneUnreadable when `tasks/` or an entry cannot be read (r2 J9).
 
-    An `enrolled` row is no knowledge of a folder a standing task-folder flag of the lane names (task 197, impl panel
-    r1 I2 — fable, opus, sonnet: with the registry gone, a creator re-enrolled a flagged hand-made folder and the close
-    read it as known): an enrolment records what stood, and a folder is flagged only while it is unknown, so such a
-    row was written after the fact. When a flag cannot be read, every `enrolled` folder among `names` counts unknown
-    (fail closed). The git rule still applies: a committed one is known. `before`, when given, is the folders that
-    stood before a call still running (the watch's snapshot): an `enrolled` row of a folder outside it was written by a
-    creator during that call, which re-enrolled what the call made (task 197, impl panel r2 J5 — codex, reproduced: one
-    call that made a folder, ran `tasks new` and then `tasks work done` closed before its post could flag it)."""
+    `before`, when given, is the folders that stood earlier — the close passes its own listing from the check before
+    verify to the re-check at the commit: an `enrolled` row of a folder outside it was written by a creator meanwhile,
+    which re-enrolled what verify made (task 197, impl panel r2 J5; task 339 — it was the watch's snapshot of the
+    call). The git rule still applies: a committed one is known. An `enrolled` row of a folder that stood at the first
+    enrolment is knowledge: with the registry deleted, a re-enrolment takes in a hand-made folder too (the bound
+    task 339 states — task 197's flags, which marked such a folder, went with the watch)."""
     lane = Path(agent_dir)
     tasks_dir = lane / "tasks"
     if names is None:
@@ -318,211 +309,17 @@ def unknown_now(project_path, agent_dir, names: "list[str] | None" = None, *,
         if no_registry != "git":
             return None
         entries = {}
-    flagged, complete = (_lane_flags(lane) if any(entries.get(n) == "enrolled" for n in names) else (set(), True))
 
     def unknown_row(n: str) -> bool:
         origin = entries.get(n)
         if origin == "enrolled":
-            return n in flagged or not complete or (before is not None and n not in before)
+            return before is not None and n not in before
         return origin in (None, "reserved") and not (creating and origin == "reserved")
 
     left = [n for n in names if LOOSE_TASK_DIR_RE.match(n) and _is_dir(tasks_dir / n) and unknown_row(n)]
     strict = [n for n in left if TASK_DIR_RE.fullmatch(n)]   # only such a name can be a committed task
     committed = _committed_task_mds(project_path, lane, strict, timeout=git_timeout) if strict else set()
     return [n for n in left if n not in committed]
-
-
-def _lane_flags(agent_dir) -> "tuple[set[str], bool]":
-    """The folder names the lane's standing task-folder flags name — every session's `task_dir_flag` and its pending
-    entries (the watch's, task 196) — and whether every one could be read. Read only, and never through a link: a
-    `sessions`, a session directory or a flag that is a link, a flag that is not the watch's JSON, a directory that
-    cannot be listed — all read as `False`, and the caller fails closed (task 197, impl panel r1 I2). An unfinished
-    temporary file (`….tmp`) is no flag yet; a session that ENDED took its flag with it (session-end removes its
-    directory). Each session's main flag is read before its pending entries, and a flag removed between the listing
-    and its read restarts the scan — three times, then the store reads as unreadable (impl panel r2 J6, codex,
-    reproduced: a re-check merged a pending entry into the main flag after the main flag was read; the entry, gone,
-    read as nothing, and the folder was missed)."""
-    for _try in range(3):
-        names, complete, vanished = _scan_lane_flags(agent_dir)
-        if not vanished:
-            return names, complete
-    return names, False
-
-
-def _scan_lane_flags(agent_dir) -> "tuple[set[str], bool, bool]":
-    """One pass of `_lane_flags`: (the names, every flag read, a listed flag vanished before it was read)."""
-    import stat
-    names: "set[str]" = set()
-    vanished = False
-    try:
-        sfd = os.open(Path(agent_dir) / "sessions", _DIR_FLAGS | os.O_NOFOLLOW)
-    except FileNotFoundError:
-        return names, True, False
-    except OSError:
-        return names, False, False
-    complete = True
-    try:
-        try:
-            with os.scandir(sfd) as it:
-                sids = [e.name for e in it]
-        except OSError:
-            return names, False, False
-        for sid in sids:
-            try:
-                dfd = os.open(sid, _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=sfd)
-            except FileNotFoundError:
-                continue                  # gone meanwhile
-            except NotADirectoryError:
-                # a plain file is no session; a link answers ENOTDIR here too (O_DIRECTORY with O_NOFOLLOW — measured)
-                try:
-                    if stat.S_ISLNK(os.stat(sid, dir_fd=sfd, follow_symlinks=False).st_mode):
-                        complete = False
-                except OSError:
-                    complete = False
-                continue
-            except OSError:
-                complete = False          # a directory it may not open
-                continue
-            try:
-                try:
-                    with os.scandir(dfd) as it:
-                        found = [e.name for e in it if e.name == FLAG_NAME
-                                 or (e.name.startswith(FLAG_PENDING) and not e.name.endswith(".tmp"))]
-                except OSError:
-                    complete = False
-                    continue
-                for fname in sorted(found, key=lambda n: (n != FLAG_NAME, n)):    # the main flag first
-                    got = _flag_names_at(dfd, fname)
-                    if got is _GONE:
-                        vanished = True
-                    elif got is None:
-                        complete = False
-                    else:
-                        names |= got
-            finally:
-                os.close(dfd)
-    finally:
-        os.close(sfd)
-    return names, complete, vanished
-
-
-def _json_at(dfd: int, fname: str):
-    """One of the watch's JSON files in the directory held as `dfd`, never through a link: the object; `_GONE` when it
-    is not there (any more); None when it cannot be read as ASCII JSON of at most `_FLAG_MAX` bytes."""
-    import json
-    import stat
-    try:
-        fd = os.open(fname, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0), dir_fd=dfd)
-    except FileNotFoundError:
-        return _GONE
-    except OSError:
-        return None
-    try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
-            return None
-        raw = os.read(fd, _FLAG_MAX + 1)
-    except OSError:
-        return None
-    finally:
-        os.close(fd)
-    if len(raw) > _FLAG_MAX:
-        return None
-    try:
-        return json.loads(raw.decode("ascii"))
-    except (UnicodeDecodeError, ValueError):
-        return None
-
-
-def _flag_names_at(dfd: int, fname: str):
-    """The folder names one flag file names (`<lane>/tasks/<name>` entries); `_GONE` when it is not there; None when it
-    cannot be read as the watch's JSON."""
-    data = _json_at(dfd, fname)
-    if data is _GONE:
-        return _GONE
-    if not isinstance(data, dict) or not isinstance(data.get("folders"), list):
-        return None
-    out = set()
-    for f in data["folders"]:
-        if not isinstance(f, str):
-            return None
-        head, sep, name = f.rpartition("/tasks/")
-        if sep and name and "/" not in name:
-            out.add(name)
-    return out
-
-
-def standing_before(agent_dir) -> "set[str] | None":
-    """The task folders that stood before every watched call still running in the lane — any session's: the
-    intersection of the standing pre-call snapshots (`sessions/*/task_dirs_before*`, the watch's — task 196) younger
-    than `SNAPSHOT_MAX_AGE`; None when there are none (no watched call is running, or no watch runs). Read only, never
-    through a link; a snapshot or a session directory it cannot read gives an empty set, and the caller fails closed.
-    The close passes it to `unknown_now` (task 197, impl panel r2 J5; the single judge's run 1, K3 — codex: a close
-    that read only its own session's snapshots passed a folder another session's running call had made)."""
-    import time
-    try:
-        lfd = os.open(Path(agent_dir), _DIR_FLAGS)
-    except OSError:
-        return None
-    try:
-        try:
-            sfd = os.open("sessions", _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=lfd)
-        except FileNotFoundError:
-            return None
-        except OSError:
-            return set()
-        try:
-            try:
-                with os.scandir(sfd) as it:
-                    sids = sorted(e.name for e in it)
-            except OSError:
-                return set()
-            out: "set[str] | None" = None
-            now = time.time()
-            for sid in sids:
-                try:
-                    dfd = os.open(sid, _DIR_FLAGS | os.O_NOFOLLOW, dir_fd=sfd)
-                except FileNotFoundError:
-                    continue                      # ended meanwhile
-                except NotADirectoryError:
-                    import stat
-                    try:
-                        if stat.S_ISLNK(os.stat(sid, dir_fd=sfd, follow_symlinks=False).st_mode):
-                            return set()          # a session directory that is a link (ENOTDIR here — measured)
-                    except OSError:
-                        return set()
-                    continue                      # a plain file: no session
-                except OSError:
-                    return set()
-                try:
-                    try:
-                        with os.scandir(dfd) as it:
-                            snaps = sorted(e.name for e in it
-                                           if (e.name == SNAPSHOT_NAME or e.name.startswith(SNAPSHOT_NAME + "."))
-                                           and not e.name.endswith(".tmp"))
-                    except OSError:
-                        return set()
-                    for name in snaps:
-                        try:
-                            if now - os.stat(name, dir_fd=dfd, follow_symlinks=False).st_mtime > SNAPSHOT_MAX_AGE:
-                                continue          # a call that never posted, not a running one
-                        except FileNotFoundError:
-                            continue
-                        except OSError:
-                            return set()
-                        data = _json_at(dfd, name)
-                        if data is _GONE:
-                            continue              # its call's post took it meanwhile
-                        folders = data.get("folders") if isinstance(data, dict) else None
-                        if not isinstance(folders, list) or not all(isinstance(f, str) for f in folders):
-                            return set()
-                        out = set(folders) if out is None else out & set(folders)
-                finally:
-                    os.close(dfd)
-            return out
-        finally:
-            os.close(sfd)
-    finally:
-        os.close(lfd)
 
 
 # ---------------------------------------------------------------- writers (each under the lane lock)
@@ -556,7 +353,7 @@ def ensure_enrolled(project_path, agent_dir) -> bool:
     """Write the registry of a lane that has `tasks/` and none yet, enrolling what stands (the trust a first enrolment
     has); True when it wrote one. Called at a session's start and at `tasks work <N>` (task 197, its plan panel P1:
     with the Bash pre-run check gone, a lane with no registry — a fresh clone, a new init, a project upgraded from
-    1.6.1 — must still be one the watch and the close can judge). A registry that exists, readable or not, is left
+    1.6.1 — must still be one the close can judge). A registry that exists, readable or not, is left
     alone; never follows a link at the registry's path. The lane is opened once and held, as a creator holds it: the
     lock, the listing and the write all go through it, so a lane swapped for a link meanwhile keeps the replacement's
     registry (impl panel r1 I4, codex, reproduced: the write by path overwrote it); without `/proc/self/fd` it
@@ -805,8 +602,8 @@ def adopt(project_path, agent_dir, name: str) -> str:
             raise AdoptRefused(f"{tm} is missing or not a regular file — a task directory holds its task.md")
         rows = _rows_locked(agent_dir)
         mine = [r for r in rows if r[0] == name]
-        # an `enrolled` row is taken over by the explicit adoption (task 197, P3: a re-enrolment after the registry was
-        # deleted enrols a flagged folder too — only `tasks adopt` releases it, so it records the adoption)
+        # an `enrolled` row is taken over by the explicit adoption (task 197, P3: it records the adoption, with a new
+        # time)
         if mine and mine[0][1] not in ("reserved", "enrolled"):
             return "known"
         # The number is another folder's when another FOLDER holds it — registered, committed or not (task 195,

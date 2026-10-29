@@ -118,9 +118,6 @@ for id in "${ROWS[@]}"; do
         PB-SESSION-ID-NO-ALLOW)
             echo "=== PB-SESSION-ID-NO-ALLOW: real sessions: in default permission mode a plain \`.claude/bin/tasks status\` runs and a \`touch\` chained to a tasks call is refused; with permissions skipped the chained call runs with the hook's prefix"
             row "$id" ;;
-        PB-TASK-DIR-WATCH)
-            echo "=== PB-TASK-DIR-WATCH: a real session: a task folder copied by hand is flagged after the call, the next Edit held, the removal lets it go; a copy by a FAILING command caught (PostToolUseFailure), the next call held, \`tasks adopt\` releases it"
-            row "$id" ;;
         PB-PAYLOAD-NORMALIZE)
             echo "=== PB-PAYLOAD-NORMALIZE: real hook payloads captured in a session and fed to the normalizer: native bytes unchanged, fields its own; a foreign dialect rewritten"
             row "$id" ;;

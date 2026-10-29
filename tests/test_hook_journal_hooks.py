@@ -3,7 +3,8 @@
 The owner, 2026-10-16 10:25: "e important ca playbook sa isi salveze infomratiile legat de ce face" — the line says
 which hook ran, for which event and tool call, what it decided and why. Plan panel 2026-10-16 (sonnet I4): a decision
 set inside `$(…)` would be lost, so this file is a TABLE — one crafted payload per exit site of distinct meaning in
-the task gate, the state echo, the stop hook and the task-folder watch, and the others' main ways out — asserting the
+the task gate, the state echo and the stop hook (and the task-folder watch until task 339 removed it), and the
+others' main ways out — asserting the
 one new line's hook, decision, detail and exit status. The tool-call id comes from the payload's own key (the
 normalizer's frame, v4), never a key nested in the tool's input.
 
@@ -459,21 +460,6 @@ class TheOthers(_Project):
             stuck.chmod(0o755)
         rec, _ = self.one("session-end-hook", end, 0, "skip", "python < 3.10", PATH=self.stub_python())
         self.assertEqual(rec["event"], "SessionEnd")
-
-    def test_the_task_folder_watch(self):
-        H = "task-dir-watch-hook"
-        self.one(H, pre("Bash", {"command": "ls"}), 0, "allow", "watched")
-        self.one(H, pre("Edit", {"file_path": str(self.project / "src" / "app.py"), "old_string": "x",
-                                 "new_string": "y"}), 0, "allow", "an edit of an existing file")
-        (self.agent / "tasks" / "002-by-hand").mkdir()
-        (self.agent / "tasks" / "002-by-hand" / "task.md").write_text("# 002\n")
-        self.one(H, post("Bash", {"command": "mkdir x"}), 0, "context", "flagged")
-        self.one(H, pre("Bash", {"command": "ls"}), 2, "block", "held: a task folder made by hand")
-
-    def test_the_watch_failing_is_an_error(self):
-        rec, _ = self.one("task-dir-watch-hook", post("Bash", {"command": "ls"}), 0, "error",
-                          "the watch could not run", PATH=self.stub_python(broken=True))
-        self.assertIn("task-dir-watch.py ended with exit", rec["error"])
 
     def test_the_command_guards_fail_open_arm(self):
         copy = self.root / "plugin-copy"

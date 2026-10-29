@@ -5,7 +5,7 @@ _PB_HJ_T0=$EPOCHREALTIME     # the hook journal's start (task 222): first, befor
 #   0. Write — block creating new task.md files (only tasks new CLI does that)
 #   1. Edit/Write on code files blocked when no task is active (exit 2 = BLOCK)
 #   2. Bash — the judge session's guard (Guard 3) and the session-id injection; a task folder made by hand is
-#      caught AFTER the call by task-dir-watch-hook (task 197 removed the pre-run check)
+#      refused at the close, `tasks work done` (task 197 removed the pre-run check, task 339 the after-the-call watch)
 #
 # Allows: .agent/, .claude/ edits (task management, hook config)
 
@@ -952,7 +952,7 @@ MSG
     exit 2
 fi
 
-# --- Guard 2: Bash — inject session_id (the manual task-dir check: task-dir-watch-hook, after the call) ---
+# --- Guard 2: Bash — inject session_id (a hand-made task folder: refused at the close, task 339) ---
 if [ "$TOOL_NAME" = "Bash" ]; then
     if [ -n "$PB_FUSED" ]; then CMD="$PB_CMD"; else
     CMD=$(echo "$INPUT" | python3 -I -c "import sys,json; d=json.load(sys.stdin); print(d.get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
@@ -975,8 +975,9 @@ MSG
 
     # The Bash pre-run task-dir check that stood here (tasks 080-110: a `mkdir` word, a `{` or a `$'` sent the
     # command to task-dir-target.py, which guessed from the TEXT whether it made a task folder) is gone with
-    # task 197, by the owner's answer of 2026-10-13 12:27 ("O scot pentru shell"): a folder made by hand is
-    # caught AFTER the call by task-dir-watch-hook, by any spelling (ledger PB-TASK-DIR-WATCH).
+    # task 197, by the owner's answer of 2026-10-13 12:27 ("O scot pentru shell"); the after-the-call watch that
+    # replaced it went with task 339 (PLAN-PLAYBOOK-2.md 4.1 b): a folder made by hand, by any spelling, is refused at
+    # the close (ledger PB-TASK-DIR-CLOSE).
 
     # Inject PLAYBOOK_SESSION_ID into tasks CLI commands via updatedInput. The match is loose on purpose (a prefix
     # harms nothing); whether a call is APPROVED is the builder's alone (`emit_session_injection`, task 301).

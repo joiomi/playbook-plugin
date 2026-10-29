@@ -188,9 +188,9 @@ class GatePathTraversal(unittest.TestCase):
 
 # The Bash pre-run task-dir check's tests (ManualTaskDirGuard, ManualTaskDirHelperPortability,
 # TaskDirGuardFixBatch110, TaskDirGuardImplPanelRound1/2 — tasks 080-110) went with the check (task 197, the
-# owner's answer of 2026-10-13 12:27). A hand-made task folder is caught after the call now:
-# tests/test_task_dir_detector.py (EveryLaneIsWatched — a real `mkdir`, a brace and an ANSI-C spelling run and
-# are flagged after). Their history: ledger PB-TASK-DIR-GUARD (not_applicable) and the git log of this file.
+# owner's answer of 2026-10-13 12:27). A hand-made task folder is refused at the close now (task 339 removed the
+# after-the-call watch that replaced the check): tests/test_task_folder_close.py, ledger PB-TASK-DIR-CLOSE. Their
+# history: the git log of this file and of the ledger (PB-TASK-DIR-GUARD, retired by task 339).
 
 
 if __name__ == "__main__":

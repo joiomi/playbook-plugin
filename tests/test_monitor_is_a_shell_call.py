@@ -2,9 +2,9 @@
 
 Monitor runs its `command` in the same shell as Bash, its stdout streamed back as events (Claude Code's own schema:
 `command` or `ws`, a WebSocket that runs no shell; `description` and `timeout_ms` required). No PreToolUse matcher in
-hooks.json named it, so the command interlock, the task gate and the task-folder watch never saw its command — a
-`git reset --hard` sent as a Monitor ran unasked (his blind session, 2026-10-25; reproduced live: a Monitor call was
-journaled only by state-echo at PostToolUse). And the state echo counted it as a tool but not as a write, so a turn
+hooks.json named it, so the command interlock, the task gate and the task-folder watch (removed by task 339) never
+saw its command — a `git reset --hard` sent as a Monitor ran unasked (his blind session, 2026-10-25; reproduced
+live: a Monitor call was journaled only by state-echo at PostToolUse). And the state echo counted it as a tool but not as a write, so a turn
 whose only calls were one to four Monitors was released by the stop as a chat reply with the gates open.
 
 The tests fire the hooks hooks.json wires for each event and tool (its matcher read with `re.fullmatch`, as Claude
@@ -54,8 +54,7 @@ class TheMatchers(unittest.TestCase):
         # the entries this task is about are among them
         flat = {(e, n) for e, ns in seen for n in ns}
         for want in (("PreToolUse", "task-gate-hook"), ("PreToolUse", "command-guard-hook"),
-                     ("PreToolUse", "task-dir-watch-hook"), ("PostToolUse", "task-dir-watch-hook"),
-                     ("PostToolUseFailure", "task-dir-watch-hook")):
+                     ("PostToolUse", "state-echo-hook"), ("PostToolUseFailure", "state-echo-hook")):
             self.assertIn(want, flat)
 
 
@@ -176,19 +175,6 @@ class AMonitorIsAShellCall(unittest.TestCase):
         stop = self.stop()
         self.assertTrue(self.held(stop), stop)
 
-    def test_a_task_folder_made_by_monitor_is_flagged(self):
-        def made():
-            d = self.proj / ".agent" / "tasks" / "009-by-hand"
-            d.mkdir()
-            (d / "task.md").write_text("# 009\n\n## Status\npending\n", encoding="utf-8")
-        post = self.call("Monitor", _monitor("mkdir .agent/tasks/009-by-hand && echo made"), made)
-        self.assertIn(".agent/tasks/009-by-hand", "".join(o for n, _, o, _ in post if n == "task-dir-watch-hook"))
-        flag = self.proj / ".agent" / "sessions" / SID / "task_dir_flag"
-        self.assertTrue(flag.exists(), post)
-        self.assertEqual(json.loads(flag.read_text(encoding="utf-8")).get("folders"), [".agent/tasks/009-by-hand"])
-        nxt = self.ran(self.pre("Bash", _bash("ls"), tuid="toolu_B2"), "task-dir-watch-hook")
-        self.assertEqual([rc for _, rc, _, _ in nxt], [2], nxt)
-
     def test_the_session_id_is_injected_into_a_monitor_command(self):
         mon = self.ran(self.pre("Monitor", _monitor(".claude/bin/tasks status")), "task-gate-hook")
         self.assertEqual(len(mon), 1, mon)
@@ -219,22 +205,10 @@ class AMonitorIsAShellCall(unittest.TestCase):
             self.assertEqual([rc for _, rc, _, _ in got], [2], (ti, got))
             self.assertIn("could not read a complete tool payload", got[0][3])
 
-    def test_a_held_session_has_the_same_way_out_through_monitor(self):
-        def made():
-            d = self.proj / ".agent" / "tasks" / "009-by-hand"
-            d.mkdir()
-            (d / "task.md").write_text("# 009\n\n## Status\npending\n", encoding="utf-8")
-        self.call("Bash", _bash("mkdir .agent/tasks/009-by-hand"), made)
-        held = self.ran(self.pre("Monitor", _monitor("ls"), tuid="toolu_M2"), "task-dir-watch-hook")
-        self.assertEqual([rc for _, rc, _, _ in held], [2], held)              # held, as a Bash `ls` is
-        out = self.ran(self.pre("Monitor", _monitor("rm -r .agent/tasks/009-by-hand"), tuid="toolu_M3"),
-                       "task-dir-watch-hook")
-        self.assertEqual([rc for _, rc, _, _ in out], [0], out)               # the way out, as for Bash
-
     def test_the_journal_names_the_monitor(self):
         self.pre("Monitor", _monitor("git status"))
         got = {(j.get("hook"), j.get("tool")) for j in self.hook_journal() if j.get("event") == "PreToolUse"}
-        for hook in ("task-gate", "command-guard", "task-dir-watch"):
+        for hook in ("task-gate", "command-guard"):
             self.assertIn((hook, "Monitor"), got)
 
 

@@ -6,8 +6,8 @@ Usage:   printf '%s' <file path> | PB_PROJECT=<project root> python3 task-dir-ta
 `--path`     exit 0: outside the project under every reading; 1: inside, or may be.
 `--creates`  exit 0: a Write of it creates nothing inside the project; 1: it does, or may.
 No mode      exit 2 (usage). Task 197 removed the Bash mode — the pre-run check that judged a shell command's TEXT
-             for a task directory (tasks 080-110): a folder made by hand is caught after the call now, by
-             task-dir-watch-hook (ledger PB-TASK-DIR-WATCH; the owner's answer of 2026-10-13 12:27).
+             for a task directory (tasks 080-110; the owner's answer of 2026-10-13 12:27): a folder made by hand is
+             refused at the close (ledger PB-TASK-DIR-CLOSE; task 339 removed the after-the-call watch).
 Other    (a crash) — the hook decides as it did before it had a scope.
 
 A path is inside when ANY of these says so (so no single view can let it out): its `..`-collapsed spelling under the

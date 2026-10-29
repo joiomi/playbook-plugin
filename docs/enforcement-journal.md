@@ -50,12 +50,10 @@ truth.
 
 ## Family 1 — enforcement decisions (`decision` = `allow` / `block` / `record`)
 
-Emitted by the gate/guard/stop/batch hooks, the task-folder watch and the close path. `hook` is one
-of `task-gate`, `command-guard`, `stop`, `gate-batch-check`, `task-dir-watch` (task 196) or `close`.
-`task-dir-watch` writes a `record` with `reason="unknown task folder"` and the folder as `path` for each task
-folder it flags after a call (also `"task registry unreadable"` and `"task registry removed during this call"`),
-`block` with `reason="unknown task folder"` when it holds a flagged session's call, and `allow` with
-`reason="unknown task folder: the way out"` for the removal or `tasks` call it lets through;
+Emitted by the gate/guard/stop/batch hooks and the close path. `hook` is one
+of `task-gate`, `command-guard`, `stop`, `gate-batch-check` or `close` (`task-dir-watch`, task 196's task-folder
+watch, wrote records here until task 339 removed it: `record` / `block` / `allow` with `reason="unknown task
+folder"` and the folder as `path`);
 `task-gate` writes `allow` or `block` (its Bash task-dir refusal wrote
 `reason="manual task dir creation"` from task 110 until task 197 removed it); `command-guard` writes
 `block`, and `allow` for an acknowledged dangerous command with
@@ -418,7 +416,7 @@ Every line has the same eighteen keys, in this order (the last five since task 2
 | key | meaning |
 |---|---|
 | `ts` | UTC, `YYYY-MM-DDTHH:MM:SSZ`, when the hook EXITED |
-| `hook` | `session-start`, `chat-log`, `task-gate`, `command-guard`, `task-dir-watch`, `state-echo`, `stop`, `session-end`, `monitor-nudge`, `codex-apply-patch`, `codex-stop`, `codex-user-prompt` |
+| `hook` | `session-start`, `chat-log`, `task-gate`, `command-guard`, `state-echo`, `stop`, `session-end`, `monitor-nudge`, `codex-apply-patch`, `codex-stop`, `codex-user-prompt` (`task-dir-watch` until task 339) |
 | `event` | the host's event (`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `UserPromptSubmit`, `Stop`, `SessionStart`, `SessionEnd`) |
 | `tool` | the tool's name (`Bash`, `Edit`, an MCP tool's), "" for a prompt, a stop or a session |
 | `tool_use_id` | the host's id of the tool call — the transcript's (`toolu_…`), "" where there is none |
@@ -451,7 +449,7 @@ It is not a conversation record, so a judge's read-only sandbox does not hide it
 says no python ran there, not that the machine never slept. Where the samples are taken: the state echo
 (`task-status.py --echo`, or `--section` on a failed call), the stop hook (`--fields`), and every python hook (codex's,
 the command guard, the dialog hook's answer line — `pb_journal.append_hook_run` samples itself); the task gate, the
-chat log, the session hooks, the task-folder watch and monitor-nudge take none. **The sample is one bracketed reading**
+chat log, the session hooks and monitor-nudge take none. **The sample is one bracketed reading**
 — wall, MONOTONIC, BOOTTIME, MONOTONIC, wall, in nanoseconds — kept only when both brackets span at most 5 ms, so a delay, a suspend or a clock step inside it cannot be counted as sleep or paired with the wrong moment (up
 to three tries, then `null`). **The sample's moment is `sts`, not `ts`:** the sample is taken while the hook runs and
 `ts` when it exits, so a suspend between the two falls on the right side only when `susp` is paired with `sts`. Between
@@ -543,8 +541,7 @@ and loaded the guard; every other hook's duration starts at its first line — b
 DEBUG trap, `error` names that trap instead of the failing line; on a host without `flock(1)` (util-linux) the bash
 writers append without the lock while codex's python hooks still rotate there with `fcntl`, so a line in flight there
 can still be lost to a compression after a forward clock step; a crash between publishing a spool and removing its
-temporary can record that one line twice (the post-panel judge's run 5, stated); task-dir-watch's `tool_use_id` is read by pattern,
-so a host whose payload put a nested object carrying the same key AFTER the id could mislabel it.
+temporary can record that one line twice (the post-panel judge's run 5, stated).
 
 ## A task's numbers — `<task>/numbers.json` (task 235)
 

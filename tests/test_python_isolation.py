@@ -696,7 +696,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         "scripts/playbook-pi": 2,
         "scripts/sandbox": 2,
         "scripts/session-end-hook": 2,     # +1: the Python floor probe (task 192, #46)
-        "scripts/session-start-hook": 2,   # +1: the Python floor probe (task 192, #46)
+        "scripts/session-start-hook": 3,   # +1: the Python floor probe (task 192, #46); +1: the registry enrolment (task 339)
         "scripts/state-echo-hook": 9,      # +1: the Python floor probe (task 194, #46); -1: one JSON writer for every answer (task 219); +1: the fallback path's shell-log command (task 221)
         "scripts/stop-hook": 4,            # +1: the Python floor probe (task 193, #46)
         "scripts/task-gate-hook": 16,      # +1: the Python floor probe (task 194, #46); +1: the recovery path's resolved path (task 198, #26); +1: the no-project path's reader of an escaped path (task 302); +1: the `ws` Monitor's check (task 307)
@@ -708,7 +708,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         _, counts, inline, _ = sweep()
         self.assertEqual(inline, self.ISOLATED_INLINE_CALLS)
         self.assertEqual(counts.get("ok-inline"), sum(self.ISOLATED_INLINE_CALLS.values()))
-        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 66)   # 55 + the floor probes of tasks 192 (2), 193 (2) and 194 (2) + task 198's resolved path - task 219's one JSON writer + task 221's fallback command + task 233's floor probe + task 244's floor probe + task 302's escaped-path reader + task 307's `ws` Monitor check
+        self.assertEqual(sum(self.ISOLATED_INLINE_CALLS.values()), 67)   # 55 + the floor probes of tasks 192 (2), 193 (2) and 194 (2) + task 198's resolved path - task 219's one JSON writer + task 221's fallback command + task 233's floor probe + task 244's floor probe + task 302's escaped-path reader + task 307's `ws` Monitor check + task 339's registry enrolment
 
     # Every call that starts a FILE of the plugin's, file by file — 22 when task 180
     # isolated them (18 in the hooks and scripts, 4 that the merge skill gives the agent).
@@ -722,10 +722,8 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         "scripts/init": 3,
         "scripts/monitor-lib/bootstrap.sh": 2,
         "scripts/session-end-hook": 1,    # agent_usage.py, before the session dir goes (task 246)
-        "scripts/session-start-hook": 1,
         "scripts/state-echo-hook": 4,      # +1: `task-status.py --echo` (task 219); +1: `--section` on a failed call (task 234)
         "scripts/stop-hook": 1,
-        "scripts/task-dir-watch-hook": 1,
         "scripts/task-gate-hook": 7,       # +1: Guard 0.6's `gate-batch-check.py --status` (task 292)
         "skills/merge/SKILL.md": 4,
     }
@@ -734,7 +732,7 @@ class EveryShippedInlinePythonIsIsolated(unittest.TestCase):
         _, counts, _, files = sweep()
         self.assertEqual(files, self.ISOLATED_FILE_CALLS)
         self.assertEqual(counts.get("ok-file"), sum(self.ISOLATED_FILE_CALLS.values()))
-        self.assertEqual(sum(self.ISOLATED_FILE_CALLS.values()), 29)   # + the state echo's task-status.py (task 219) + dialog_log.py (task 233) + the failed call's `--section` (task 234) + agent_usage.py (tasks 244, 246) + Guard 0.6's status check (task 292)
+        self.assertEqual(sum(self.ISOLATED_FILE_CALLS.values()), 27)   # + the state echo's task-status.py (task 219) + dialog_log.py (task 233) + the failed call's `--section` (task 234) + agent_usage.py (tasks 244, 246) + Guard 0.6's status check (task 292) - the watch's task-dir-watch.py and the session start's `--enrol` through it (task 339)
 
     def test_no_shipped_python_source_starts_a_file_through_an_argv_list(self):
         # the sweep reads an argv list only for its mode flag; a list that hands the
