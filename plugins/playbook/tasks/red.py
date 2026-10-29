@@ -751,6 +751,20 @@ def _load_base(task_dir: Path) -> "dict | None":
 
 # ---------------------------------------------------------------------------- a run (task 342)
 
+# SIGTERM / SIGHUP / SIGINT while `tasks red` runs take the interrupt's path: the row's process group is killed (impl
+# round 1, I5: codex). While a row's process is being started they are held — a list of those that came — and the
+# run raises them once it can kill the group (post-panel run 1, codex: a signal in that window left the row running).
+_HELD: "list[int] | None" = None
+_STOP_SIGNALS = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+
+
+def _stop(signum, _frame):
+    if _HELD is not None:
+        _HELD.append(signum)
+        return
+    raise KeyboardInterrupt(f"signal {signum}")
+
+
 def _run_row(cmd: str, project: Path, home: Path, timeout: float) -> "dict":
     """One command in the project as it is now: {status, exit, seconds, last, error, reader, skips}. Its own process
     group: a timeout or an interrupt kills the group; a child that left the group and holds the output open cannot
@@ -765,10 +779,19 @@ def _run_row(cmd: str, project: Path, home: Path, timeout: float) -> "dict":
     env = _row_env(dict(os.environ), home, Path(project).parent,
                    caged=os.environ.get("PLAYBOOK_SANDBOXED") == "1")
     env["PYTHONDONTWRITEBYTECODE"] = "1"                # a row writes no cache into the tree (plan panel P1)
+    global _HELD
     t0 = time.monotonic()
-    p = subprocess.Popen([bash, "-c", cmd], cwd=str(project), env=env, stdin=subprocess.DEVNULL,
-                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+    _HELD = []
     try:
+        p = subprocess.Popen([bash, "-c", cmd], cwd=str(project), env=env, stdin=subprocess.DEVNULL,
+                             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
+    except BaseException:
+        _HELD = None
+        raise
+    try:
+        held, _HELD = _HELD, None                       # inside the try: from here a signal reaches the kill below
+        if held:
+            raise KeyboardInterrupt(f"signal {held[0]}")
         out, _ = p.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         try:
@@ -1105,6 +1128,16 @@ def _problems(rows: "list[dict]") -> "list[str]":
     return out
 
 
+def _head_content(repo: Path, rel: str) -> str:
+    """`_content` of a file as HEAD holds it (`git cat-file`, reads only): its bytes' sha256, `deleted` when HEAD has
+    none. A link's blob is not read as `link:`: it never matches a start's link, so it counts (fails closed)."""
+    there = _git(repo, ["rev-parse", "-q", "--verify", f"HEAD:{rel}"])
+    if there.returncode != 0:
+        return "deleted"
+    blob = _git(repo, ["cat-file", "blob", there.stdout.strip()], text=False)
+    return hashlib.sha256(blob.stdout).hexdigest() if blob.returncode == 0 else "unreadable"
+
+
 def _shown(name: str) -> str:
     """A path as it can be printed: a byte that is not UTF-8 (kept by `_git`) replaced."""
     return name.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
@@ -1133,11 +1166,15 @@ def _code_changed(project: Path, task_dir: Path, cfg: dict) -> "tuple[list[str] 
         if tracked.returncode != 0 or others.returncode != 0 or tagged.returncode != 0:
             return None
         paths = set(_z(tracked.stdout)) | set(_z(others.stdout)) | set(dirty)
-        if start and _git(repo, ["rev-parse", "--verify", "-q", "HEAD^{commit}"]).returncode == 0:
-            moved = _git(repo, ["diff", "--name-only", "--no-renames", "-z", start, "HEAD", "--", ".", *exclude])
-            if moved.returncode != 0:
+        committed: "set[str]" = set()
+        if _git(repo, ["rev-parse", "--verify", "-q", "HEAD^{commit}"]).returncode == 0:
+            # unborn at the start: from the empty tree (`hash-object` without -w writes nothing)
+            since = start or _git(repo, ["hash-object", "-t", "tree", "/dev/null"]).stdout.strip()
+            moved = (_git(repo, ["diff", "--name-only", "--no-renames", "-z", since, "HEAD", "--", ".", *exclude])
+                     if since else None)
+            if moved is None or moved.returncode != 0:
                 return None
-            paths |= set(_z(moved.stdout))
+            committed = set(_z(moved.stdout))
         for e in _z(tagged.stdout):                     # git hides a flagged file's edit: read its bytes
             if len(e) > 2 and (e[0].islower() or e[0] == "S"):
                 rel = e[2:]
@@ -1146,7 +1183,10 @@ def _code_changed(project: Path, task_dir: Path, cfg: dict) -> "tuple[list[str] 
                 if blob is None or blob.returncode != 0 or now.returncode != 0 \
                         or blob.stdout.strip() != now.stdout.strip():
                     paths.add(rel)
-        out = [n for n in paths if not _cache_file(n) and not (n in dirty and dirty[n] == _content(repo, n))]
+        out = {n for n in paths if not _cache_file(n) and not (n in dirty and dirty[n] == _content(repo, n))}
+        # a commit since the start counts on its own — the work tree's bytes do not hide it — unless it holds exactly
+        # the bytes the file had at the start (post-panel run 1, codex)
+        out |= {n for n in committed if not _cache_file(n) and not (n in dirty and dirty[n] == _head_content(repo, n))}
         return sorted(out)
     with _no_git_overrides():
         for scope, r in sorted(base["scopes"].items()):
@@ -1379,10 +1419,7 @@ def _cmd_red(cmd_args: "list[str]") -> None:
     print(f"tasks red — task {d.name}, run {run}" + (f" — on a mutant: {mutant}" if mutant else ""))
     home = Path(tempfile.mkdtemp(prefix="pb-red-home-"))
     old_handlers = {}
-
-    def _stop(signum, _frame):                          # SIGTERM / SIGHUP take the interrupt's path: the row's process
-        raise KeyboardInterrupt(f"signal {signum}")     # group is killed (impl round 1, I5: codex)
-    for sig in (signal.SIGTERM, signal.SIGHUP):
+    for sig in _STOP_SIGNALS:                           # `_stop`: an interrupt, held while a row's process starts
         try:
             old_handlers[sig] = signal.signal(sig, _stop)
         except (ValueError, OSError):

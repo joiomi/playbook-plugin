@@ -273,6 +273,46 @@ class Run(_Project):
             time.sleep(4)
             self.assertFalse(finished.exists(), (sig, out, err))
 
+    def test_a_signal_during_the_launch_stops_the_row(self):
+        """Row 36 (post-panel run 1, codex): SIGTERM or SIGHUP right after the row's process is started — before the
+        run waits on it — still kills the row's process group."""
+        marks = Path(tempfile.mkdtemp(prefix="pb342-launch-"))
+        self.addCleanup(shutil.rmtree, marks, True)
+        started, finished = marks / "started", marks / "finished"
+        self.light([("1", "normal", "slow", f"`touch {started}; sleep 3; touch {finished}`")])
+        from tasks import red
+        real = subprocess.Popen
+
+        def guard(signum, _frame):                          # the test runner never dies of a signal left unhandled
+            raise AssertionError(f"signal {signum} reached no handler of `tasks red`")
+        for sig in (signal.SIGTERM, signal.SIGHUP):
+            for f in (started, finished):
+                if f.exists():
+                    f.unlink()
+            old = signal.signal(sig, guard)
+            self.addCleanup(signal.signal, sig, old)
+
+            def launch(*a, _sig=sig, **k):
+                proc = real(*a, **k)
+                if k.get("start_new_session"):              # the row's process, not a git call
+                    os.kill(os.getpid(), _sig)
+                return proc
+            out = io.StringIO()
+            cwd = os.getcwd()
+            with mock.patch.object(red.subprocess, "Popen", launch), \
+                    mock.patch.dict(os.environ, self.env(), clear=True), contextlib.redirect_stdout(out), \
+                    contextlib.redirect_stderr(out):
+                os.chdir(self.d)
+                try:
+                    with self.assertRaises(SystemExit) as cm:
+                        red.cmd_red(["1"])
+                finally:
+                    os.chdir(cwd)
+            self.assertEqual(cm.exception.code, 130, (sig, out.getvalue()))
+            time.sleep(4)
+            self.assertFalse(finished.exists(), (sig, out.getvalue()))
+            signal.signal(sig, old)
+
     def test_an_unreadable_tests_digest_refuses(self):
         """Row 34 (impl round 1, opus m): a run that cannot say which test files it ran on refuses, writing nothing."""
         self.light([("1", "normal", "f returns 2", NEW)])
@@ -612,6 +652,38 @@ class NoChange(_Project):
         r, out = self.close()
         self.assertNotEqual(r.returncode, 0, out)
         self.assertIn("legacy-", out)
+
+    def test_a_commit_over_a_start_dirty_file_counts(self):
+        """Row 35 (post-panel run 1, codex): a file dirty at the start, a further edit committed, the work tree back to
+        the start's bytes — HEAD holds the task's edit; committing the start's own dirty bytes is no change."""
+        self.fix_code()                                           # dirty at the start
+        self.light(no_change="claims no code change")
+        (self.code / "src.py").write_text("def f():\n    return 3\n", encoding="utf-8")
+        self.g("commit", "-qam", "a further edit", cwd=self.code)
+        self.fix_code()                                           # the start's bytes again
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("src.py", out)
+        self.g("commit", "-qam", "the start's own bytes", cwd=self.code)
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+
+    def test_a_commit_over_a_start_dirty_file_counts_before_the_first_commit(self):
+        """Row 35: the same in a code root with no commit at the start — its first commit is read from the empty tree."""
+        shutil.rmtree(self.code / ".git")
+        self.g("init", "-q", cwd=self.code)                       # unborn: every file is dirty at the start
+        self.light(no_change="claims no code change")
+        self.g("add", "-A", cwd=self.code)
+        self.g("commit", "-qm", "the start's own bytes", cwd=self.code)
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+        self.cli("work", "1", "--reopen")
+        (self.code / "src.py").write_text("def f():\n    return 3\n", encoding="utf-8")
+        self.g("commit", "-qam", "a further edit", cwd=self.code)
+        (self.code / "src.py").write_text("def f():\n    return 1\n", encoding="utf-8")   # the start's bytes
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("src.py", out)
 
     def test_a_committed_edit_undone_in_the_work_tree_counts(self):
         """Row 31 (impl round 1, I7: grok): HEAD holds a code edit even when the work tree is back to the start's
