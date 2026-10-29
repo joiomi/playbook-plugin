@@ -22,6 +22,10 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   switch, its enforcement-journal `block` line and the notification exception with its three marks (`turn_end`,
   `notif_start`, `prompt_gen`). A notification still keeps the counts, a user's prompt still resets them. Codex's
   Stop, which runs this hook for an active task, lets the turn end too.
+- **The state echo's line every 10 calls and its nudges** (task 341, PLAN-PLAYBOOK-2.md 4.1 b). On the same gate the
+  echo printed "# [N] still at gate …" at every 10th call, with a question such as "💭 Is this gate done?"; it now
+  prints in full when the gate, the task or a warning changes and nothing otherwise. The eval config's `nudges` flag
+  and the template's drift line that read the reminder went with them.
 
 ### Fixed
 - **A task record that is not valid UTF-8 is refused, never rewritten** (task 335). Read leniently, a byte that is not

@@ -31,7 +31,7 @@ BEFORE = _HERE / "fixtures" / "template_before_213"
 # Lines of the old templates that a later task REWORDED in the guide, old -> the new lines that say it (the guide
 # holds the new ones; a record written before keeps the old line — one stale line, not worth code that recognises it:
 # the owner's rule of 2026-10-16, "design for new projects, not legacy"). Task 219 moved the drift signal to the
-# 10-call reminder; task 225 put a gate's note on the lines under its title; task 226 split each line into short
+# 10-call reminder (task 341 removed both); task 225 put a gate's note on the lines under its title; task 226 split each line into short
 # lines of one fact (the owner, 2026-10-16 09:36: "Liste scurte de la început").
 REWORDED = {
     '> **Gate discipline:** One gate → do work → check box → next gate.': (
@@ -60,9 +60,8 @@ REWORDED = {
     '> Design Phase = orientation (one gate, brief answer). Work Plan = real work (one gate, full effort).': (
         '> - Design Phase = orientation (one gate, a brief answer); Work Plan = real work (one gate, full effort).',
     ),
-    "> If you see the same gate 5+ times in the hook echo, you're drifting — STOP and update.": (
-        "> - If the hook's reminder (one line every 10 calls on the same gate) names the same gate a third time, you're drifting — STOP and update.",
-    ),
+    # task 219 reworded it for the 10-call reminder; task 341 removed the reminder and the line with it
+    "> If you see the same gate 5+ times in the hook echo, you're drifting — STOP and update.": (),
     "> **Before filling this in:** run `.claude/bin/tasks work <N>` to activate this task. Hooks won't enforce until activated.": (
         '> **Before filling this in:**',
         '> - Run `.claude/bin/tasks work <N>` to activate this task.',

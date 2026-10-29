@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""PHASE-B item 2 (task 219), the owner's 2026-10-16 decision "La schimbare + amintire": the PostToolUse state echo
-prints in full only when something changed — the open gate or the task, a warning, the first call of a session, the
-first call after a SessionStart (a compaction) — and on the same gate one short line every 10 calls; otherwise `{}`.
+"""PHASE-B item 2 (task 219): the PostToolUse state echo prints in full only when something changed — the open gate or
+the task, a warning, the first call of a session, the first call after a SessionStart (a compaction) — and `{}`
+otherwise. The owner's 2026-10-16 "La schimbare + amintire" also gave one short line every 10 calls on the same gate,
+with a micro-reflection nudge; PLAN-PLAYBOOK-2.md 4.1 b (R14) and DESIGN-PLAYBOOK-2.md §2 (R17) took both out
+(task 341): "rămâne doar la schimbarea porții".
 
 "The gate changed" is decided by what the gate IS (its place among the live gates and its text, read fence-aware
 through `scripts/task-status.py --echo`), not by its line: lines added above the open gate, or a fenced checklist,
@@ -131,18 +133,14 @@ class _Project(unittest.TestCase):
 
 
 class OneGate(_Project):
-    def test_30_calls_one_full_echo_then_a_line_every_10(self):
+    def test_30_calls_one_full_echo_then_nothing(self):
+        # task 341: no line every 10 calls any more — the echo only on a change
         self.work()
         outs = [self.echo() for _ in range(30)]
         self.assertIn("# Working on task [001]", outs[0])
         self.assertIn("Alpha step", outs[0])
         printed = [i for i, o in enumerate(outs) if o]
-        self.assertEqual(printed, [0, 10, 20], outs)
-        for i in (10, 20):
-            self.assertEqual(len(outs[i].splitlines()), 1, outs[i])
-            self.assertIn("still at gate", outs[i])
-            self.assertIn("Alpha step", outs[i])
-            self.assertIn("task.md:", outs[i])
+        self.assertEqual(printed, [0], outs)
 
     def test_the_first_call_of_a_session_says_no_transition(self):
         # the counters hold no gate yet: no "switched" / "done" line and no chat_log entry (an empty task field once
@@ -157,10 +155,15 @@ class OneGate(_Project):
         self.work()
         for n in range(1, 36):
             out = self.echo()
-            if out:
-                self.assertTrue(n == 1 or (n - 1) % 10 == 0, (n, out))
-            else:
-                self.assertFalse(n == 1 or (n - 1) % 10 == 0, n)
+            self.assertEqual(bool(out), n == 1, (n, out))
+
+    def test_no_call_on_a_gate_carries_a_nudge(self):
+        # task 341: the micro-reflection nudges ("💭 …") went with the reminder — whatever the tool
+        self.work()
+        payloads = ['{"tool_name":"Read","tool_input":{"file_path":"x"},"tool_response":{}}',
+                    '{"tool_name":"Bash","tool_input":{"command":"python3 -m pytest"},"tool_response":{}}', BASH_PAYLOAD]
+        outs = [self.echo(payload=payloads[i % 3]) for i in range(25)]
+        self.assertEqual([o for o in outs if "💭" in o or "still at gate" in o], [], outs)
 
 
 class Transitions(_Project):
@@ -283,8 +286,7 @@ class OtherStates(_Project):
     def _shape(self, first_marker):
         outs = [self.echo() for _ in range(11)]
         self.assertIn(first_marker, outs[0])
-        self.assertEqual([i for i, o in enumerate(outs) if o], [0, 10], outs)
-        self.assertEqual(len(outs[10].splitlines()), 1, outs[10])
+        self.assertEqual([i for i, o in enumerate(outs) if o], [0], outs)      # task 341: no reminder at 10
         return outs
 
     def test_no_active_task(self):
@@ -309,8 +311,11 @@ class AlwaysFull(_Project):
         cfg.write_text('{"gate_echo": "on", "nudges": "typed"}', encoding="utf-8")
         env = dict(self.env, PLAYBOOK_EVAL_CONFIG=str(cfg))
         self.work()
+        read = '{"tool_name":"Read","tool_input":{"file_path":"x"},"tool_response":{}}'
         for _ in range(4):
-            self.assertIn("# Working on task [001]", self.echo(env=env))
+            out = self.echo(payload=read, env=env)
+            self.assertIn("# Working on task [001]", out)
+            self.assertNotIn("💭", out)        # task 341: no nudge, in eval mode either (its `nudges` flag is gone)
 
     def test_a_subagent_call_prints_in_full_and_leaves_the_main_memory(self):
         self.work()
@@ -374,7 +379,7 @@ class SideBySide(_Project):
         self.assertEqual(sum(1 for o in outs if o), 1, outs)
         self.assertEqual(self.chat_log().count("- [x] Alpha step"), 1)
         rest = [self.echo() for _ in range(5)]
-        self.assertEqual([i for i, o in enumerate(rest) if o], [4], rest)
+        self.assertEqual([i for i, o in enumerate(rest) if o], [], rest)      # task 341: no reminder at the 10th
 
 
 class Round2(_Project):
@@ -435,17 +440,6 @@ class Round2(_Project):
         self.assertIsNotNone(out)
         self.assertEqual(self.echo(), "")
 
-    def test_a_burst_that_crosses_10_still_gives_the_reminder(self):
-        self.work()
-        self.echo()
-        for _ in range(7):
-            self.assertEqual(self.echo(), "")
-        outs = self.side_by_side(4)
-        later = [self.echo() for _ in range(10)]
-        reminders = [o for o in outs + later if "still at gate" in o]
-        self.assertGreaterEqual(len(reminders), 1, (outs, later))
-        self.assertTrue(any("still at gate" in o for o in outs + later[:2]), (outs, later))
-
     def test_writes_that_fail_never_leave_a_quiet_call(self):
         self.work()
         self.echo()
@@ -457,14 +451,6 @@ class Round2(_Project):
                 self.assertIn("Alpha step", out)
         finally:
             self.session_dir().chmod(0o755)
-
-    def test_the_reminder_cuts_characters_not_bytes(self):
-        self.write("- [ ] " + "ș" * 70)
-        self.work()
-        outs = [self.echo() for _ in range(11)]
-        self.assertIn("still at gate", outs[10])
-        self.assertIn("ș" * 60 + "…", outs[10])
-        self.assertNotIn("\ufffd", outs[10])
 
     def _gate_key(self, pos, text):
         s = subprocess.run(["cksum"], input=text.encode("utf-8"), capture_output=True, check=True).stdout.decode()
@@ -716,21 +702,15 @@ class Round3(_Project):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(f.read_text(encoding="utf-8"), "a=0\n")
 
-    def test_the_no_task_reminder_keeps_a_write_failure_warning(self):
+    def test_a_write_failure_on_the_no_task_path_is_said(self):
         read = '{"tool_name":"Read","tool_input":{"file_path":"x"},"tool_response":{}}'
         for _ in range(10):
             self.echo(payload=read)
-        mv = self._mv_shim(2)
+        # the call's own count fails (task 341: with no reminder at the 11th call, its count is the one write left)
+        mv = self._mv_shim(1)
         out = self.echo(payload=read, env=dict(self.env, PATH=f"{mv['PATH']}:{self.env['PATH']}"))
         self.assertIn("No active task", out)
         self.assertIn("write FAILED", out)                        # sonnet
-
-    def test_a_failed_reminder_is_given_again_by_the_next_call(self):
-        self.work()
-        for _ in range(10):
-            self.echo()
-        self.assertEqual(self.echo(env=self._python_shim("  exit 1 ;;")), "")
-        self.assertIn("still at gate", self.echo())                # grok
 
     def test_a_claim_of_a_recycled_pid_is_not_live(self):
         self.work()

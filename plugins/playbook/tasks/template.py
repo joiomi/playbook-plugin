@@ -42,7 +42,6 @@ def sticker() -> str:
 > - Never replace a gate's original text.
 > - Closing several ALREADY-DONE gates in one edit: only when each gate carries its own outcome note (hook-enforced, at most 5; a bare batch tick is blocked; where no hook runs, one gate at a time).
 > - Design Phase = orientation (one gate, a brief answer); Work Plan = real work (one gate, full effort).
-> - If the hook's reminder (one line every 10 calls on the same gate) names the same gate a third time, you're drifting — STOP and update.
 > **Sanctioned compaction (the one exception):**
 > - When this file grows past the review context budget, old Plan Review / Implementation Review triage narrative may move VERBATIM to `task-archive.md` (same dir).
 > - Never gates, never Intent/Design/Parked/receipts — moving history is not deleting it.

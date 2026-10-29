@@ -4,8 +4,8 @@ _PB_HJ_T0=$EPOCHREALTIME     # the hook journal's start (task 222): first, befor
 # PostToolUse hook — shows the current gate from task.md, when it changed.
 #
 # Reads the active task's task.md, finds the first unchecked gate (- [ ]), and echoes it with file:line — in full
-# when the gate, the task or a warning changed (and after a session start), one line every 10 calls on the same
-# gate, nothing otherwise (task 219, below). Counts every call for the stop hook.
+# when the gate, the task or a warning changed (and after a session start), nothing otherwise (task 219, below; the
+# line every 10 calls on the same gate and its nudges went with task 341). Counts every call for the stop hook.
 
 set -e
 
@@ -15,74 +15,6 @@ if [ "${PLAYBOOK_ROLE:-}" = "monitor" ]; then
     echo "[$(basename "$0")] skip (PLAYBOOK_ROLE=monitor)" >&2
     exit 0
 fi
-
-# Tool-type-aware micro-reflection nudges — 5 classes, each naming a specific failure mode.
-# Call 1 on a new gate = silent. Call 2+ = class-specific nudge. Operate = always silent.
-NUDGES_ORIENT=(
-    "What am I looking for?"
-    "Do I already know enough to act?"
-    "Does this connect to the gate?"
-    "Am I browsing or searching?"
-    "What will I do with this information?"
-)
-NUDGES_EXECUTE=(
-    "Is this the simplest change that works?"
-    "How will I verify this?"
-    "Does this serve the Intent or my own idea?"
-    "Did I just introduce a problem?"
-    "Would the user recognize this as what they asked for?"
-)
-NUDGES_TEST=(
-    "Did I read the output or skim it?"
-    "Did it pass for the right reason?"
-    "What would a failure here look like?"
-    "Am I testing what the Intent says, or what's easy to test?"
-    "Is this gate done?"
-)
-NUDGES_REFLECT=(
-    "If that was a bare checkmark, go back and write what happened on the lines under it, indented two spaces deeper."
-    "Re-read what you just wrote — does it match what you did?"
-    "Closing to move on? Or because it's actually done?"
-    "Would a new agent understand this gate from what you wrote?"
-    "If the next gate feels wrong, replan now — not after starting it."
-)
-
-# classify_tool TOOL_NAME INPUT_JSON
-# Returns: orient, execute, test, operate, or reflect
-classify_tool() {
-    local tool="$1" input="$2"
-    case "$tool" in
-        Edit|Write|NotebookEdit)
-            # Reflect: editing task.md in .agent/tasks/
-            local fpath
-            if [ -n "$PB_FUSED" ]; then fpath="$PB_PATH"; else
-            fpath=$(echo "$input" | python3 -I -c "import sys,json; print(json.loads(sys.stdin.read()).get('tool_input',{}).get('file_path',''))" 2>/dev/null || echo "")
-            fi
-            if echo "$fpath" | grep -qE '\.agent(/[^/]+)?/tasks/.*/task\.md'; then
-                echo "reflect"
-            else
-                echo "execute"
-            fi
-            ;;
-        Bash)
-            local cmd
-            if [ -n "$PB_FUSED" ]; then cmd="$PB_CMD"; else
-            cmd=$(echo "$input" | python3 -I -c "import sys,json; print(json.loads(sys.stdin.read()).get('tool_input',{}).get('command',''))" 2>/dev/null || echo "")
-            fi
-            if echo "$cmd" | grep -qE 'pytest|python.*-m\s+pytest|test_|grep\s+-c|assert'; then
-                echo "test"
-            else
-                echo "operate"
-            fi
-            ;;
-        Read|Grep|Glob|WebSearch|WebFetch|ToolSearch)
-            echo "orient"
-            ;;
-        *)
-            echo "operate"
-            ;;
-    esac
-}
 
 # Source shared lib (same directory)
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -244,13 +176,11 @@ fi
 
 # --- Eval mode: read config flags if PLAYBOOK_EVAL_CONFIG is set ---
 EVAL_GATE_ECHO="on"
-EVAL_NUDGES="typed"
 if [ -n "$PLAYBOOK_EVAL_CONFIG" ] && [ -f "$PLAYBOOK_EVAL_CONFIG" ]; then
     EVAL_GATE_ECHO=$(python3 -I -c "import sys,json; print(json.loads(open('$PLAYBOOK_EVAL_CONFIG').read()).get('gate_echo','on'))" 2>/dev/null || echo "on")
-    EVAL_NUDGES=$(python3 -I -c "import sys,json; print(json.loads(open('$PLAYBOOK_EVAL_CONFIG').read()).get('nudges','typed'))" 2>/dev/null || echo "typed")
-    echo "⚠ EVAL MODE: gate_echo=${EVAL_GATE_ECHO}, nudges=${EVAL_NUDGES}" >&2
+    echo "⚠ EVAL MODE: gate_echo=${EVAL_GATE_ECHO}" >&2
     # Write file-based marker for harness verification (stream-json doesn't capture hook output)
-    echo "gate_echo=${EVAL_GATE_ECHO},nudges=${EVAL_NUDGES}" > "$AGENT_DIR/eval-marker" 2>/dev/null || true
+    echo "gate_echo=${EVAL_GATE_ECHO}" > "$AGENT_DIR/eval-marker" 2>/dev/null || true
 fi
 
 # Gate-logging write-failure tracking (bug report #4): a write that fails AFTER
@@ -384,10 +314,10 @@ fi
 # The full echo is printed when something changed: the open gate — known by its place among the live gates, its
 # text and the gate after it, read fence-aware by `scripts/task-status.py --echo`, never by its line — or the task,
 # or a warning is due; at a session's first call; and after a SessionStart (a compaction), which leaves the
-# `echo_reset` marker. On the same gate one line every 10 calls; otherwise `{}`. Always in full: eval mode, a lock not
-# given, an `.agent` that cannot be written, gates that could not be read, and a subagent's call (a payload with
-# `agent_id`: it has its own context — it is shown the gate and changes nothing, so the main agent's next call still
-# sees what changed). The memory — `gate_echo_key`, `gate_echo_claim`, `gate_echo_quiet`, `gate_`-prefixed so a
+# `echo_reset` marker. Otherwise `{}` (the line every 10 calls on the same gate went with task 341). Always in
+# full: eval mode, a lock not given, an `.agent` that cannot be written, gates that could not be read, and a
+# subagent's call (a payload with `agent_id`: it has its own context — it is shown the gate and changes nothing, so
+# the main agent's next call still sees what changed). The memory — `gate_echo_key`, `gate_echo_claim`, `gate_`-prefixed so a
 # prompt's `reset_counters` keeps them — is kept in the counters.
 #
 # No python3 runs while the counters lock is held (task 182: the other calls' hooks wait for its two short steps
@@ -475,11 +405,11 @@ _pb_alive() {
 PB_SELF_START=$(_pb_proc_start $$)
 PB_SELF_CLAIM_TAIL="$$ ${PB_SELF_START:-0}"
 
-# _pb_decide KEY FORCE — inside the counters hold: PB_MODE full / reminder / quiet, and PB_MEMORY the memory fields
+# _pb_decide KEY FORCE — inside the counters hold: PB_MODE full / quiet, and PB_MEMORY the memory fields
 # to write with the gate (`write_counters` pairs). A full echo CLAIMS its key; the key itself is acknowledged after the
 # print (`_pb_print`).
 _pb_decide() {
-    local key="$1" force="$2" quiet claim
+    local key="$1" force="$2" claim
     PB_MODE=full
     PB_MEMORY=()
     if [ "$PB_REMEMBER" != true ] || [ "$PLAYBOOK_COUNTERS_UNLOCKED" = true ]; then
@@ -499,26 +429,20 @@ _pb_decide() {
     if [ -f "$ECHO_PENDING_FILE" ] && [ ! -L "$ECHO_PENDING_FILE" ] && [ -s "$ECHO_PENDING_FILE" ] && [ "$live" != true ]; then
         force=true
     fi
-    quiet=$(( $(read_counter_int "$COUNTER_FILE" gate_echo_quiet) + 1 ))
     if [ "$force" != true ] && [ ! -e "$ECHO_RESET_FILE" ] && [ ! -L "$ECHO_RESET_FILE" ]; then
         if [ "$(read_counter "$COUNTER_FILE" gate_echo_key)" = "$key" ] \
            || { [ "$ckey" = "$key" ] && [ "$live" = true ]; }; then
-            # the same gate (or one a live side-by-side hook is printing): quiet, or the reminder at 10
-            if [ "$quiet" -ge 10 ]; then
-                PB_MODE=reminder
-                PB_MEMORY=(gate_echo_quiet 0)
-            else
-                PB_MODE=quiet
-                PB_MEMORY=(gate_echo_quiet "$quiet")
-            fi
+            # the same gate (or one a live side-by-side hook is printing): quiet (the reminder every 10 calls went
+            # with task 341)
+            PB_MODE=quiet
             return 0
         fi
     fi
-    PB_MEMORY=(gate_echo_claim "$key $PB_SELF_CLAIM_TAIL" gate_echo_quiet 0)
+    PB_MEMORY=(gate_echo_claim "$key $PB_SELF_CLAIM_TAIL")
     return 0
 }
 
-# _pb_print KEY TEXT — after the hold: print TEXT for PB_MODE full / reminder (`{}` for quiet); a full echo printed is
+# _pb_print KEY TEXT — after the hold: print TEXT for PB_MODE full (`{}` for quiet); a full echo printed is
 # acknowledged (its key kept, its claim and the pending one-shot lines cleared) in a second short hold; one that could
 # not be made gives its claim back, so the next call prints it — with the pending lines (plan panel, opus / sonnet;
 # impl round 1, codex / grok)
@@ -558,12 +482,6 @@ _pb_print() {
         printf '%s\n' "$out"
     else
         echo '{}'
-        if [ "$PB_MODE" = reminder ] && [ "$PB_REMEMBER" = true ] && [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ]; then
-            # a reminder that could not be made: the next call gives it (task 220, grok)
-            counters_lock "$COUNTER_FILE"
-            write_counters "$COUNTER_FILE" gate_echo_quiet 9
-            counters_unlock
-        fi
     fi
     return 0
 }
@@ -656,7 +574,7 @@ PB_SECTION_READ=""; PB_SECTION_GOT=false; PB_SAMPLE_READ=""
     IFS= read -r TICKED_LINE || true
     IFS= read -r GATE_TEXT_FULL || true
     IFS= read -r GATE_TEXT || true
-    IFS= read -r PB_SHORT || true
+    IFS= read -r PB_SHORT || true      # the gate cut for the reminder: unused since task 341, the frame keeps its place
     IFS= read -r GATE_OPENS || true
     IFS= read -r GATE_CHECKS || true
     IFS= read -r GATE_ABOVE || true
@@ -713,16 +631,12 @@ PB_SUM=$(printf '%s' "$GATE_TEXT_FULL" | cksum | tr ' ' '.')
 if [ "$IS_FREEHAND" = true ]; then
     PB_CORE="# [${TASK}] Freehand mode — wait for user instructions. Close only when user says done."
     PB_KEY="freehand|${TASK}|${GATE_POS}|${PB_SUM}"
-    PB_REMINDER="$PB_CORE"
 elif [ -n "$GATE_LINE" ]; then
     PB_CORE=$(format_context "$TASK" "$DONE_GATES" "$TOTAL_GATES" "${GATE_TEXT}" "$GATE_LINE" "$REL_PATH")
     PB_KEY="gate|${TASK}|${GATE_POS}|${PB_SUM}"
-    if [ "$PB_SHORT" != "$GATE_TEXT_FULL" ]; then PB_SHORT="${PB_SHORT}…"; fi
-    PB_REMINDER="# [${TASK}] still at gate ${DONE_GATES}/${TOTAL_GATES}: ${PB_SHORT} — ${REL_PATH}:${GATE_LINE}"
 else
     PB_CORE=$(format_context "$TASK" "$DONE_GATES" "$TOTAL_GATES" "" "" "$REL_PATH")
     PB_KEY="done|${TASK}"
-    PB_REMINDER="$PB_CORE"
 fi
 
 # A subagent's call is shown the gate as it stands and changes nothing — no entry, no gate written, no memory (impl
@@ -785,14 +699,10 @@ if [ "$AGENT_WRITABLE" = true ]; then
     if [ "$PB_REMEMBER" = true ] && [ "$PLAYBOOK_COUNTERS_UNLOCKED" != true ] \
        && { [ "$(_pb_prev)" != "$PB_PREV_SEEN" ] \
             || [ "$(stat -c '%i %s %y' -- "$TASK_FILE" 2>/dev/null || true)" != "$PB_FILE_SEEN" ]; }; then
-        # STALE: counted on the gate the counters hold now, nothing said, nothing logged. The quiet count stops at 9
-        # here (impl round 1, codex: a burst pushed it to 12 with no reminder) — the next fresh call gives the reminder.
+        # STALE: counted on the gate the counters hold now, nothing said, nothing logged.
         PB_NOW_TASK=$(read_counter "$COUNTER_FILE" gate_task)
         if [ -n "$PB_NOW_TASK" ]; then
-            PB_NOW_QUIET=$(( $(read_counter_int "$COUNTER_FILE" gate_echo_quiet) + 1 ))
-            if [ "$PB_NOW_QUIET" -gt 9 ]; then PB_NOW_QUIET=9; fi
-            write_counters "$COUNTER_FILE" gate_count "$(( $(read_counter_int "$COUNTER_FILE" gate_count) + 1 ))" \
-                gate_echo_quiet "$PB_NOW_QUIET"
+            write_counters "$COUNTER_FILE" gate_count "$(( $(read_counter_int "$COUNTER_FILE" gate_count) + 1 ))"
         fi
         counters_unlock
         if [ "$PLAYBOOK_WRITE_FAILED" = true ] && [ "${PLAYBOOK_SANDBOXED:-}" != "1" ]; then
@@ -941,25 +851,7 @@ counters_unlock
 
 # --- After the hold: the answer --------------------------------------------------------------------------------
 if [ -n "$PLAYBOOK_EVAL_CONFIG" ]; then
-    EVAL_MARKER="# [eval:gate_echo=${EVAL_GATE_ECHO},nudges=${EVAL_NUDGES}]"
-fi
-# Tool-type-aware nudge — on the reminder only (and in eval mode from the 2nd call on a gate, as before).
-# Eval flags: off=no nudge, flat=old 19-item rotation, typed=current (default)
-PB_NUDGE=""
-if [ "$PB_MODE" != quiet ] && [ "$EVAL_NUDGES" != "off" ] && [ "$EVAL_GATE_ECHO" != "off" ] && [ -n "$GATE_LINE" ] \
-   && [ "$IS_FREEHAND" != true ] && [ "$NEW_COUNT" -gt 1 ]; then
-    TOOL_CLASS=$(classify_tool "$TOOL_NAME" "$INPUT")
-    case "$TOOL_CLASS" in
-        orient)  PB_NUDGE=" — 💭 ${NUDGES_ORIENT[$(( (NEW_COUNT - 2) % ${#NUDGES_ORIENT[@]} ))]}" ;;
-        execute) PB_NUDGE=" — 💭 ${NUDGES_EXECUTE[$(( (NEW_COUNT - 2) % ${#NUDGES_EXECUTE[@]} ))]}" ;;
-        test)    PB_NUDGE=" — 💭 ${NUDGES_TEST[$(( (NEW_COUNT - 2) % ${#NUDGES_TEST[@]} ))]}" ;;
-        reflect) PB_NUDGE=" — 💭 ${NUDGES_REFLECT[$(( (NEW_COUNT - 2) % ${#NUDGES_REFLECT[@]} ))]}" ;;
-        # operate: silent — no nudge
-    esac
-fi
-if [ "$PB_MODE" = reminder ]; then
-    _pb_print "$PB_KEY" "${PB_REMINDER}${PB_NUDGE}"
-    exit 0
+    EVAL_MARKER="# [eval:gate_echo=${EVAL_GATE_ECHO}]"
 fi
 # The full echo: the one-shot lines first — those a dead hook left (PB_PENDING_TEXT) and this call's transition —
 # then the gate, then this call's skip / bare-tick warnings.
@@ -984,12 +876,12 @@ ${PB_FULL}"
 fi
 PB_FULL="${PB_FULL}${SKIP_MSG}${BARE_MSG}"
 if [ -n "$EVAL_MARKER" ]; then
-    # Eval mode: the echo as it was before task 219 — every call, the nudge from the 2nd call on a gate
+    # Eval mode: the echo as it was before task 219 — every call (its nudge went with task 341)
     if [ "$EVAL_GATE_ECHO" = "off" ]; then
         PB_FULL="$EVAL_MARKER"
     else
         PB_FULL="${EVAL_MARKER}
-${PB_FULL}${PB_NUDGE}"
+${PB_FULL}"
     fi
 fi
 _pb_print "$PB_KEY" "$(_pb_warnings "$PB_FULL")"

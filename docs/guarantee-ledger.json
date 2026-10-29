@@ -6154,10 +6154,6 @@
         {
           "path": "plugins/playbook/scripts/monitor-lib/bootstrap.sh",
           "reference": "whole-file"
-        },
-        {
-          "path": "plugins/playbook/scripts/state-echo-hook",
-          "reference": "function:classify_tool"
         }
       ],
       "failure_consequence": "High",
@@ -14473,10 +14469,6 @@
       "category": "task-lifecycle",
       "statement": "After applicable tool calls, state echo reports the current active gate and records transcript binding without allowing malformed payloads to corrupt session state. A call that FAILS — Claude Code fires only PostToolUseFailure after a command that exits non-zero (measured in task 196 on 2.1.296) — is counted as a tool, and as a write only when it was a shell call (its effects are unknown; a failed edit changed nothing — task 196 impl panel r1), with no gate echo and no write-log entry (task 196: the echo was registered for PostToolUse only, so a failed call was never counted, and a turn whose only call was `sed -i … && false` — the file changed — left 0/0 counts and the stop hook's chat-reply release let it end with its gates open; measured with the tree's hooks). Claude Code's Monitor, which runs its `command` in the same shell as Bash, is a shell call here: a write whether it succeeded or failed (task 307, audit 4 G1: it was counted as a tool only, so a turn of one to four Monitor calls read as a chat reply and the stop released it with the gates open); a `ws` Monitor, which runs no shell, is counted the same — one rule for every Monitor, on the side that holds. The step that notices a ticked gate — read the previous gate from the session's counters, log its completion, write the new one — is one hold of the session's counters lock, and the gate it compares is read from task.md under that hold, so tool calls whose hooks overlap log a gate's completion ONCE, each add one to its repeat count, and a tick that lands between two of them does not make the slower one log the open gate; the entry is appended under the chat log's lock, which is tried and not waited for, and where it is not given neither the entry nor the new gate is written — the next call tries again; a chat log that cannot be written is said (task 182; on a host with no lock to take the step runs without one, as before). The echo writes nothing through a link or into a file that is not a regular one — its transcript pointer, the gate entry in `chat_log.md` and that log's lock, the counters — and nothing inside a session directory that is a link or whose `sessions` directory is one (it says so and stops — an Edit/Write still reaches the write log, which lives under HOME: impl panel r2, fable; impl panel r1: a linked `.agent/sessions` is committable — `.gitignore`'s `.agent/sessions/` matches directories only — and needs no session id); a gate entry so refused is said as the write failure it is and the gate moves on (task 194; measured before: the pointer and the entry written through links, the lock's link truncating its target, a FIFO holding the echo to the host's limit, a linked session directory written into). Its two writers' temp paths are checked as well (`counters.tmp.<pid>`; a refused counters write is said). BOUNDS: a swap of a file between the check and the write is not closed; a link ABOVE `sessions` — `.agent` itself, a lane — is not asked for writes: the whole `.agent` state then lives in the target, the CLI's too (deletions ask the whole chain: PB-SESSION-CLEANUP). Below Python 3.10 the echo says so and writes and counts nothing but the `counts_unsure` mark (PB-PYTHON-FLOOR). The hooks find the active task's record by the task directory's own name (task 192; the `find -path` BOUND this row carried — PLAN §S11 item (23) — is closed, see PB-TASK-ACTIVATE).",
       "owner": [
-        {
-          "path": "plugins/playbook/scripts/state-echo-hook",
-          "reference": "function:classify_tool"
-        },
         {
           "path": "plugins/playbook/scripts/gate-echo-lib.sh",
           "reference": "function:get_gate_info"

@@ -200,8 +200,7 @@ class TheStateEcho(_Project):
         self.one(self.H, post("Bash", {"command": "true"}, agent_id="a601", agent_type="general-purpose"), 0,
                  "context", "subagent")
         details = [self.hook(self.H, bash)[1][0]["detail"] for _ in range(10)]
-        self.assertIn("echo reminder", details)
-        self.assertIn("quiet", details)
+        self.assertEqual(set(details), {"quiet"}, details)     # task 341: no reminder every 10 calls
         (self.session_dir / "current_state").write_text("099\n")
         self.one(self.H, bash, 0, "context", "task file not found")
 
