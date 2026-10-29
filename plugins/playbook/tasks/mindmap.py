@@ -8,7 +8,7 @@ nodes notice) and the bootstrap INDEX loader (`_bootstrap_mind_map` +
 orientation costs an index not a full dump), the fence-aware node-boundary family (`_node_starts` is THE
 shared detector; `_partition_overflow` / `sort_overflow_by_id` /
 `_scan_overflow_ids` / the unnumbered-tail notice build on it), `_parse_nodes`
-(the byte-exact node parser; prepare-merge, its first reader, was removed in task 338), and the
+(the byte-exact node parser, without a production reader since task 338 removed prepare-merge), and the
 `mindmap-sync` arm. Imports stdlib + tasks.shared only (leaf order:
 shared < mindmap < command modules — design-1.5.9.md §4 ⟦C4⟧); never a
 command module. Consumers: review/bootstrap (context), merge_prep
@@ -535,8 +535,8 @@ def _unnumbered_tail_notice(content: str) -> str:
 
 
 def _parse_nodes(text: str) -> dict[int, str]:
-    """node_id -> full raw body, for the git-merge collision detector
-    (`_prepare_merge_mindmap`). Distinct from `_extract_nodes`/`_node_bodies`: it
+    """node_id -> full raw body. Its one production reader, prepare-merge's mind-map collision report, was removed in
+    task 338; it stays, with its tests, as the byte-exact parser a lane merge (plan 7.4) will need. Distinct from `_extract_nodes`/`_node_bodies`: it
     accumulates EVERY line of a node verbatim (no heading-trim) and requires a
     trailing space after `[N]` — its bodies feed an md5 comparison, so byte-exact
     accumulation is the point.

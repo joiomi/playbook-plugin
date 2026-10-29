@@ -53,6 +53,25 @@ class Removed(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         self.assertIn("[PASS]", r.stdout + r.stderr)
 
+    def test_a_worktree_does_not_block_the_close(self):
+        """Row 4 (impl round 1, agy, grok): the close's two stray-work refusals are gone too — a fully gated task closes
+        while a lane-less worktree holds only another session's untracked note."""
+        task_md = self.project / ".agent" / "tasks" / "001-x" / "task.md"
+        task_md.write_text("# 001 - x\n\n## Status\npending\n\n## Risk\nreversible\n\n## Work\n- [ ] do it\n",
+                           encoding="utf-8")
+        r = self.run_tasks("work", "001")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        task_md.write_text(task_md.read_text(encoding="utf-8").replace("- [ ] do it", "- [x] do it\n  - done"),
+                           encoding="utf-8")
+        wt = self.project / ".claude" / "worktrees" / "w1"
+        subprocess.run([*GIT, "-C", str(self.project), "worktree", "add", "-q", "-b", "w1", str(wt)], check=True,
+                       env=self.clean)
+        (wt / "NOTES.txt").write_text("another session's note\n", encoding="utf-8")
+        r = self.run_tasks("work", "done")
+        self.assertNotIn("not where the work is", r.stdout + r.stderr)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        self.assertIn("done", task_md.read_text(encoding="utf-8").split("## Status", 1)[1].split("\n")[1])
+
     def test_prepare_merge_is_gone(self):
         log = self.project / ".agent" / "chat_log.md"
         log.write_text("# Project Chat Log\n\n---\n\n**[M001]** [2026-10-29 07:00:00 UTC] `HOST` (claude/pid-a)\n\n"
@@ -60,7 +79,9 @@ class Removed(unittest.TestCase):
         task_md = self.project / ".agent" / "tasks" / "001-x" / "task.md"
         before = (task_md.read_bytes(), log.read_bytes())
         r = self.run_tasks("prepare-merge", "main")
-        self.assertIn("Unknown command: prepare-merge", r.stdout + r.stderr)
+        self.assertIn("Unknown command: prepare-merge", r.stdout + r.stderr)      # the proof that the command is gone
+        # a backstop only (impl round 1, opus): on the old code this spelling stopped at "Unknown argument" and wrote
+        # nothing either, so the bytes would match there too
         self.assertEqual((task_md.read_bytes(), log.read_bytes()), before)
 
 

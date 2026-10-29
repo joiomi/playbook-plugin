@@ -19467,7 +19467,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "The snapshot notices a MIND_MAP.md rewrite and a `~/.claude/settings.json` write — the two places a fallen-through help arm (mindmap-sync/prepare-merge, init) would land."
+            "The snapshot notices a MIND_MAP.md rewrite and a `~/.claude/settings.json` write — the two places a fallen-through help arm (mindmap-sync, init) would land."
           ]
         }
       ],
