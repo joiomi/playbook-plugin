@@ -1766,7 +1766,7 @@ def _save_panel_round(judge_md, round_text: str, round_id: "str | None") -> "tup
             err = e2
             break
         try:
-            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:   # judge.unsaved: a new file, O_EXCL
                 fh.write(round_text)
                 fh.flush()
                 os.fsync(fh.fileno())

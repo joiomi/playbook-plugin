@@ -38,6 +38,10 @@ MIRROR_PREFIX = "scripts/lib/provider/"
 # (relative file, a substring of the call's source line) -> why it is NOT routed
 # through tasks.atomic. Every entry must still match a real site (stale entries fail).
 APPROVED = {
+    ("tasks/review.py", "# judge.unsaved: a new file, O_EXCL"):
+        "task 335: a panel round whose save into judge.md failed is kept in a NEW file created with O_EXCL "
+        "(`judge.unsaved-<round>-<random>.md`) — it never truncates or replaces an existing file, and nothing reads "
+        "it as state; atomic_write's replace would let two failed saves overwrite each other",
     ("tasks/review_view.py", 'shutil.copyfile(src_git / "config", gd / "config")'):
         "task 231: a review's copy of the tree — a fresh clone made in a new folder under the lane journal "
         "(`review-views/<run>`), read-only to the judges and removed on every exit; its files are new, never state",
