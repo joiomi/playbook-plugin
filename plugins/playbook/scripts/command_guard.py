@@ -1297,6 +1297,197 @@ def _clean_is_dry_run(args):
     return dry
 
 
+def _long(args, *names):
+    """Task 346: does an argument before `--` / `--end-of-options` spell one of these long options, in full or cut to
+    any prefix, as git's parse-options accepts (git 2.54 runs `reset --h` as `--hard`, `push --m` as `--mirror`: plan
+    panel A3)? A prefix git finds ambiguous it refuses to run (`push --for`), so reading it as each option it could be
+    is safe."""
+    for a in args:
+        if a in ("--", "--end-of-options"):
+            return False
+        if a.startswith("--"):
+            n = a[2:].split("=", 1)[0]
+            if n and any(name.startswith(n) for name in names):
+                return True
+    return False
+
+
+def _long_values(args, name):
+    """The values an attached long option (`--prune=now`, cut as `_long` reads it: `--p=now`) is given."""
+    out = []
+    for a in args:
+        if a in ("--", "--end-of-options"):
+            break
+        if a.startswith("--") and "=" in a:
+            n, v = a[2:].split("=", 1)
+            if n and name.startswith(n):
+                out.append(v)
+    return out
+
+
+def _short_letters(args, value_letters=""):
+    """The letters of the short options before `--` / `--end-of-options` (plan panel A8: `git checkout -- -f` names a
+    file); a cluster ends at a letter that takes a value, whose rest is that value (A10: `-bfix` is `-b fix`)."""
+    out = []
+    for a in args:
+        if a in ("--", "--end-of-options"):
+            break
+        if a.startswith("-") and not a.startswith("--"):
+            for ch in a[1:]:
+                out.append(ch)
+                if ch in value_letters:
+                    break
+    return "".join(out)
+
+
+def _paths(args):
+    """A git command's positional arguments: those that are no option, and every one after `--` / `--end-of-options`."""
+    for k, a in enumerate(args):
+        if a in ("--", "--end-of-options"):
+            return [p for p in args[:k] if not p.startswith("-")] + args[k + 1:]
+    return [p for p in args if not p.startswith("-")]
+
+
+def _wide_pathspec(p):
+    """Task 346 (plan panel A5): may a pathspec reach the whole work tree, or more of it than a named path? `.` or a
+    climb out, a magic pathspec (`:/`, `:(top)`, `:!x`), a glob — git's matches across `/`, so `'**'`, `'*.py'` and
+    `'.*'` count (fail safe: name the files) — or a path the rm rule calls dangerous (an absolute path, `~`, `$HOME`,
+    `$(…)`, a project name). A named file or directory does not."""
+    if not p:
+        return False
+    if p.startswith(":") or any(c in p for c in "*?["):
+        return True
+    n = posixpath.normpath(p)
+    return n in (".", "..") or n.startswith("../") or _rm_is_dangerous(["rm", "-rf", p])
+
+
+def _stash_subcommand(args):
+    """`git stash`'s subcommand: its first positional argument, a `-m` / `--message` value skipped (`git stash -m
+    drop` pushes a stash named "drop")."""
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a in ("-m", "--message"):
+            i += 2
+            continue
+        if not a.startswith("-"):
+            return a
+        i += 1
+    return None
+
+
+_FALSE = ("false", "no", "off", "0", "")             # git's false booleans (an empty value is false)
+
+
+def _git_deletes(verb, args, git_cfg):
+    """Task 346: the git forms that delete what this machine cannot bring back — raised by four audits (the single
+    list's E023.5, E028, E057, E073, E074.1, E087, E125). New rules only: each adds a block, none replaces a reading.
+    `args` are the subcommand's arguments, `git_cfg` its `-c` overrides; short options are read before `--` only
+    (plan panel A8). → (name, why) or None."""
+    paths = _paths(args)
+    letters = _short_letters(args, {"checkout": "bB", "switch": "cC"}.get(verb, ""))
+    wide = any(_wide_pathspec(p) for p in paths) or _long(args, "pathspec-from-file")
+    if verb in ("checkout", "restore", "switch"):
+        if verb == "checkout":
+            discards = "f" in letters or _long(args, "force") or wide
+        elif verb == "restore":
+            touches_tree = "W" in letters or _long(args, "worktree") or not ("S" in letters or _long(args, "staged"))
+            discards = touches_tree and wide
+        else:
+            discards = "f" in letters or _long(args, "discard-changes", "force")
+        if discards:
+            return ("git-discard-worktree", "overwrites uncommitted changes in the whole tree — they are lost, as with "
+                    "`git reset --hard` (restore one file by name)")
+    if verb == "stash" and _stash_subcommand(args) in ("drop", "clear"):
+        return ("git-stash-drop", "deletes saved stashes — git keeps no reflog for a dropped stash")
+    if verb == "branch" and ("D" in letters or (("d" in letters or _long(args, "delete"))
+                                                and ("f" in letters or _long(args, "force")))):
+        return ("git-branch-force-delete", "deletes a branch even if unmerged — its commits survive only in the reflog")
+    if verb == "push":
+        mirror_cfg = any(re.fullmatch(r"remote\..+\.mirror", k) and v is not None and v.lower() not in _FALSE
+                         for k, v in git_cfg)
+        # A4: an empty-source refspec set by `-c remote.<name>.push=:dst` deletes `dst` too
+        delete_cfg = any(re.fullmatch(r"remote\..+\.push", k) and v is not None and v.lstrip("+").startswith(":")
+                         and len(v.lstrip("+")) > 1 for k, v in git_cfg)
+        if mirror_cfg or delete_cfg or _long(args, "mirror", "delete", "prune") or "d" in letters \
+                or any(p.startswith(":") and len(p) > 1 for p in paths):
+            return ("git-push-deletes-refs", "deletes or overwrites the remote's refs (--mirror, --delete, --prune, "
+                    ":<ref>) — they cannot be restored from here")
+    if verb == "remote" and args and args[0] == "add" and _long(args, "mirror"):
+        return ("git-config-dangerous", "this git config makes a later git command force-push or delete, which "
+                "the guard cannot see")           # A13: it writes `remote.<name>.mirror`, as `git config` would
+    gc_cfg = any((k == "gc.pruneexpire" or k.startswith("gc.reflogexpire")) and v is not None
+                 and v.lower() in ("now", "all") for k, v in git_cfg)
+    if (verb == "reflog" and args and args[0] in ("expire", "delete", "drop")) \
+            or (verb == "gc" and (gc_cfg or any(v.lower() in ("now", "all") for v in _long_values(args, "prune")))) \
+            or (verb == "prune" and not ("n" in letters or _long(args, "dry-run"))):
+        return ("git-recovery-points", "destroys the reflog entries or unreachable objects that let lost commits be "
+                "recovered (only `git prune -n` passes)")
+    return None
+
+
+# find's options before its start points; the tests that narrow what it walks to named entries (plan panel A2: a
+# pattern test counts only with a letter or digit outside brackets, and a time, size or owner test narrows nothing
+# that keeps `.git` out); what widens an expression; the actions that run a command
+_FIND_GLOBAL = frozenset(("-H", "-L", "-P"))
+_FIND_PATTERN = frozenset(("-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-regex", "-iregex",
+                           "-lname", "-ilname"))
+_FIND_NARROW = frozenset(("-samefile", "-inum", "-empty"))
+_FIND_WIDEN = frozenset(("-o", "-or", "!", "-not", ","))
+_FIND_EXEC = frozenset(("-exec", "-execdir", "-ok", "-okdir"))
+
+
+def _find_deletes_dangerously(args, kinds, raws):
+    """Task 346: a `find` that deletes (`-delete`, or an `-exec` family action running `rm`, read through wrappers:
+    `env rm`, `/bin/rm` — A6) under a start point the rm rule calls dangerous, or under the working directory (a start
+    point that normalises to `.`, or none — A9) unless a narrowing test comes BEFORE the first deleting action (find
+    runs left to right: `find . -delete -name x` deletes everything — A1) and nothing widens the expression; and the
+    command each `-exec` runs, judged as a command of its own (A6). → (name, why) or None."""
+    i = 0
+    while i < len(args) and (args[i] in _FIND_GLOBAL or args[i] == "-D" or args[i].startswith("-O")):
+        i += 2 if args[i] == "-D" else 1
+    starts = []
+    while i < len(args) and not (args[i].startswith("-") or args[i] in ("(", ")", "!", ",")):
+        starts.append(i)
+        i += 1
+    deletes = narrowed = widened = False
+    while i < len(args):
+        a = args[i]
+        if a in _FIND_EXEC:
+            k = i + 1
+            while k < len(args) and args[k] not in (";", "+"):
+                k += 1
+            text = " ".join(shlex.quote(c) for c in args[i + 1:k])
+            v = classify_command(text)
+            if v[0] == "block":
+                return (v[1], v[2])                    # `find . -exec rm -rf / \;` is `rm -rf /`
+            rest, _executes, _payloads = _walk_prefix(text)
+            lexed = _lex(rest)
+            deletes = deletes or (bool(lexed) and _command_name(lexed[0][2]) == "rm")
+            i = k + 1
+            continue
+        if a == "-delete":
+            deletes = True
+        elif not deletes and a in _FIND_PATTERN and i + 1 < len(args) and not re.search(r"[$`]", args[i + 1]) \
+                and re.search(r"[A-Za-z0-9]", re.sub(r"\[[^]]*\]", "", args[i + 1])):
+            narrowed = True                            # a pattern held in a variable proves nothing (own search)
+        elif not deletes and a in _FIND_NARROW:
+            narrowed = True
+        elif a in _FIND_WIDEN:
+            widened = True
+        i += 1
+    if not deletes:
+        return None
+    for s in starts or [None]:
+        root = args[s] if s is not None else "."
+        if s is not None and _rm_is_dangerous(["rm", "-rf", root], ["", "", kinds[s]], raws=["rm", "-rf", raws[s]]):
+            return ("find-delete-dangerous-root", "deletes everything find walks under a root you cannot afford to lose")
+        if posixpath.normpath(root) == "." and not (narrowed and not widened):
+            return ("find-delete-dangerous-root", "deletes everything find walks under the working directory (narrow "
+                    "it with -name / -path before -delete, or name the subdirectory)")
+    return None
+
+
 # `git config`'s options as git 2.54 lists them (`git config <mode> -h`, and the modes it still takes as options):
 # the guard reads a `git config` only through these, so an option it does not know cannot hide the key
 _GIT_CONFIG_FLAGS = frozenset((
@@ -1556,8 +1747,10 @@ def _rm_is_dangerous(values, kinds=None, raws=None):
     kinds = kinds or [""] * len(values)
     flags = "".join(t[1:] for t in values if t.startswith("-") and not t.startswith("--"))
     longs = [t for t in values if t.startswith("--")]
-    recursive = "r" in flags or "R" in flags or "--recursive" in longs
-    force = "f" in flags or "--force" in longs
+    # task 346 (plan panel A12): GNU rm takes a long option cut to a prefix too (`--rec`, `--f`), read as an OR
+    cut = [t.split("=", 1)[0] for t in longs if len(t) > 2]
+    recursive = "r" in flags or "R" in flags or "--recursive" in longs or any("--recursive".startswith(t) for t in cut)
+    force = "f" in flags or "--force" in longs or any("--force".startswith(t) for t in cut)
     if not (recursive and force):
         return False
     for idx, t in enumerate(values[1:], start=1):
@@ -1636,13 +1829,16 @@ def _segment_checks(seg):
         # of the safe flag does not cancel the unsafe one (impl panel round 4).
         # Force in either spelling, and git's own per-ref force — a refspec that starts with `+` (task 293, audit 1:
         # `git clean --force -d` and `git push origin +main` went through).
-        force = "--force" in args or "f" in short
+        force = _long(args, "force") or "f" in short     # task 346: a shortened `--forc` too
         cfg_plus = any(k.startswith("remote.") and k.endswith(".push") and v is not None and v.startswith("+")
                        for k, v in git_cfg)            # a --config-env value (None) is refused below
         if verb == "push" and (force or cfg_plus or any(a.startswith("+") and len(a) > 1 for a in args)):
             return ("git-push-force", "force-push overwrites remote history irreversibly")
-        if verb == "reset" and "--hard" in args:
+        if verb == "reset" and _long(args, "hard"):     # task 346: `--ha`, which git 2.54 runs as `--hard`
             return ("git-reset-hard", "discards uncommitted work irrecoverably")
+        hit = _git_deletes(verb, args, git_cfg)
+        if hit:
+            return hit
         if verb == "clean" and not _clean_is_dry_run(args):
             # every spelling of force, a pathspec, and config that drops the force requirement (impl rounds 1-2)
             return ("git-clean-force", "deletes untracked files/dirs irrecoverably (only a dry run, `-n`, passes)")
@@ -1658,6 +1854,10 @@ def _segment_checks(seg):
         if cv == "dangerous":
             return ("git-config-dangerous", "this git config makes a later git command force-push or delete, which "
                     "the guard cannot see")
+    if head == "find":
+        hit = _find_deletes_dangerously(values[1:], kinds[1:], [t[0] for t in toks][1:])
+        if hit:
+            return hit
     if head == "dd" and any(a.startswith("of=/dev/") for a in values[1:]):
         return ("dd-to-device", "writes raw to a device — destroys it")
     if head and head.startswith("mkfs"):
@@ -2209,8 +2409,9 @@ _SHELLS = {"sh", "bash", "zsh", "ksh", "dash", "ash"}
 # a shell from the script it is handed, a database client from the statement.
 # When the arguments are unknown, the name is all there is to judge (task 110,
 # owner 2026-10-05). A name a rule refuses on sight (`mkfs…`) needs no entry:
-# the bare template already blocks.
-_ARGUMENT_JUDGED_HEADS = frozenset({"rm", "git", "dd"}) | frozenset(_SHELLS) | frozenset(_DB_CLIENTS)
+# the bare template already blocks. `find` reads its expression since task 346 (plan panel A7: `parallel … find
+# {1} {2} ::: '.,-delete'` runs `find . -delete`).
+_ARGUMENT_JUDGED_HEADS = frozenset({"rm", "git", "dd", "find"}) | frozenset(_SHELLS) | frozenset(_DB_CLIENTS)
 
 
 # ── what a quoted heredoc's body is (task 199, #11) ──────────────────────────

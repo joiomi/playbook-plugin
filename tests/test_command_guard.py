@@ -2748,8 +2748,9 @@ class ParallelArgumentsTheGuardDoesNotModel(unittest.TestCase):
                 self.assertNotEqual(v[1], _P_RULE, (opt, payload))
 
     def test_every_name_in_the_table_has_a_rule_that_reads_its_arguments(self):
-        self.assertEqual(cg._ARGUMENT_JUDGED_HEADS,
-                         {"rm", "git", "dd"} | cg._SHELLS | set(cg._DB_CLIENTS))
+        self.assertEqual(cg._ARGUMENT_JUDGED_HEADS,                 # `find` since task 346 (plan panel A7)
+                         {"rm", "git", "dd", "find"} | cg._SHELLS | set(cg._DB_CLIENTS))
+        self.assertEqual(cg.classify_command("find / -delete")[:2], ("block", "find-delete-dangerous-root"))
         for client in cg._DB_CLIENTS:                  # the SQL rule knows each client
             v = cg.classify_command(f'{client} -c "{_DROP}"')
             self.assertEqual(v[:2], ("block", "sql-destructive"), client)
@@ -2999,7 +3000,9 @@ class G4Part2(_G4Asserts, unittest.TestCase):
                            "find / -exec sudo rm {} +", "find / -execdir /bin/rm {} +",
                            "find . -name x -exec env rm -rf / \\;", "find . -exec git reset --hard \\;",
                            "parallel --colsep , find {1} {2} ::: '.,-delete'", "find foo/.. -delete", "find .// -delete",
-                           "find -D tree -delete")
+                           "find -D tree -delete",
+                           # my own search (step 4): a pattern held in a variable or a substitution proves no narrowing
+                           'find . -name "$X" -delete', "find . -name \"$(cat pat)\" -delete", "find . -path `cat p` -delete")
         self.assert_passes("find . -name '*.pyc' -delete", "find build -name '*.o' -delete", "find build -delete",
                            "find . -type d -empty -delete", "find . -name x -exec rm {} \\;", "find / -name x -print",
                            "find . -name '*.pyc' -exec rm {} +", "find src -mtime +30 -delete")
