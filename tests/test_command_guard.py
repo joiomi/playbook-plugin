@@ -2947,7 +2947,9 @@ class G4Part2(_G4Asserts, unittest.TestCase):
                            "git checkout --pathspec-from-file=paths", "git restore --pathspec-from-file=paths",
                            "git restore -s HEAD .",
                            # after `--` (and for restore anywhere) a computed pathspec is wide
-                           "git checkout -- $(git ls-files)", "git restore $(git ls-files)")
+                           "git checkout -- $(git ls-files)", "git restore $(git ls-files)",
+                           # a `?` glob, which the rm rule does not read
+                           "git restore -- '??'")
 
     def test_a_targeted_restore_and_a_branch_switch_pass(self):
         """Row 2 (A8, A10: a letter after `--` is a file, an attached value is no force)."""
