@@ -3031,6 +3031,17 @@ class G4Part2(_G4Asserts, unittest.TestCase):
                            "bash -lc 'git push --mirror'", "nice -n5 git checkout -- .")
 
 
+    def test_the_docs_name_the_git_and_find_forms(self):
+        """Row 9: configuration.md names each form and the stated limits; `find -delete` is no longer called allowed."""
+        doc = (_HERE.parent / "docs" / "configuration.md").read_text(encoding="utf-8")
+        self.assertNotIn("`find -delete`, `rsync --delete` and `shred` are all allowed", doc)
+        for must in ("`git checkout -- .`", "`git restore .`", "`git switch --discard-changes`", "`git stash drop`",
+                     "`git branch -D`", "`git push --mirror`", "`git push origin :main`", "`git reflog expire`",
+                     "`git gc --prune=now`", "`find / -delete`", "`find . -name '*.pyc' -delete`", "`git rm -f`",
+                     "`git update-ref -d`", "`xargs`", "shortened"):
+            self.assertIn(must, doc)
+
+
 class G4Part2Round1(_G4Asserts, unittest.TestCase):
     """Task 346, impl round 1 (83a76d75d530): B1 (grok's Critical: my history-probe fix let `git checkout "$PWD"`
     through), the find narrowing dropped (B3-B5, B11), and the round's spellings."""
@@ -3066,15 +3077,45 @@ class G4Part2Round1(_G4Asserts, unittest.TestCase):
         self.assert_passes("git prune --no-dry-run -n", "git push -odeploy origin main", "git restore -sHEAD src/a.py",
                            "find -- src -name '*.o' -delete")      # B8's twin: after `--`, a named subdirectory
 
-    def test_the_docs_name_the_git_and_find_forms(self):
-        """Row 9: configuration.md names each form and the stated limits; `find -delete` is no longer called allowed."""
-        doc = (_HERE.parent / "docs" / "configuration.md").read_text(encoding="utf-8")
-        self.assertNotIn("`find -delete`, `rsync --delete` and `shred` are all allowed", doc)
-        for must in ("`git checkout -- .`", "`git restore .`", "`git switch --discard-changes`", "`git stash drop`",
-                     "`git branch -D`", "`git push --mirror`", "`git push origin :main`", "`git reflog expire`",
-                     "`git gc --prune=now`", "`find / -delete`", "`find . -name '*.pyc' -delete`", "`git rm -f`",
-                     "`git update-ref -d`", "`xargs`", "shortened"):
-            self.assertIn(must, doc)
+
+class G4Part2Round2(_G4Asserts, unittest.TestCase):
+    """Task 346, impl round 2 (315f84268523): C2-C9."""
+
+    def test_a_find_start_point_held_in_a_variable(self):
+        """Row 15 (C2): an empty unquoted `$D` vanishes (find walks `.`), and `"$D/"` empty is `/`."""
+        self.assert_blocks("find $D -name '*.o' -delete", 'find "$D/" -delete', "find $D/ -delete",
+                           'find "$D"/build -delete', "find ${D} -delete", "find $D -exec rm {} +")
+        self.assert_passes('find "$D" -name \'*.o\' -delete', 'find "${D:?}" -name \'*.o\' -delete',
+                           'find "${D:?}"/build -delete', 'find "$D" -name x -print')
+
+    def test_only_a_listed_rev_parse_reads_as_a_commit(self):
+        """Row 16 (C3, C11): rev-parse echoes a path (`rev-parse .` prints `.`), so its options are an allow-list."""
+        self.assert_blocks('git checkout "$(git rev-parse .)"', 'git checkout "$(git rev-parse --resolve-git-dir x)"',
+                           'git checkout "$(git rev-parse --shared-index-path)"', "git checkout $(git rev-parse :/)")
+        self.assert_passes('git checkout "$(git rev-parse --verify HEAD)"', 'git checkout "$(git rev-parse --short=8 HEAD)"',
+                           'git checkout "$(git rev-parse --abbrev-ref HEAD)"', 'git checkout "$(git rev-parse -q --verify main)"',
+                           'git checkout "$(git rev-parse HEAD~1)"', 'git checkout "$(git rev-parse origin/main)"')
+
+    def test_each_brace_alternative_and_default_word(self):
+        """Row 17 (C4): bash expands `{.,build}` and `${R:-.}` before git or find run."""
+        self.assert_blocks("find {.,build} -delete", 'find "${R:-.}" -type f -delete', "git checkout -- {f,.}",
+                           "git restore {.,.}", 'git checkout -- "${P:-.}"', "find {src,.git} -delete")
+        self.assert_passes("find {src,build} -name '*.o' -delete", "git checkout -- {a,b}.py",
+                           'find "${R:-build}" -name \'*.o\' -delete')
+
+    def test_an_exec_command_s_inner_wrapper_and_its_placeholder(self):
+        """Row 18 (C5, C6): a payload's own wrapper is resolved, and `{}` is each start point."""
+        self.assert_blocks("find / -exec env -S 'nice rm -rf' {} +", "find . -maxdepth 0 -exec git restore {} \\;",
+                           "find . -exec git checkout -- {} \\;", "find -exec git restore {} +")
+        self.assert_passes("find src -name '*.py' -exec git restore {} +", "find src -exec env -S 'nice rm -rf' {} +")
+
+    def test_the_records_and_the_round_two_spellings(self):
+        """Row 19 (C7, C8, C9)."""
+        self.assert_blocks("find .git/refs -delete", "find .agent/tasks -delete", "find ./.git/objects -name x -delete",
+                           "find .agent -name '*.md' -exec rm {} +",
+                           "git -c gc.pruneExpire=now maintenance run --task=gc")
+        self.assert_passes("git push -o :main origin", "git push --push-option=:x origin main",
+                           "git maintenance run --task=gc", "find .github -name '*.yml' -delete")
 
 
 if __name__ == "__main__":
