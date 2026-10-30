@@ -1406,20 +1406,38 @@ def _brace_alternatives(t):
     return out
 
 
-# Task 345 (G4; plan panel K5): a variable whose value is the project or the working directory — dangerous as the
-# target itself, its `.git` / `.agent`, or a climb out of it; a subpath (`"$PWD/build"`) is not.
-_PROJECT_NAME = re.compile(r"^\$(?:\{(?:PWD|OLDPWD|CLAUDE_PROJECT_DIR)(?::?[-=?+][^}]*)?\}"   # `${PWD:?}` (L5)
-                           r"|(?:PWD|OLDPWD|CLAUDE_PROJECT_DIR)(?![A-Za-z0-9_]))(.*)$",
-                           re.S)
-# `${NAME:?…}` aborts when NAME is empty or unset — the case G4 is about (plan panel K6).
-_ABORTS_IF_EMPTY = re.compile(r'^("?)\$\{[A-Za-z_][A-Za-z0-9_]*:\?[^}]*\}\1[^$`"\']*$')   # alone (impl round 1, L8)
+# Task 345 (G4; plan panel K5; impl rounds 1-2): the variables whose value is the project or the working directory.
+_PROJECT_NAMES = ("PWD", "OLDPWD", "CLAUDE_PROJECT_DIR")
+_PROJECT_BARE = re.compile(r"^\$(PWD|OLDPWD|CLAUDE_PROJECT_DIR)(?![A-Za-z0-9_])(.*)$", re.S)
+_PROJECT_BRACED = re.compile(r"^\$\{(PWD|OLDPWD|CLAUDE_PROJECT_DIR)([^}]*)\}(.*)$", re.S)
+# `${NAME:?…}` aborts when NAME is empty or unset — the case G4 is about (K6): exempt only when it is the token's one
+# expansion (L8), its name is no project name (M1: `"${PWD:?}"/*` is the project's tree), and its tail climbs nowhere (M15).
+_ABORTS_IF_EMPTY = re.compile(r'^("?)\$\{([A-Za-z_][A-Za-z0-9_]*):\?[^}]*\}\1([^$`"\']*)$')
 _RECORDS = (".git", ".agent")
 
 
+def _abort_guard_exempts(raw):
+    m = _ABORTS_IF_EMPTY.match(raw)
+    return bool(m) and m.group(2) not in _PROJECT_NAMES and ".." not in m.group(3).split("/")
+
+
+def _project_rest(cand):
+    """The text after a project name a target starts with, or None when it starts with none. `${NAME…}` with an
+    operator: `:+` / `+` expands to its word, not the project (M12: None); any other form — `:?`, `:-`, `:=`, a
+    substring `:0` (M11), a pattern — is read as the parameter, conservatively."""
+    m = _PROJECT_BARE.match(cand)
+    if m:
+        return m.group(2)
+    m = _PROJECT_BRACED.match(cand)
+    if m:
+        return None if m.group(2).lstrip(":").startswith("+") else m.group(3)
+    return None
+
+
 def _glob_outside_quotes(raw):
-    """Does a token's RAW text hold a `*` outside quotes and not escaped, or start with an unquoted `~`? The shell
-    expands those wherever they stand, so `"$DEST"/*` with DEST empty is `/*` (task 345, G4). Quote rules as the
-    lexer's: `'…'`, `"…"` (a backslash escapes inside), `$'…'`, and a backslash outside quotes."""
+    """Does a token's RAW text hold a `*` outside quotes, not escaped and not inside a `${…}` pattern (M13), or start
+    with an unquoted `~`? The shell expands those wherever they stand, so `"$DEST"/*` with DEST empty is `/*`
+    (task 345, G4). Quote rules as the lexer's: `'…'`, `"…"` (a backslash escapes inside), `$'…'`, a backslash."""
     if raw.startswith("~"):
         return True
     i, n, q = 0, len(raw), ""
@@ -1435,6 +1453,10 @@ def _glob_outside_quotes(raw):
             continue
         if c == "\\":
             i += 2
+            continue
+        if raw.startswith("${", i):
+            j = raw.find("}", i + 2)
+            i = n if j == -1 else j + 1
             continue
         if raw.startswith("$'", i):
             j = _quote_end(raw, i)
@@ -1482,7 +1504,7 @@ def _rm_is_dangerous(values, kinds=None, raws=None):
             continue
         kind = kinds[idx] if idx < len(kinds) else ""
         raw = raws[idx] if raws is not None and idx < len(raws) else None
-        if raw is not None and not _ABORTS_IF_EMPTY.match(raw) and _glob_outside_quotes(raw):
+        if raw is not None and not _abort_guard_exempts(raw) and _glob_outside_quotes(raw):
             return True                                # G4: `"$DEST"/*`, `'a b'/*`, `$'$D'/*`, `~"/build"`
         for cand in [t] + _brace_alternatives(t):
             if cand in ("/", "/*", "..") or cand.startswith("/") \
@@ -1502,8 +1524,8 @@ def _rm_is_dangerous(values, kinds=None, raws=None):
             if ("*" in cand or cand.startswith("~")) and not kind:
                 return True
             if kind != "'":                            # task 345 (K5): `'$PWD'` is a literal name
-                m = _PROJECT_NAME.match(cand)
-                if m and _project_rest_is_dangerous(m.group(1)):
+                rest = _project_rest(cand)
+                if rest is not None and _project_rest_is_dangerous(rest):
                     return True
             if not cand.startswith(("/", "$", "~")):
                 rel = posixpath.normpath(cand)
@@ -2599,9 +2621,15 @@ def _top_level_segments(line):
 
 
 def _is_downloader_body(body):
-    b = _lex(body)
-    name = _command_name(b[0][2]) if b else None
-    return bool(name and _DOWNLOADER.match(name))
+    """Does a substitution's body run a downloader — named directly, or behind a wrapper (`env curl`, `sudo curl`,
+    `env -S 'curl …'`: impl round 2, M3)?"""
+    rest, _executes, payloads = _walk_prefix(body)
+    for text in [rest] + list(payloads):
+        b = _lex(text)
+        name = _command_name(b[0][2]) if b else None
+        if name and _DOWNLOADER.match(name):
+            return True
+    return False
 
 
 def _is_interpreter(name):
@@ -2610,21 +2638,23 @@ def _is_interpreter(name):
 
 
 _VERSIONED_INTERPRETER = re.compile(r"(?:python[23]?|perl|ruby|node)[0-9][0-9.]*")
-# Each interpreter family's options (task 345, impl round 1 L1): those whose operand is CODE, a MODULE (the program is
-# then the module), or a value; a short option may be a cluster (`-Ic`) and its operand attached (`-cCODE`, `-rjson`).
-# Perl's `IMm` take only an attached value, `l0` only attached digits; anything not listed is a flag.
+# Each interpreter family's options (task 345, impl rounds 1-2): those whose operand is CODE, one that LOADS a file as
+# code (node / ruby `-r`, node `--import`: M9), a MODULE (the program is then the module), or a value; perl's `IMmDxiC`
+# take an attached value (perl's `I` a separate one too: M4) and its `d` only with `:` (M10); `l0` attached digits;
+# anything not listed is a flag. A family that runs every code option (perl, ruby: M7) is read past the first.
 _INTERP_GRAMMAR = {
-    "python": {"code": "c", "module": "m", "value": "WX", "attached": "", "digits": "",
-               "long_code": (), "long_value": ("--check-hash-based-pycs",)},
-    "perl": {"code": "eE", "module": "", "value": "", "attached": "IMmdDxiC", "digits": "l0",
-             "long_code": (), "long_value": ()},
-    "ruby": {"code": "e", "module": "", "value": "rICEF", "attached": "", "digits": "",
-             "long_code": (), "long_value": ()},
-    "node": {"code": "ep", "module": "", "value": "rC", "attached": "", "digits": "",
-             "long_code": ("--eval", "--print"),
-             "long_value": ("--require", "--conditions", "--loader", "--import", "--input-type")},
+    "python": {"code": "c", "load": "", "module": "m", "value": "WX", "attached": "", "digits": "", "debug": "",
+               "multi_code": False, "long_code": (), "long_load": (), "long_value": ("--check-hash-based-pycs",)},
+    "perl": {"code": "eE", "load": "", "module": "", "value": "I", "attached": "MmDxiC", "digits": "l0", "debug": "d",
+             "multi_code": True, "long_code": (), "long_load": (), "long_value": ()},
+    "ruby": {"code": "e", "load": "r", "module": "", "value": "ICEF", "attached": "", "digits": "", "debug": "",
+             "multi_code": True, "long_code": (), "long_load": (), "long_value": ()},
+    "node": {"code": "ep", "load": "r", "module": "", "value": "C", "attached": "", "digits": "", "debug": "",
+             "multi_code": False, "long_code": ("--eval", "--print"), "long_load": ("--require", "--import"),
+             "long_value": ("--conditions", "--loader", "--input-type")},
 }
-_FD_REDIR = re.compile(r"^(?:\d*|&)(?:>>|>&|>\||>|<&|<>)(.*)$", re.S)
+_STDIO_REDIR = re.compile(r"^(\d*|&)(<<<|<>|<&|<|>>|>&|>\||&>>|&>|>)(.*)$", re.S)   # not `_REDIR` (that is the device rule's)
+_STDIN_NAMES = ("-", "/dev/stdin", "/dev/fd/0")                 # M14
 
 
 def _family(name):
@@ -2635,14 +2665,13 @@ def _family(name):
 
 
 def _redirection(raw):
-    """(the kind, the operand glued to it) when a token is a redirection: `<<<…`, `<…` (stdin) or a descriptor one
-    (`2>/dev/null`, `>&2`, `2>&1`) — impl round 1, L2. None otherwise."""
-    if raw.startswith("<<<"):
-        return "<<<", raw[3:]
-    if raw.startswith("<") and not raw.startswith(("<&", "<>")):
-        return "<", raw[1:]
-    m = _FD_REDIR.match(raw)
-    return ("fd", m.group(1)) if m else None
+    """("stdin" or "fd", the operand glued to it) when a token is a redirection — `<<<…` or `<…`, with no descriptor
+    or `0` (stdin: M6), else a descriptor one (`2>/dev/null`, `>&2`, `2>&1`, `3<x`) — or None (impl rounds 1-2)."""
+    m = _STDIO_REDIR.match(raw)
+    if not m:
+        return None
+    fd, op, rest = m.groups()
+    return ("stdin" if op in ("<<<", "<") and fd in ("", "0") else "fd"), rest
 
 
 def _masked_substitutions(text):
@@ -2693,6 +2722,8 @@ def _masked_substitutions(text):
                             j += 1
                         elif ch == qq:
                             qq = ""
+                    elif ch == "\\":
+                        j += 1                         # an escaped character ends nothing (M2)
                     elif ch in "\"'":
                         qq = ch
                     else:
@@ -2710,50 +2741,90 @@ def _masked_substitutions(text):
 
 
 def _interpreter_runs_a_download(seg, head=None):
-    """A non-shell interpreter whose PROGRAM is a download (task 345, E125; plan panel K2): `<(dl)` as its script
-    operand (the first word that is not an option, with no `-m` or code option before it), a code option (`-c`, `-e`,
-    `--eval`, `-p`) whose operand holds a downloader substitution, or — when the program is stdin (no script operand,
-    or `-`) — a herestring or `< <(dl)` that holds one. A download read as DATA passes: `python3 -m json.tool <(curl …)`,
-    `python3 x.py --ver "$(curl …)"`, `python3 -c 'print(1)' "$(curl …)"`."""
+    """A non-shell interpreter whose PROGRAM is a download (task 345, E125; plan panel K2; impl rounds 1-2): `<(dl)`
+    as its script operand, a code or load option whose operand holds a downloader substitution, or — when the program
+    is stdin (no script operand, `-`, `/dev/stdin`) — a stdin redirection that holds one. Each family's options are
+    read by its grammar (clusters, attached and `=` operands); redirections are skipped wherever they stand (M8); once
+    the program is known, the remaining words are its arguments (M5). A download read as DATA passes:
+    `python3 -m json.tool <(curl …)`, `python3 x.py --ver "$(curl …)"`, `python3 -c 'print(1)' "$(curl …)"`."""
     masked, bodies = _masked_substitutions(seg)
     toks = _lex(masked)
     g = _INTERP_GRAMMAR.get(_family(head or (_command_name(toks[0][2]) if toks else "") or ""), None)
     if g is None:
         return False
+    n = len(toks)
 
-    def holds_download(raw, openers=None):
+    def holds(raw, openers=None):
         return any(k in raw and (openers is None or o in openers) and _is_downloader_body(b)
                    for k, (o, b) in bodies.items())
 
-    i, n, stdin_download = 1, len(toks), False
+    def operand_at(j):
+        """The index of the next word that is no redirection, from j — redirections skipped with their operands (M8)."""
+        while j < n:
+            red = _redirection(toks[j][0])
+            if red is None:
+                return j
+            j += 1 if red[1] else 2
+        return None
+
+    i, stdin_download, program, word_next = 1, False, None, False
     while i < n:
         raw, value = toks[i][0], toks[i][2]
         red = _redirection(raw)
         if red is not None:
             kind, glued = red
             operand = glued if glued else (toks[i + 1][0] if i + 1 < n else "")
-            if kind in ("<<<", "<") and holds_download(operand):
+            if kind == "stdin" and holds(operand):
                 stdin_download = True
             i += 1 if glued else 2
             continue
-        if value.startswith("--") and value != "--":
-            name, eq, _val = value.partition("=")
-            if name in g["long_code"]:
-                return holds_download(raw) if eq else (i + 1 < n and holds_download(toks[i + 1][0]))
-            i += 2 if (name in g["long_value"] and not eq) else 1
+        if program in ("script", "stdin", "args"):
+            i += 1                                     # the program's arguments: only redirections still count
             continue
-        if value.startswith("-") and value not in ("-", "--"):
-            letters, k, skip = value[1:], 0, 1
+        if not word_next and value == "--":
+            word_next = True
+            i += 1
+            continue
+        if not word_next and value.startswith("--"):
+            name, eq, _val = value.partition("=")
+            if name in g["long_code"] or name in g["long_load"]:
+                j = None if eq else operand_at(i + 1)
+                if holds(raw) if eq else (j is not None and holds(toks[j][0])):
+                    return True
+                if name in g["long_code"]:
+                    program = "code" if g["multi_code"] else "args"
+                i = i + 1 if eq else (j + 1 if j is not None else n)
+                continue
+            if name in g["long_value"] and not eq:
+                j = operand_at(i + 1)
+                i = j + 1 if j is not None else n
+                continue
+            i += 1
+            continue
+        if not word_next and value.startswith("-") and value not in _STDIN_NAMES:
+            letters, k, nxt = value[1:], 0, i + 1
             while k < len(letters):
                 ch = letters[k]
-                if ch in g["code"]:
-                    return holds_download(raw) if letters[k + 1:] else (i + 1 < n and holds_download(toks[i + 1][0]))
+                if ch in g["code"] or ch in g["load"]:
+                    if letters[k + 1:]:
+                        if holds(raw):
+                            return True
+                    else:
+                        j = operand_at(i + 1)
+                        if j is not None and holds(toks[j][0]):
+                            return True
+                        nxt = j + 1 if j is not None else n
+                    if ch in g["code"]:
+                        program = "code" if g["multi_code"] else "args"
+                    break
                 if ch in g["module"]:
                     return False                       # the module is the program; what follows is its data
                 if ch in g["value"]:
-                    skip = 1 if letters[k + 1:] else 2
+                    if not letters[k + 1:]:
+                        j = operand_at(i + 1)
+                        nxt = j + 1 if j is not None else n
                     break
-                if ch in g["attached"]:
+                if ch in g["attached"] or (ch in g["debug"] and letters[k + 1:k + 2] == ":"):
                     break                              # the rest of the cluster is its value
                 if ch in g["digits"]:
                     k += 1
@@ -2761,18 +2832,21 @@ def _interpreter_runs_a_download(seg, head=None):
                         k += 1
                     continue
                 k += 1
-            i += skip
+            i = nxt
             continue
-        if value == "--":
+        if value in _STDIN_NAMES and program is None:
+            program = "stdin"                          # the program is stdin, named (M5, M14)
             i += 1
-            if i < n:
-                return toks[i][0] in bodies and holds_download(toks[i][0], ("<(",))
-            break
-        if value == "-":
-            i += 1                                     # the program is stdin, named
             continue
-        return raw in bodies and holds_download(raw, ("<(",))     # the script operand is `<(dl)` itself
-    return stdin_download
+        if program is None:
+            if raw in bodies and holds(raw, ("<(",)):
+                return True                            # the script operand is `<(dl)` itself
+            program = "script"
+        else:
+            program = "args"                           # after the code: the program's arguments
+        word_next = False
+        i += 1
+    return stdin_download and program in (None, "stdin")
 
 
 def _shell_consumes_a_downloader(text):
