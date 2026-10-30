@@ -3021,6 +3021,8 @@ class G4Part2(_G4Asserts, unittest.TestCase):
                            "git gc --pru=now", "git reset --h", "git push --m", "git checkout --f main",
                            "rm --rec --forc /", "rm --recursive --f /")
         self.assert_passes("git push --force-with-lease origin main", "git reset --soft HEAD~1", "rm --rec build")
+        # the new reading is an OR on the old one: an exact `--force` / `--hard` anywhere still blocks, as before
+        self.assert_blocks("git push origin -- --force", "git reset -- --hard")
 
     def test_a_wrapper_reaches_the_new_rules(self):
         """Row 11 (A8): the command position is found through wrappers, as for the older rules."""

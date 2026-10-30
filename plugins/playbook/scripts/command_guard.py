@@ -1833,12 +1833,12 @@ def _segment_checks(seg):
         # of the safe flag does not cancel the unsafe one (impl panel round 4).
         # Force in either spelling, and git's own per-ref force — a refspec that starts with `+` (task 293, audit 1:
         # `git clean --force -d` and `git push origin +main` went through).
-        force = _long(args, "force") or "f" in short     # task 346: a shortened `--forc` too
+        force = "--force" in args or _long(args, "force") or "f" in short   # task 346: OR a shortened `--forc`
         cfg_plus = any(k.startswith("remote.") and k.endswith(".push") and v is not None and v.startswith("+")
                        for k, v in git_cfg)            # a --config-env value (None) is refused below
         if verb == "push" and (force or cfg_plus or any(a.startswith("+") and len(a) > 1 for a in args)):
             return ("git-push-force", "force-push overwrites remote history irreversibly")
-        if verb == "reset" and _long(args, "hard"):     # task 346: `--ha`, which git 2.54 runs as `--hard`
+        if verb == "reset" and ("--hard" in args or _long(args, "hard")):   # task 346: OR `--h`, git 2.54's `--hard`
             return ("git-reset-hard", "discards uncommitted work irrecoverably")
         hit = _git_deletes(verb, args, git_cfg)
         if hit:
