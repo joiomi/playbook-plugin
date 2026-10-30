@@ -4461,6 +4461,30 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4Part2PostPanel3.test_only_a_quoted_guard_is_exempt",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4Part2PostPanel3.test_more_than_one_brace_list_is_not_modelled",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4Part2PostPanel3.test_a_replacement_word_s_wildcard_is_a_glob",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
         }
       ],
       "applicable_platforms": [
@@ -4505,7 +4529,7 @@
         "Task 199, the single judge after the last round (run 2, codex, FAIL — 2 Critical, 2 Important), each run in bash with a harmless command: a line continuation inside an assignment's name (`PA\\⏎TH=…`, refused by 1.6.1), a quoted write target (`>'s.sh' /dev/null` was read as a write to /dev/null), a `$'E\\qOF'` delimiter (bash keeps `\\q`) — regressions — and `bash <<< '…' 2>/dev/null`, `bash <<< $'…'` (older); and, by my own probe after it, a variable set without an `=` word (`read PATH`, `printf -v PATH`, `getopts`, `eval 'read …'`) and a file python writes run on a LATER line (`sh s.sh`) or by a background job beside it — regressions, refused by 1.6.1. Fixed by the owner's ruling of 19:07, prudence over precision: no body is removed from a command that sets a variable, writes a file another command may run or quotes its delimiter in `$'…'`/`$\"…\"`; the write targets are read as written; the herestring's operand is its first word, decoded. The ruling of 19:38 narrowed the write clause after the corpus showed it refused a file only written (`cat > $S/f <<'EOF'` holding a backticked dangerous command; 1.6.1 allows it). Cost, accepted: an assignment anywhere in the command (`export X=…; python3 - <<'PY'`, `PYTHONPATH=. python3 - …`) keeps the body, the 1.6.1 behaviour. No judge read these fixes (the ruling of 19:07: close without another run).",
         "2026-10-16 (task 221): the parked local-time item above is moot — no reader compares the shell log's stamps with UTC any more; the task windows come from the CLI's journal records, stamped UTC.",
         "Task 345 (G4, PLAN-PLAYBOOK-2.md 4.2): a glob outside quotes is read wherever it stands (`\"$DEST\"/*`), the project's names (`$PWD`, `$OLDPWD`, `$CLAUDE_PROJECT_DIR`) and its `.git` / `.agent` are dangerous targets, read normalised, and a download a shell reads by substitution is judged per top-level segment, an interpreter's only when it becomes the program. Stated limits: a plain variable's value; a wrapper that re-quotes its payload (`env -S`); `\"$X\"/.git` for another variable; `bun`, `deno`, `php`; a download in an unquoted heredoc's body that an interpreter runs as its program (`python3 - <<EOF`). Measured on 81,231 real commands (3,661 the rules can touch): 7 verdicts changed — 1 false alarm removed, 3 intended blocks, 2 texts quoting G4's form in an unquoted heredoc (an existing fail-safe class), 1 quoted heredoc's text in a compound line holding an unbalanced substitution opener (stated in configuration.md).",
-        "Task 346 (G4 part 2, PLAN-PLAYBOOK-2.md 4.2): the git and find forms that delete what this machine cannot bring back block — a whole-tree discard (`git checkout -- .`, a wide pathspec, `checkout -f`, `restore .` unless `--staged` alone, `switch --discard-changes`), `git stash drop` / `clear`, `git branch -D`, a push that deletes the remote's refs (`--mirror`, `--delete`, `:ref`, `--prune`, their `-c` overrides) and `git remote add --mirror`, a lost recovery point (`reflog expire` / `delete` / `drop`, `gc --prune=now`, `prune`), and a `find` that deletes under a dangerous root or under the working directory however its expression narrows (no name test keeps `.git` and `.agent` safe; a cleanup names its subdirectory), at or under the records, through each brace alternative and default word, or from a start point the guard cannot read (an expansion other than a `${X:?}` guard, or nested braces — not modelled); git's and rm's long options are read shortened too, as an OR on the exact names. Stated limits: `git rm -f`, `git update-ref -d`, `git repack -a -d`, `checkout-index -a -f`, `read-tree --reset -u`, an rm of a path under the records (`rm -rf .agent/tasks`), `branch -M` / `-C`, `checkout -B` / `switch -C`, `worktree remove --force`, history rewriting, `gc --prune=<a near date>`, paths fed by `xargs`, `fd`, and a find `-exec` shell that deletes what find passes it. Measured on 81,559 real commands (5,696 the rules can touch): 105 verdicts changed, none from block to allow — 73 intended blocks (whole-tree discards, mostly of throwaway copies, as `reset --hard` already is; remote branch deletions; forced branch deletes; stash drops; find cleanups under /tmp, as `rm -rf /tmp/x` already is), 4 computed pathspecs (fail safe), 13 `find . -name __pycache__ … -exec rm` cleanups (the cost of the working-directory rule; remedy: name the folders), 14 finds from a computed start point (`find $C …`, `$S/x`, a quoted `\"$T\"`; 4 of them text written through a heredoc; remedy: `\"${C:?}\"`) and 1 text quoting `find -delete` in backticks (an existing fail-safe class)."
+        "Task 346 (G4 part 2, PLAN-PLAYBOOK-2.md 4.2): the git and find forms that delete what this machine cannot bring back block — a whole-tree discard (`git checkout -- .`, a wide pathspec, `checkout -f`, `restore .` unless `--staged` alone, `switch --discard-changes`), `git stash drop` / `clear`, `git branch -D`, a push that deletes the remote's refs (`--mirror`, `--delete`, `:ref`, `--prune`, their `-c` overrides) and `git remote add --mirror`, a lost recovery point (`reflog expire` / `delete` / `drop`, `gc --prune=now`, `prune`), and a `find` that deletes under a dangerous root or under the working directory however its expression narrows (no name test keeps `.git` and `.agent` safe; a cleanup names its subdirectory), at or under the records, through each brace alternative and default word, or from a start point the guard cannot read (an expansion other than a quoted `\"${X:?}\"` guard, nested braces, or more than one brace list — not modelled); git's and rm's long options are read shortened too, as an OR on the exact names. Stated limits: `git rm -f`, `git update-ref -d`, `git repack -a -d`, `checkout-index -a -f`, `read-tree --reset -u`, an rm of a path under the records (`rm -rf .agent/tasks`), `branch -M` / `-C`, `checkout -B` / `switch -C`, `worktree remove --force`, history rewriting, `gc --prune=<a near date>`, paths fed by `xargs`, `fd`, and a find `-exec` shell that deletes what find passes it. Measured on 81,559 real commands (5,696 the rules can touch): 105 verdicts changed, none from block to allow — 73 intended blocks (whole-tree discards, mostly of throwaway copies, as `reset --hard` already is; remote branch deletions; forced branch deletes; stash drops; find cleanups under /tmp, as `rm -rf /tmp/x` already is), 4 computed pathspecs (fail safe), 13 `find . -name __pycache__ … -exec rm` cleanups (the cost of the working-directory rule; remedy: name the folders), 14 finds from a computed start point (`find $C …`, `$S/x`, a quoted `\"$T\"`; 4 of them text written through a heredoc; remedy: `\"${C:?}\"`) and 1 text quoting `find -delete` in backticks (an existing fail-safe class)."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],

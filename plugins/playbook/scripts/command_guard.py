@@ -1372,8 +1372,9 @@ def _wide_pathspec(p):
     alt = _param_word_target(p)
     if alt is not None and alt != p and _wide_pathspec(alt):
         return True
-    # a glob read outside expansions (`${D:?}` holds a `?` that is no glob); a bracket alone narrows (`[locale]`)
-    if p.startswith(":") or any(c in bare for c in "*?"):
+    # a glob, a guard's `:?` / `?` aside (`${D:?}` holds no glob), what an expansion emits kept (post-panel run 3,
+    # F3: `"${P/x/?}"`); a bracket alone narrows (`[locale]`)
+    if p.startswith(":") or any(c in re.sub(r"(\$\{\w+(?:\[[^]]*\])?):?\?", r"\1", p) for c in "*?"):
         return True
     n = posixpath.normpath(p)
     return n in (".", "..") or n.startswith("../") or _rm_is_dangerous(["rm", "-rf", p])
@@ -1565,7 +1566,7 @@ def _find_deletes_dangerously(args, kinds, raws):
             # restore {}` is `git restore .`), so the command is judged with `{}` as each start point too
             # post-panel runs 1-2, D2 and E3: a computed start point may be no word at all, and find then walks `.`
             roots = [c for s in starts for c in [args[s]] + _brace_alternatives(args[s])
-                     + (["."] if _computed_start(args[s]) or _nested_braces(args[s]) else [])] or ["."]
+                     + (["."] if _computed_start(args[s], raws[s]) or _nested_braces(args[s]) else [])] or ["."]
             for t in [text] + ([" ".join(shlex.quote(c.replace("{}", r)) for c in words) for r in roots]
                                if any("{}" in c for c in words) else []):
                 v = classify_command(t)
@@ -1593,7 +1594,7 @@ def _find_deletes_dangerously(args, kinds, raws):
         # post-panel run 2, E1-E4: a start point the guard cannot read blocks — an expansion (other than a
         # `${X:?…}` guard) may be empty and leave find walking `.` (`$D`, `"${a[@]}"`, `"$@"`) or a root (`"$D/"`,
         # `"${D-x}/"`, `"./$D"`), and nested braces are not modelled; what such a start point may become is not chased
-        if s is not None and (_computed_start(root) or _nested_braces(root)):
+        if s is not None and (_computed_start(root, raws[s]) or _nested_braces(root)):
             return ("find-delete-dangerous-root", "a start point the guard cannot read: an expansion may be empty and "
                     "leave find walking the working directory or the root — use `${D:?}`, or name the directory")
         cands = [root] + _brace_alternatives(root)
@@ -1607,26 +1608,32 @@ def _find_deletes_dangerously(args, kinds, raws):
     return None
 
 
-def _computed_start(value):
+def _computed_start(value, raw=None):
     """Post-panel run 2: does a find start point hold an expansion other than a `${X:?…}` guard (which aborts when
     empty)? Its value cannot be read, and empty it may vanish or leave a root. `${X?…}` without the colon is no guard:
-    a set but empty `X` passes through it (E1)."""
-    rest = re.sub(r"\$\{\w+(?:\[[^]]*\])?:\?[^}]*\}", "", value)
+    a set but empty `X` passes through it (E1). Run 3, F1: only a QUOTED guard is one — unquoted, `D=' '` passes
+    `${D:?}` and word splitting then removes the start point."""
+    rest = re.sub(r"\$\{\w+(?:\[[^]]*\])?:\?[^}]*\}", "", value) if (raw or "").startswith('"') else value
     return "$" in rest or "`" in rest
 
 
 def _nested_braces(value):
     """Post-panel run 2, E4: a brace list inside a brace list (`{docs,{tests,.}}`), which `_brace_alternatives` does
-    not expand: refused rather than modelled."""
-    depth = 0
+    not expand: refused rather than modelled. Run 3, F2: so is more than one brace list (`{src,build}/{..,cache}`
+    yields `src/..`), since `_brace_alternatives` expands only the first."""
+    depth, lists, comma = 0, 0, False
     for c in value:
         if c == "{":
             depth += 1
             if depth > 1:
                 return True
-        elif c == "}":
-            depth = max(depth - 1, 0)
-    return False
+            comma = False
+        elif c == "}" and depth:
+            depth -= 1
+            lists += comma
+        elif c == "," and depth == 1:
+            comma = True
+    return lists > 1
 
 
 # `git config`'s options as git 2.54 lists them (`git config <mode> -h`, and the modes it still takes as options):
