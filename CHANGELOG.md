@@ -11,8 +11,8 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   are dangerous targets, read normalised; a subpath passes. A download a shell reads by substitution is judged per
   segment (`true; bash <(curl …)` blocks, `bash x.sh; diff <(curl …) b` passes), and an interpreter's only when it
   becomes the program (`python3 <(curl …)` blocks, `python3 -m json.tool <(curl …)` passes), each interpreter's
-  options read by its own grammar. A parameter's default or alternate word is read as the target it expands to
-  (`"$D"/${f:-*}`, `"${PWD:+/}"` block). A plain variable stays allowed, and the docs now say so. Measured on 81,231
+  options read by its own grammar. Any parameter's default, assign or alternate word is read as a target it may
+  expand to, wherever it stands (`"$D"/${f:-*}`, `"${PWD:+/}"`, `"${X:-${PWD}}"`, `"./${X:-.git}"` block). A plain variable stays allowed, and the docs now say so. Measured on 81,231
   real commands: 7 verdicts changed — 3 intended blocks, 1 false alarm gone, 3 refusals of text that quotes a dangerous
   form (stated limits).
 - **One review round cap: 2** (task 344, PLAN-PLAYBOOK-2.md 4.1 a; DESIGN-PLAYBOOK-2.md §3.3 point 12). Before the

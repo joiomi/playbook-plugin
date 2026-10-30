@@ -1462,7 +1462,7 @@ def _glob_outside_quotes(raw):
             i += 2
             continue
         if raw.startswith("${", i):
-            j = raw.find("}", i + 2)
+            j = _param_close(raw, i)                   # post-panel run 3, S1: `${f:-"${X}"*}` ends at its own brace
             inner = raw[i + 2:n if j == -1 else j]
             # impl round 3, N1: only a removal pattern's `*` (`${f%.*}`) is no glob; a default, assign or alternate
             # word is expanded as a target (`${f:-*}` is `*`, `${f:-~}` is the home), and so is a replacement (Q6:
@@ -1495,22 +1495,42 @@ _PARAM_OPEN = re.compile(r"\$\{(?:" + _PARAM_NAME + r"|[@*])(:?[-=+])")
 
 
 def _param_word_target(cand):
-    """Post-panel run 2, R3: the value a target that starts with `${NAME:-word}` (`-`, `=`, `+`, with or without `:`)
-    may take — the word and the text after the closing brace, nested braces counted — or None."""
-    m = _PARAM_OPEN.match(cand)
+    """Post-panel run 2, R3: the value a target holding `${NAME:-word}` (`-`, `=`, `+`, with or without `:`) may take —
+    the text before it, the word, and the text after its closing brace — or None. Run 3, S2: wherever the form stands
+    (`./${X:-.git}` is `./.git`); a later one is read when this value is judged in its turn."""
+    m = _PARAM_OPEN.search(cand)
     if not m:
         return None
-    depth, i = 1, m.end()
-    while i < len(cand):
-        if cand.startswith("${", i):
-            depth, i = depth + 1, i + 2
+    j = _param_close(cand, m.start())
+    return None if j == -1 else cand[:m.start()] + cand[m.end():j] + cand[j + 1:]
+
+
+def _param_close(s, i):
+    """The index of the `}` that closes the `${` at `i` — a nested `${` counted, quoted text and an escaped character
+    skipped — or -1 (post-panel run 3, S1)."""
+    depth, j, n, q = 0, i, len(s), ""
+    while j < n:
+        c = s[j]
+        if q:
+            if q == '"' and c == "\\":
+                j += 2
+                continue
+            if c == q:
+                q = ""
+        elif c == "\\":
+            j += 2
             continue
-        if cand[i] == "}":
+        elif c in "\"'":
+            q = c
+        elif s.startswith("${", j):
+            depth, j = depth + 1, j + 2
+            continue
+        elif c == "}":
             depth -= 1
             if depth == 0:
-                return cand[m.end():i] + cand[i + 1:]
-        i += 1
-    return None
+                return j
+        j += 1
+    return -1
 
 
 def _project_rest_is_dangerous(rest):
@@ -2618,11 +2638,18 @@ def _top_level_segments(line):
     """`line` cut at `&&`, `||`, `;`, `|` and `&` outside quotes, backticks and every parenthesis, so a substitution
     stays whole (`bash <(curl x | tr a b)`) — task 345, plan panel K1."""
     out, start, i, n, stack, q, bt = [], 0, 0, len(line), [], "", False
+    bt_dq = False                                      # the open backtick opened inside a double quote
     while i < n:
         c = line[i]
         if q:
             if q == '"' and c == "\\" and i + 1 < n:
                 i += 2
+                continue
+            if q == '"' and c == "`":
+                # post-panel run 3, S3: a backtick substitution inside double quotes has quotes of its own too
+                # (`"`tr -d '"' < v`"`); the double quote comes back at the closing backtick
+                bt, bt_dq, q = True, True, ""
+                i += 1
                 continue
             if q == '"' and line.startswith("$(", i):
                 # post-panel run 2, R1: a substitution inside double quotes has quotes of its own
@@ -2648,6 +2675,8 @@ def _top_level_segments(line):
             continue
         if c == "`":
             bt = not bt
+            if not bt and bt_dq:
+                q, bt_dq = '"', False                  # back inside the double quote the backtick opened in
         elif c == "(":
             # impl round 1, L3: a substitution (`$(`, `<(`, `>(`) stays whole; a bare `( … )` group is cut like the
             # rest of the line, so `(true; bash <(curl …))` is read segment by segment
