@@ -3576,7 +3576,7 @@
             "reference": "MorePrivilegeWrappersAndArity.test_git_short_option_clusters"
           },
           "limitations": [
-            "A recursive-force `rm` whose target is COMPUTED (`$(pwd)`, `$DEST`, a backtick) is treated as dangerous; round 2 special-cased `$HOME` and missed every other expansion.",
+            "A recursive-force `rm` whose target RUNS something (`$(pwd)`, a backtick) or is a known root name is treated as dangerous; a plain variable (`$DEST`, `\"$WORK\"`) is allowed since round 5, the test pins it (task 345 corrected this note, which said `$DEST` counts); round 2 special-cased `$HOME` and missed every other expansion.",
             "Task 077 impl panel round 5, opus #2, NARROWED with a measurement: round 4 treated every `$` target as computed, which blocked `rm -rf \"$WORK\"` — the standard temp-dir cleanup idiom, ~28 occurrences in this repository alone, ALLOWED before this task. Dangerous now means a target that RUNS something (`$(…)`, a backtick) or a known-dangerous variable NAME (HOME/ROOT/PREFIX/…), which blocks however it is quoted. Still strictly stronger than the pre-task guard, which allowed `rm -rf \"$HOME\"` and `rm -rf $(pwd)` alike."
           ]
         },
@@ -4223,6 +4223,52 @@
           "limitations": [
             "Every hook hooks.json wires for the event and the tool, fired as Claude Code fires them (the matcher read with `re.fullmatch`), on a task made and activated by the tree CLI; the same call as Bash is the test's control. Red on nested 1d4c98f: no hook ran for a Monitor."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4.test_a_glob_outside_quotes_is_dangerous_wherever_it_stands",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_command_guard.py",
+            "reference": "G4.test_a_quoted_glob_and_a_plain_variable_still_pass"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4.test_the_names_that_hold_the_project_are_dangerous",
+          "boundary": "subprocess",
+          "negative_control": {
+            "path": "tests/test_command_guard.py",
+            "reference": "G4.test_a_subpath_of_the_project_still_passes"
+          },
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4.test_the_repository_and_the_records_are_dangerous",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4.test_an_interpreter_fed_by_a_downloader_blocks",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4.test_a_shell_fed_by_a_downloader_blocks",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
         }
       ],
       "applicable_platforms": [
@@ -4265,7 +4311,8 @@
         "Task 199 impl panel r3 (PASS 5/5, 4 Critical — two older —, 13 Important), each vector run in bash or git: on #10's path a data command that wrote a file then run (`echo '$(…)' > s.sh; bash s.sh`), `eval` receiving stdin (`… | eval bash`), a value a program hands to a shell (`GIT_EDITOR='…' git commit`, `git -c core.editor=…`, `LESSOPEN=…`), `$$'…'` in the splitters, a `<<$'EOF'` delimiter, a redirection glued to the heredoc word, `BASH_CMDS[python3]=/bin/bash` — regressions, all fixed; and the older `true; bash <<< '…'` (the herestring reader looked at a line's first command), fixed. NOT covered, older, PLAN Phase B: `_one_substitution` keeps one quote flag, so a `$( … )` nested in `\"…\"` nested in `$( … )` mispairs; `_strip_comments` knows no backtick span (``echo ` #`; rm -rf /``).",
         "Task 199, the single judge after the last round (run 1, codex, FAIL — 2 Critical, 3 Important), each run in bash or git with GIT_EDITOR unset: `printf '…' >s.sh; eval 'bash s.sh'` (eval after a written file), `>&s.sh` (bash's `>word 2>&1` form), `git commit -qe` (an editor option inside a cluster), `git --namespace commit -c core.editor=… commit` (the first `commit` word was a value) — regressions, fixed; and `echo 'BASH_CMDS is …'` read as a rebinding (an over-block), fixed: `git commit` now passes only with an allowlist of options, the subcommand found by its position, `BASH_CMDS`/`BASH_ALIASES`/`PATH` only as assignments.",
         "Task 199, the single judge after the last round (run 2, codex, FAIL — 2 Critical, 2 Important), each run in bash with a harmless command: a line continuation inside an assignment's name (`PA\\⏎TH=…`, refused by 1.6.1), a quoted write target (`>'s.sh' /dev/null` was read as a write to /dev/null), a `$'E\\qOF'` delimiter (bash keeps `\\q`) — regressions — and `bash <<< '…' 2>/dev/null`, `bash <<< $'…'` (older); and, by my own probe after it, a variable set without an `=` word (`read PATH`, `printf -v PATH`, `getopts`, `eval 'read …'`) and a file python writes run on a LATER line (`sh s.sh`) or by a background job beside it — regressions, refused by 1.6.1. Fixed by the owner's ruling of 19:07, prudence over precision: no body is removed from a command that sets a variable, writes a file another command may run or quotes its delimiter in `$'…'`/`$\"…\"`; the write targets are read as written; the herestring's operand is its first word, decoded. The ruling of 19:38 narrowed the write clause after the corpus showed it refused a file only written (`cat > $S/f <<'EOF'` holding a backticked dangerous command; 1.6.1 allows it). Cost, accepted: an assignment anywhere in the command (`export X=…; python3 - <<'PY'`, `PYTHONPATH=. python3 - …`) keeps the body, the 1.6.1 behaviour. No judge read these fixes (the ruling of 19:07: close without another run).",
-        "2026-10-16 (task 221): the parked local-time item above is moot — no reader compares the shell log's stamps with UTC any more; the task windows come from the CLI's journal records, stamped UTC."
+        "2026-10-16 (task 221): the parked local-time item above is moot — no reader compares the shell log's stamps with UTC any more; the task windows come from the CLI's journal records, stamped UTC.",
+        "Task 345 (G4, PLAN-PLAYBOOK-2.md 4.2): a glob outside quotes is read wherever it stands (`\"$DEST\"/*`), the project's names (`$PWD`, `$OLDPWD`, `$CLAUDE_PROJECT_DIR`) and its `.git` / `.agent` are dangerous targets, read normalised, and a download a shell reads by substitution is judged per top-level segment, an interpreter's only when it becomes the program. Stated limits: a plain variable's value; a wrapper that re-quotes its payload (`env -S`); `\"$X\"/.git` for another variable; `bun`, `deno`, `php`. Measured on 81,171 real commands (3,540 the rules can touch): 6 verdicts changed — 1 false alarm removed, 3 intended blocks, 2 texts quoting G4's form in an unquoted heredoc (an existing fail-safe class)."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],

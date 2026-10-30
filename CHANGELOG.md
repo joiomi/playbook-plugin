@@ -5,6 +5,13 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 ## [Unreleased]
 
 ### Changed
+- **G4: the command guard reads a glob outside quotes** (task 345, PLAN-PLAYBOOK-2.md 4.2; the owner's 10-27
+  decision). `rm -rf "$DEST"/*` — `rm -rf /*` with `DEST` empty — blocks, as do `"foo"/*` and `~"/build"`; an escaped
+  glob and `"${DEST:?}"/*` pass. The project's names (`$PWD`, `$OLDPWD`, `$CLAUDE_PROJECT_DIR`) and its `.git` / `.agent`
+  are dangerous targets, read normalised; a subpath passes. A download a shell reads by substitution is judged per
+  segment (`true; bash <(curl …)` blocks, `bash x.sh; diff <(curl …) b` passes), and an interpreter's only when it
+  becomes the program (`python3 <(curl …)` blocks, `python3 -m json.tool <(curl …)` passes). A plain variable stays
+  allowed, and the docs now say so. Measured on 81,171 real commands: 6 verdicts changed.
 - **One review round cap: 2** (task 344, PLAN-PLAYBOOK-2.md 4.1 a; DESIGN-PLAYBOOK-2.md §3.3 point 12). Before the
   close a task gets at most 2 impl panel rounds, whatever its `## Risk`; a third only with the owner's `tasks
   panel-review <N> --mode impl --owner-ok --reason "…"`. Gone: the caps per risk (reversible 1, assertive and

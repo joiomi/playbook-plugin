@@ -424,7 +424,7 @@ class G4(unittest.TestCase):
         the rule reads."""
         doc = (_HERE.parent / "docs" / "configuration.md").read_text(encoding="utf-8")
         self.assertNotIn("A recursive-force `rm` whose target is COMPUTED (`$(pwd)`, `$DEST`) counts as dangerous", doc)
-        for must in ('`"$DEST"/*`', "`$PWD`", "`$CLAUDE_PROJECT_DIR`", "`.git`", "a plain variable"):
+        for must in ('"$DEST"/*', "`$PWD`", "`$CLAUDE_PROJECT_DIR`", "`.git`", "A plain variable is allowed"):
             self.assertIn(must, doc)
         ledger = (_HERE.parent / "docs" / "guarantee-ledger.json").read_text(encoding="utf-8")
         self.assertNotIn("COMPUTED (`$(pwd)`, `$DEST`", ledger)
