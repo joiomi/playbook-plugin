@@ -3011,9 +3011,8 @@ class G4Part2(_G4Asserts, unittest.TestCase):
                            "find -D tree -delete",
                            # my own search (step 4): a pattern held in a variable or a substitution proves no narrowing
                            'find . -name "$X" -delete', "find . -name \"$(cat pat)\" -delete", "find . -path `cat p` -delete")
-        self.assert_passes("find . -name '*.pyc' -delete", "find build -name '*.o' -delete", "find build -delete",
-                           "find . -type d -empty -delete", "find . -name x -exec rm {} \\;", "find / -name x -print",
-                           "find . -name '*.pyc' -exec rm {} +", "find src -mtime +30 -delete")
+        self.assert_passes("find build -name '*.o' -delete", "find build -delete", "find / -name x -print",
+                           "find src -mtime +30 -delete")
 
     def test_a_shortened_long_option_is_read(self):
         """Row 8: git accepts an unambiguous prefix of a long option, one letter or more (git 2.54: `reset --h`,
@@ -3030,6 +3029,41 @@ class G4Part2(_G4Asserts, unittest.TestCase):
         """Row 11 (A8): the command position is found through wrappers, as for the older rules."""
         self.assert_blocks("sudo git push --mirror", "env find / -delete", "timeout 9 git stash clear",
                            "bash -lc 'git push --mirror'", "nice -n5 git checkout -- .")
+
+
+class G4Part2Round1(_G4Asserts, unittest.TestCase):
+    """Task 346, impl round 1 (83a76d75d530): B1 (grok's Critical: my history-probe fix let `git checkout "$PWD"`
+    through), the find narrowing dropped (B3-B5, B11), and the round's spellings."""
+
+    def test_only_a_rev_parse_substitution_reads_as_a_commit(self):
+        """Row 12 (B1)."""
+        self.assert_blocks('git checkout "$PWD"', 'git checkout "$(pwd)"', "git checkout `pwd`",
+                           'git checkout "$(git rev-parse --show-toplevel)"', "git checkout $(git diff --name-only)",
+                           "git checkout $(git ls-files -m)", 'git checkout "$CLAUDE_PROJECT_DIR"')
+        self.assert_passes('git checkout -q "$(git rev-parse HEAD)"', "git checkout $(git rev-parse --short HEAD)",
+                           "git checkout `git rev-parse HEAD`", 'git checkout "$BRANCH"', "git checkout $SHA")
+
+    def test_a_find_that_deletes_from_the_working_directory_blocks(self):
+        """Row 13 (B4, B5, B11, B3): no name pattern keeps `.git` and `.agent` safe (`-name config` breaks the
+        repository, `-name '*.md'` deletes the task records, `-empty` its empty refs), so `.` always blocks; a named
+        subdirectory passes."""
+        self.assert_blocks("find . -name '*.pyc' -delete", "find . -name .git -exec rm -rf {} +",
+                           "find . -name config -delete", "find . -name '*.md' -delete",
+                           "find . -regex '.*\\|a' -delete", "find . -type d -empty -delete",
+                           "find . -name '*.pyc' -exec rm {} +", "find . -printf '-empty' -delete",
+                           "find . -name __pycache__ -prune -exec rm -rf {} +")
+        self.assert_passes("find src -name '*.pyc' -delete", "find plugins tests -name __pycache__ -exec rm -rf {} +",
+                           "find . -name '*.pyc' -print", "find ./src -name '*.o' -delete")
+
+    def test_round_one_spellings(self):
+        """Row 14 (B2, B6-B10, B12)."""
+        self.assert_blocks("git restore -sRELEASE .", "git restore -sStable -- .",
+                           "find . -type f -exec unlink {} \\;", "find / -exec unlink {} +",
+                           "git prune -n --no-dry-run", "git prune --dry-run --no-dry-run",
+                           "find -- /tmp -name '*.tmp' -delete", "find / -exec env -S 'rm -rf' {} +",
+                           "find . -exec env -S 'rm -rf' {} +", "git remote -v add --mirror=push r ../r.git",
+                           "git remote --verbose add --mirror=fetch r ../r.git")
+        self.assert_passes("git prune --no-dry-run -n", "git push -odeploy origin main", "git restore -sHEAD src/a.py")
 
     def test_the_docs_name_the_git_and_find_forms(self):
         """Row 9: configuration.md names each form and the stated limits; `find -delete` is no longer called allowed."""
