@@ -21765,10 +21765,10 @@
           "limitations": []
         },
         {
-          "type": "executable integration",
+          "type": "executable unit",
           "path": "tests/test_stop_rule.py",
           "reference": "OneCap.test_a_third_round_is_refused_whatever_the_risk_or_the_criticals",
-          "boundary": "subprocess",
+          "boundary": "unit",
           "negative_control": {
             "path": "tests/test_stop_rule.py",
             "reference": "OneCap.test_two_rounds_for_every_risk"
@@ -21922,10 +21922,10 @@
           "limitations": []
         },
         {
-          "type": "executable integration",
+          "type": "executable unit",
           "path": "tests/test_stop_rule.py",
           "reference": "OneCap.test_the_refusal_names_the_ways_out",
-          "boundary": "subprocess",
+          "boundary": "unit",
           "negative_control": null,
           "limitations": []
         },

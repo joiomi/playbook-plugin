@@ -100,8 +100,8 @@ def panel_decision(rounds: "list[dict]", task: str = "<N>") -> "tuple[bool, str]
     return False, (
         f"Round cap: task {task} has had {n} impl panel round(s); at most {ROUND_CAP} come before the close. "
         "Nothing was spent.\n"
-        "  Close on the last round (a change after it closes with `tasks work done --force --reason \"…\"`), or let "
-        "the owner decide:\n"
+        "  Close on the last round — a change after it holds an assertive, irreversible or unclassified close until "
+        "`tasks work done --force --reason \"…\"` (a reversible one is only told) — or let the owner decide:\n"
         f'  tasks panel-review {task} --mode impl --owner-ok --reason "…"')
 
 
@@ -123,7 +123,8 @@ def panel_record(task_dir: Path) -> "dict | None":
     """What the task's impl panels ran under, from EVERY impl panel reservation in the run ledger (task 209's impl
     round 2, S2: the newest one alone let a below-quorum round, or a second panel after `## Risk` was lowered, replace
     what the reviewed one recorded): the stricter risk of them all. None when no reservation recorded a risk (panels
-    from before task 209). Any other field of a reservation is not read (task 344, plan panel P4). A ledger that
+    from before task 209), or only with a risk of `None` (dropped: the close then takes `## Risk` alone). Any other
+    field of a reservation is not read (task 344, plan panel P4). A ledger that
     cannot be trusted is `ledger_untrusted`'s to say (the close then takes `unclassified` — task 343, P17)."""
     from tasks import review_ledger
     recs = [r for r in review_ledger.read_runs(Path(task_dir))

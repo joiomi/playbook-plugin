@@ -134,8 +134,12 @@ class OneCap(unittest.TestCase):
         self.assertFalse(ok)
         self.assertIn("2 impl panel round(s)", text)
         self.assertIn('tasks work done --force --reason "…"', text)
+        # impl round 1, J4: `--force` is the way only where the close is held — a reversible one is told
+        self.assertIn("an assertive, irreversible or unclassified close", text)
         self.assertIn('tasks panel-review 007 --mode impl --owner-ok --reason "…"', text)
-        for gone in ("review_rounds", "config.json", "Critical", "reversible", "assertive"):
+        # the old per-risk phrasings (the risks themselves are named for `--force`'s reach — J4)
+        for gone in ("review_rounds", "config.json", "Critical", "cap 1", "for a reversible task", "for a assertive task",
+                     "plus one because"):
             self.assertNotIn(gone, text)
 
 
@@ -146,16 +150,18 @@ class Keys(unittest.TestCase):
         with no extension, `.template`, the provider mirror — names `review_rounds` or `rounds_cap`. No exemption."""
         import re
         gone = re.compile(r"review_rounds|rounds_cap")
-        hits = []
+        hits, unread = [], []
         for p in sorted(PLUGIN.rglob("*")):
             if not p.is_file() or "__pycache__" in p.parts or p.suffix in (".md", ".json", ".txt"):
                 continue
             try:
                 text = p.read_text(encoding="utf-8")
             except (UnicodeDecodeError, OSError):
+                unread.append(str(p.relative_to(PLUGIN)))    # impl round 1, J7: never skipped in silence
                 continue
             hits += [f"{p.relative_to(PLUGIN)}:{i}" for i, ln in enumerate(text.splitlines(), 1) if gone.search(ln)]
         self.assertEqual(hits, [])
+        self.assertEqual(unread, [], "files the scan could not read as UTF-8 — it cannot vouch for them")
 
 
 class Stricter(unittest.TestCase):

@@ -138,7 +138,7 @@ def reserve_panel(task_file, stale_after: float = 7200, *, mode: "str | None" = 
     a concurrent single judge cannot append under it; never counted by the cap.
     Task 209: `gate()` runs under the same lock, after the in-progress check — a
     non-empty answer raises `PanelRefused` with it, nothing written; `record` adds
-    fields to the reservation (the risk and the caps the close reads)."""
+    fields to the reservation (the risk the close reads; task 344: no caps)."""
     import secrets
     from tasks.filelock import task_lock
     task_file = Path(task_file)
