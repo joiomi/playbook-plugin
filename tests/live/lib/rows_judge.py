@@ -357,7 +357,7 @@ def names_the_defect(answer: str) -> bool:
     the answer's own `REVIEW` line (the review run checked it against its own before it saved the log); a finding that
     only names the file ("Unable to inspect src/calc.py") or names another one (`other_calc.py`) is not the planted
     defect found, and an answer not in the form names nothing."""
-    m = re.search(r"(?m)^[ \t]*REVIEW ([0-9a-f]{12})[ \t]*$", answer)
+    m = re.search(r"(?m)^(?![ \t]*>).*?(?<!\w)REVIEW ([0-9a-f]{12})[ \t]*$", answer)    # a glued preamble too
     if not m:
         return False
     for r in _product_form().read_answer(answer, m.group(1)).records:

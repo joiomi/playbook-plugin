@@ -595,6 +595,8 @@ def triage_answer() -> None:
     name the file."""
     for label, answer, want in (
             ("the defect in a Critical finding", _form(DEFECT), True),
+            ("the same, its preamble glued to the REVIEW line (grok, task 347's live probe)",
+             _form(DEFECT).replace("I read src/calc.py.\n\nREVIEW", "I read src/calc.py.REVIEW"), True),
             ("the defect in an Important finding", _form(("Important",) + DEFECT[1:]), True),
             ("the same finding as a Minor one", _form(("Minor",) + DEFECT[1:]), False),
             ("the same finding, settled", _form(DEFECT, settled="SETTLED"), False),

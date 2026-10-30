@@ -22232,7 +22232,7 @@
     {
       "id": "PB-REVIEW-FORM",
       "category": "judges-and-reviews",
-      "statement": "A judge's answer counts as a review by its form, never by its words (task 347, DESIGN-PLAYBOOK-2.md \u00a73, PLAN-PLAYBOOK-2.md 4.2; it replaced task 320's word check). Every review prompt \u2014 the 4 review prompts, a panel round's seats and a single-judge run \u2014 carries its run's code inside a sentence, and the answer counts only with exactly one whole line `REVIEW <code>` (else exactly one line ending with it, a preamble glued before it, never a quoted `>` line), one `END <code>` after it and the CAP line after that (`CAP <k>/5 exhausted|more-remain`, or the old `CAP: <k>/5 reported, \u2026`; k \u2264 n). Between them each FINDING (severity, settled, where, scenario of three parts, drum, fix) or NONE (read, checked) record is checked alone: one it cannot read is kept as a broken record with its lines and why; at least one record must stand. Every place a record names must exist on its side \u2014 the tree the judges read (an entry the copy binds live: the project), or `base:` the task's start commit \u2014 with its lines inside the file; an impl review's NONE must read a file the task changed (named in the prompt). A panel seat whose answer is not in the form runs once more, alone, with the same code, the reason and its first answer quoted; a re-run counts as working in the retry-first admission; failing again the seat is SEAT FAILED, out of the quorum. A failure-marked answer and a taskless `--prompt` consultation are not read for the form. The panel writes each seat's records into judge.md as the CLI's own lines, numbered F1\u2026 across the round, and the run ledger counts only those lines; a single judge whose answer is not in the form fails, exit 1.",
+      "statement": "A judge's answer counts as a review by its form, never by its words (task 347, DESIGN-PLAYBOOK-2.md \u00a73, PLAN-PLAYBOOK-2.md 4.2; it replaced task 320's word check). Every review prompt \u2014 the 4 review prompts, a panel round's seats and a single-judge run \u2014 carries its run's code inside a sentence, and the answer counts only with exactly one whole line `REVIEW <code>` (else exactly one line ending with it, a preamble glued before it, never a quoted `>` line), one `END <code>` after it and the CAP line after that (`CAP <k>/5 exhausted|more-remain`, or the old `CAP: <k>/5 reported, \u2026`; k \u2264 n). Between them each FINDING (severity, settled, where, scenario of three parts, drum, fix) or NONE (read, checked) record is checked alone: one it cannot read is kept as a broken record with its lines and why; at least one record must stand. Every place a record names must exist on its side \u2014 the tree the judges read (the copy alone, but an entry it binds live: the project), or `base:` the task's start commit, through a project's folder in its repository \u2014 with its lines inside the file (`where:` may list several; a column is read as its line); a broken record of a counted seat is named on the console and counted in the run ledger (`broken`); an impl review's NONE must read a file the task changed (named in the prompt). A panel seat whose answer is not in the form runs once more, alone, with the same code, the reason and its first answer quoted; a re-run counts as working in the retry-first admission; failing again the seat is SEAT FAILED, out of the quorum. A failure-marked answer and a taskless `--prompt` consultation are not read for the form. The panel writes each seat's records into judge.md as the CLI's own lines, numbered F1\u2026 across the round, and the run ledger counts only those lines; a single judge whose answer is not in the form fails, exit 1.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/review_form.py",
@@ -22448,6 +22448,62 @@
           "type": "executable integration",
           "path": "tests/test_review_form.py",
           "reference": "SingleJudgeForm.test_the_form_decides_the_single_judge",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_review_form.py",
+          "reference": "Records.test_lenient_places_and_cap",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_review_form.py",
+          "reference": "Records.test_where_none_names_short_and_bare_files",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_review_form.py",
+          "reference": "Places.test_a_project_in_a_subdirectory_of_its_repository",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_review_form.py",
+          "reference": "Places.test_the_sealed_copy_and_a_base_suffix",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_review_form.py",
+          "reference": "Places.test_links_inside_the_project",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable unit",
+          "path": "tests/test_review_form.py",
+          "reference": "Places.test_round_1_minors",
+          "boundary": "unit",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_review_form.py",
+          "reference": "PanelForm.test_broken_records_are_counted_and_said",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []

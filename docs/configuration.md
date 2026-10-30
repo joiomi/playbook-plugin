@@ -449,9 +449,10 @@ CAP 1/5 exhausted
 
 - With no Critical or Important finding the record is `NONE`, with `read:` (the places read, comma-separated; in an
   impl review at least one file the task changed — the prompt names them) and `checked:`.
-- Every place must exist: `path:line` / `path:first-last` in the reviewed tree, `base:path:line` in the task's start
-  commit, or (in `read`) a whole `path`. A record that fails is kept as broken, for the triage; an answer with no good
-  record is no review.
+- Every place must exist: `path:line` / `path:first-last` (`path:line:col` reads as its line) in the reviewed tree,
+  `base:path:line` in the task's start commit, or (in `read`) a whole `path`; `where:` may list several. A record
+  that fails is kept as broken, for the triage (the console names it, the run ledger counts it); an answer with no
+  good record is no review.
 - A panel seat whose answer is not in the form runs once more; then it is `SEAT FAILED` and out of the quorum. A single
   judge exits 1 and is run again by hand. No key changes this.
 - Limit: the form proves the answer was written for this run and what the judge says it read, not that it read with

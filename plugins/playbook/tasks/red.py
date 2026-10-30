@@ -1179,7 +1179,10 @@ def _changed_by_scope(project: Path, task_dir: Path, cfg: dict) -> "tuple[dict[s
     found: "dict[str, list[str]]" = {}
 
     def differ(repo: Path, start: "str | None", dirty: dict) -> "list[str] | None":
-        tracked = (_git(repo, ["diff", "--name-only", "--no-renames", "-z", start, "--", ".", *exclude]) if start else
+        # `--relative`: names from the repository's folder, as `ls-files` gives them — a project in a subfolder of its
+        # repository (task 347's impl round 1, codex); the same names where the folder is the repository's top
+        tracked = (_git(repo, ["diff", "--relative", "--name-only", "--no-renames", "-z", start, "--", ".", *exclude])
+                   if start else
                    _git(repo, ["ls-files", "-z", "--", ".", *exclude]))
         others = _git(repo, ["ls-files", "--others", "--exclude-standard", "-z", "--", ".", *exclude])
         tagged = _git(repo, ["ls-files", "-v", "-z", "--", ".", *exclude])
@@ -1190,7 +1193,8 @@ def _changed_by_scope(project: Path, task_dir: Path, cfg: dict) -> "tuple[dict[s
         if _git(repo, ["rev-parse", "--verify", "-q", "HEAD^{commit}"]).returncode == 0:
             # unborn at the start: from the empty tree (`hash-object` without -w writes nothing)
             since = start or _git(repo, ["hash-object", "-t", "tree", "/dev/null"]).stdout.strip()
-            moved = (_git(repo, ["diff", "--name-only", "--no-renames", "-z", since, "HEAD", "--", ".", *exclude])
+            moved = (_git(repo, ["diff", "--relative", "--name-only", "--no-renames", "-z", since, "HEAD", "--", ".",
+                                 *exclude])
                      if since else None)
             if moved is None or moved.returncode != 0:
                 return None

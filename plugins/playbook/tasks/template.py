@@ -706,6 +706,8 @@ def judge_prompt(
     kwargs = dict(
         soft_timeout_secs=soft_timeout_secs,
         hard_timeout_secs=hard_timeout_secs,
+        trim_notice=trim_notice,
+        judge_verify=judge_verify,
         code=code,
     )
     if mode == "impl":

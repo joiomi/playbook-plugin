@@ -300,6 +300,44 @@ class Records(unittest.TestCase):
         named = no_file.replace("it fails", "tests/test_round.py has no test for it")
         self.assertEqual(kinds(self.read(named)), ["FINDING"])
 
+    def test_lenient_places_and_cap(self):
+        # impl round 1 (sonnet, opus, agy): several places in one `where:`, a column, a CAP line with a period
+        rf = form()
+        for where in ("a.py:2, b.py:10-12", "a.py:2:7", "`a.py:2`, `b.py:3`"):
+            with self.subTest(where):
+                self.assertEqual(kinds(self.read(FIND.replace("where: a.py:2", f"where: {where}"))), ["FINDING"])
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "a.py").write_text("1\n2\n3\n", encoding="utf-8")
+            pl = rf.Places(Path(d))
+            a = rf.read_answer(block(FIND.replace("where: a.py:2", "where: a.py:2, nope.py:1"), MINOR), CODE, pl)
+            self.assertEqual(kinds(a), ["BROKEN", "FINDING"], "each place of the list is checked")
+            self.assertEqual(kinds(rf.read_answer(block(FIND.replace("where: a.py:2", "where: a.py:2:5")), CODE, pl)),
+                             ["FINDING"])
+            self.assertEqual(kinds(rf.read_answer(block(FIND.replace("where: a.py:2", "where: a.py:2, a.py:3")), CODE,
+                                                  pl)), ["FINDING"], "each place of the list is read on its own")
+        for cap in ("CAP 1/5 exhausted.", "CAP 5/5 more remain", "**CAP 1/5 exhausted.**"):
+            with self.subTest(cap):
+                self.assertTrue(rf.read_answer(block(FIND, cap=cap), CODE).ok, cap)
+
+    def test_where_none_names_short_and_bare_files(self):
+        # impl round 1 (grok): a one-letter extension, or a bare name an existing project file has
+        rf = form()
+        none = FIND.replace("where: a.py:2", "where: none")
+        short = none.replace("f(1) is called → it returns 1, not 2 → tests/test_a.py fails",
+                             "a caller includes calc.h → it lacks add's prototype → the build warns")
+        self.assertEqual(kinds(self.read(short)), ["FINDING"])
+        eg = none.replace("f(1) is called → it returns 1, not 2 → tests/test_a.py fails",
+                          "a caller → e.g. it fails → nothing shows")
+        self.assertEqual(kinds(self.read(eg, MINOR)), ["BROKEN", "FINDING"])
+        bare = none.replace("f(1) is called → it returns 1, not 2 → tests/test_a.py fails",
+                            "make test runs → the Makefile has no test target → nothing is tested")
+        self.assertEqual(kinds(self.read(bare, MINOR)), ["BROKEN", "FINDING"], "no places: a bare word is no file")
+        with tempfile.TemporaryDirectory() as d:
+            (Path(d) / "Makefile").write_text("all:\n", encoding="utf-8")
+            git(d, "init", "-q")
+            pl = rf.Places(Path(d), scopes={"": (Path(d), None)})
+            self.assertEqual(kinds(rf.read_answer(block(bare), CODE, pl)), ["FINDING"])
+
     def test_line_breaks_and_bom(self):
         rf = form()
         crlf = block(FIND, MINOR).replace("\n", "\r\n")
@@ -455,6 +493,90 @@ class Places(_Tree):
         self.assertTrue(rf.read_answer(names_none, CODE, pl).ok)
 
 
+    def test_a_project_in_a_subdirectory_of_its_repository(self):
+        # impl round 1 (codex): `base:` and the changed files read through the project's prefix in its repository
+        rf = form()
+        top = self.p.parent / "mono"
+        app = top / "app"
+        app.mkdir(parents=True)
+        git(top, "init", "-q")
+        (top / "other.py").write_text("o = 1\n", encoding="utf-8")
+        (app / "src.py").write_text("s = 1\ns = 2\n", encoding="utf-8")
+        (app / "keep.py").write_text("k = 1\n", encoding="utf-8")
+        git(top, "add", "-A")
+        git(top, "commit", "-qm", "m0")
+        td = app / ".agent" / "tasks" / "001-t"
+        td.mkdir(parents=True)
+        (td / "base.json").write_text(json.dumps({"v": 2, "scopes": {"": {"head": git(top, "rev-parse", "HEAD"),
+                                                                          "dirty": {}}}}), encoding="utf-8")
+        (app / "src.py").unlink()
+        pl = rf.Places.for_task(app, app, td)
+        self.assertEqual(pl.changed, {"src.py"})
+        self.assertEqual(pl.locate("base:src.py:2", whole_file=False), ("src.py", ""))
+        self.assertIsNone(pl.locate("base:other.py:1", whole_file=False)[0], "outside the project")
+        a = rf.read_answer(block("NONE", "read: base:src.py:1-2", "checked: x.", cap="CAP 0/5 exhausted"), CODE, pl)
+        self.assertTrue(a.ok, a.why)
+
+    def test_the_sealed_copy_and_a_base_suffix(self):
+        # impl round 1 (codex, opus): what the copy lacks is read live only under a live bind; the suffix index is
+        # read when Places is built; a `base:` suffix is looked up in the start commit
+        rf = form()
+        copy = self.p.parent / "copy"
+        (copy / "docs").mkdir(parents=True)
+        (copy / "docs" / "x.md").write_text("x\n", encoding="utf-8")
+        (self.p / "late.py").write_text("late\n", encoding="utf-8")       # made after the seal: not in the copy
+        pc = rf.Places.for_task(self.p, copy, self.task_dir)
+        self.assertIsNone(pc.locate("late.py:1", whole_file=False)[0])
+        self.assertEqual(rf.Places.for_task(self.p, copy, self.task_dir, live=["late.py"]).locate(
+            "late.py:1", whole_file=False), ("late.py", ""))
+        pl = self.places()
+        (self.p / "other").mkdir()
+        (self.p / "other" / "x.md").write_text("y\n", encoding="utf-8")   # after the Places was built
+        self.assertEqual(pl.locate("x.md:1", whole_file=False), ("docs/x.md", ""))
+        # a deleted file cited by a partial path on the base side
+        (self.p / "docs" / "deep").mkdir()
+        (self.p / "docs" / "deep" / "gone.py").write_text("g = 1\n", encoding="utf-8")
+        git(self.p, "add", "-A")
+        git(self.p, "commit", "-qm", "c1")
+        doc = json.loads((self.task_dir / "base.json").read_text(encoding="utf-8"))
+        doc["scopes"][""]["head"] = git(self.p, "rev-parse", "HEAD")
+        (self.task_dir / "base.json").write_text(json.dumps(doc), encoding="utf-8")
+        git(self.p, "rm", "-q", "docs/deep/gone.py")          # a staged deletion: the index no longer holds it
+        self.assertEqual(self.places().locate("base:deep/gone.py:1", whole_file=False), ("docs/deep/gone.py", ""))
+
+    def test_links_inside_the_project(self):
+        # impl round 1 (codex, sonnet): an absolute link into the project, in the copy; an alias of a changed file
+        rf = form()
+        copy = self.p.parent / "copy"
+        copy.mkdir()
+        (copy / "a.py").write_text("one\ntwo\nthree\n", encoding="utf-8")
+        (copy / "abs.py").symlink_to(self.p / "a.py")                       # the judges' mount maps it to the copy
+        pc = rf.Places.for_task(self.p, copy, self.task_dir)
+        self.assertEqual(pc.locate("abs.py:2", whole_file=False), ("abs.py", ""))
+        (self.p / "alias.py").symlink_to("a.py")                            # unchanged since the start: committed
+        git(self.p, "add", "alias.py")
+        git(self.p, "commit", "-qm", "alias")
+        doc = json.loads((self.task_dir / "base.json").read_text(encoding="utf-8"))
+        doc["scopes"][""]["head"] = git(self.p, "rev-parse", "HEAD")
+        (self.task_dir / "base.json").write_text(json.dumps(doc), encoding="utf-8")
+        pl = self.places()
+        self.assertEqual(pl.changed, {"a.py", "lib/old.py"}, "a.py changed; its alias did not")
+        a = rf.read_answer(block("NONE", "read: alias.py:1", "checked: x.", cap="CAP 0/5 exhausted"), CODE, pl)
+        self.assertTrue(a.ok, a.why)
+
+    def test_round_1_minors(self):
+        rf = form()
+        # a longer token that ends with REVIEW is no frame line (grok)
+        self.assertFalse(rf.read_answer(f"PREVIEW {CODE}\n{FIND}\nEND {CODE}\nCAP 1/5 exhausted\n", CODE).ok)
+        # a base candidate in a scope with no start goes on to the next one (grok)
+        pl = rf.Places(self.p, scopes={"": (self.p, None), "lib": (self.p / "lib", self.l0)})
+        self.assertEqual(pl.locate("base:old.py:1", whole_file=False), ("lib/old.py", ""))
+        # the answer's reason quotes no judge text — it reaches the spend journal (sonnet)
+        a = rf.read_answer(block("FINDING\nSECRET-WORDS-123 here"), CODE)
+        self.assertFalse(a.ok)
+        self.assertNotIn("SECRET-WORDS-123", a.why)
+
+
 class Prompts(unittest.TestCase):
     def test_every_review_prompt_asks_for_the_form(self):
         from tasks import rulings
@@ -605,6 +727,24 @@ class PanelForm(_Cli):
             encoding="utf-8").splitlines() if ln.strip()]
         m = [x.get("measures") for x in runs if x.get("measures")][-1]
         self.assertEqual((m["critical"], m["important"]), (1, 2), m)
+
+    def test_broken_records_are_counted_and_said(self):
+        # impl round 1 (sonnet): a Critical whose place does not exist is broken; beside a good Minor the answer still
+        # counts — the ledger and the console must not lose it
+        opus = ("REVIEW {CODE}\nFINDING\nseverity: Critical\nsettled: no\nwhere: README.md:9\n"
+                "scenario: the readme is read → line 9 is wrong → readers are misled\ndrum: none\nfix: f.\n"
+                "FINDING\nseverity: Minor\nsettled: no\nwhere: README.md:1\n"
+                "scenario: a reader → reads README.md → it is terse\ndrum: none\nfix: f.\n"
+                "END {CODE}\nCAP 1/5 exhausted\n")
+        r = self.tasks("panel-review", "1", "--mode", "impl", env=self.say(opus=opus, sonnet=_NONE_OK, haiku=_NONE_OK))
+        self.assertIn("PANEL PASS: 3/3", r.stdout, r.stdout + r.stderr)
+        said = [ln for ln in r.stdout.splitlines() if "broken" in ln and "opus" in ln]
+        self.assertTrue(said, r.stdout)
+        self.assertIn("1 record", said[0])
+        runs = [json.loads(ln) for ln in (self.task_dir() / "post-panel-reviews.jsonl").read_text(
+            encoding="utf-8").splitlines() if ln.strip()]
+        m = [x.get("measures") for x in runs if x.get("measures")][-1]
+        self.assertEqual((m["critical"], m["important"], m.get("broken")), (0, 0, 1), m)
 
     def test_a_retried_seat_s_rerun_counts_as_working(self):
         # task 276: haiku is recorded out of credit with no reset time, and the quorum needs every seat, so haiku is

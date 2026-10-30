@@ -2362,6 +2362,10 @@ def _cmd_panel_review(cmd_args):
             _ans = _rf.read_answer(str(output), _code, _places)
             if _ans.ok:
                 _answers[label] = _ans
+                _broken = sum(1 for _r in _ans.records if _r.kind == "BROKEN")
+                if _broken:         # impl round 1 (sonnet): a broken record is triaged as a finding — say so
+                    print(f"  [{label}] {_broken} record(s) broken — each is an F line marked BROKEN in judge.md, "
+                          "to triage as a finding", flush=True)
             else:
                 from provider.usage import JudgeOutput as _JO
                 from tasks.models_check import NOT_A_REVIEW_HEAD
@@ -2439,7 +2443,8 @@ def _cmd_panel_review(cmd_args):
                 _submit(j)
         else:
             _no_rerun[0] = True
-        # (refused: the seats still working finish — none is killed — and the live seats are never called)
+        # (refused: the seats still working finish — none is killed, a re-run already started included — and the live
+        # seats are never called)
         while _pending:
             _done, _ = concurrent.futures.wait(list(_pending), return_when=concurrent.futures.FIRST_COMPLETED)
             _collect(_done)
@@ -2704,6 +2709,9 @@ def _cmd_panel_review(cmd_args):
             try:
                 from tasks.stop_rule import round_findings
                 _measures.update(round_findings({"body": "\n".join(lines), "format": 2}))
+                # task 347: the records of a counted seat that the form could not read (each triaged as a finding)
+                _measures["broken"] = sum(1 for _l, _a in _answers.items() if _l not in failed
+                                          for _r in _a.records if _r.kind == "BROKEN")
             except Exception as _e:        # the verdict fields stand; the counts say why they are missing (impl r1)
                 _measures["counts_error"] = " ".join(str(_e).split())[:120] or type(_e).__name__
             _PD6_PANEL_ENDED[_prid] = {"outcome": "completed", "measures": _measures}

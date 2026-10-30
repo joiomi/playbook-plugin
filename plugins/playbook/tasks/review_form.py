@@ -50,14 +50,16 @@ FINDING_KEYS = ("severity", "settled", "where", "scenario", "drum", "fix")
 NONE_KEYS = ("read", "checked")
 
 _CODE_RE = re.compile(r"[0-9a-f]{12}")
-_CAP_RE = re.compile(r"CAP (\d+)/(\d+) (exhausted|more-remain)|CAP: (\d+)/(\d+) reported, (exhausted|more remain)")
+_CAP_RE = re.compile(r"CAP (\d+)/(\d+) (exhausted|more[- ]remain)\.?|CAP: (\d+)/(\d+) reported, (exhausted|more remain)\.?")
 # A fence or a rule: decoration a judge puts around or inside the block — skipped, never a record's line.
 _TRAILER_RE = re.compile(r"(?:`{3,}|~{3,})[\w+.-]*|-{3,}|\*{3,}|_{3,}")
 _FIELD_RE = re.compile(r"([A-Za-z]+)[ \t]*:(.*)")
 _ARROW_RE = re.compile(r"→|->")
-_LINES_RE = re.compile(r"(.+?):(\d+)(?:-(\d+))?")
+_LINES_RE = re.compile(r"(.+?):(\d+)(?:-(\d+)|:\d+)?")                # `path:line:col` is its line (impl round 1)
 # A scenario that names a file: a token with a `/`, or a name with an extension of 2-8 letters (`e.g.` is none).
-_FILE_TOKEN_RE = re.compile(r"(?<![\w/.-])(?:[\w.-]+/)+[\w.-]+|(?<![\w/.-])[\w-]+\.[A-Za-z][A-Za-z0-9]{1,7}\b")
+_FILE_TOKEN_RE = re.compile(r"(?<![\w/.-])(?:[\w.-]+/)+[\w.-]+|(?<![\w/.-])[\w-]+\.[A-Za-z][A-Za-z0-9]{0,7}\b")
+_NOT_FILES = {"e.g", "i.e"}
+_WORD_RE = re.compile(r"[\w.-]+")
 # The CLI's own record line in judge.md (`render`): never a quoted line, never an indented field.
 _WRITER_RE = re.compile(r"^F\d+ \| (Critical|Important|Minor) \| settled: (no|SETTLED|SETTLED-CONTRADICTED) \| ",
                         re.MULTILINE)
@@ -171,7 +173,8 @@ def read_answer(text: str, code: str, places: "Places | None" = None) -> Answer:
     if not opens:
         # a preamble glued to the frame line ("…how they're tested.REVIEW <code>": grok, both its answers in task
         # 347's live probe) — never a quoted line, which the re-run note writes
-        opens = [i for i, s in enumerate(lines) if s.endswith(f"REVIEW {code}") and not s.startswith(">")]
+        opens = [i for i, s in enumerate(lines)
+                 if re.search(rf"(?<!\w)REVIEW {code}$", s) and not s.startswith(">")]
     ends = [i for i, s in enumerate(lines) if s == f"END {code}"]
     if not opens:
         return _fail("there is no `REVIEW <code>` line with this run's code — the answer is not in the review form")
@@ -198,7 +201,7 @@ def read_answer(text: str, code: str, places: "Places | None" = None) -> Answer:
     if not records:
         return _fail("the block holds no record")
     if all(r.kind == "BROKEN" for r in records):
-        return Answer(False, f"every record is broken — the first: {records[0].why}", records, cap)
+        return Answer(False, f"every record is broken ({len(records)} record(s))", records, cap)
     return Answer(True, "", records, cap)
 
 
@@ -273,12 +276,13 @@ def _checked(r: dict, places: "Places | None") -> Record:
         if len(parts) < 3 or not all(parts):
             errors.append("`scenario:` needs three parts: input → what goes wrong → where it shows")
         if f["where"].strip("`").lower() == "none":
-            if not _FILE_TOKEN_RE.search(f["scenario"]):
+            if not _names_a_file(f["scenario"], places):
                 errors.append("`where: none` needs a scenario that names the file it belongs in")
         else:
-            _, why = _locate(places, f["where"], whole_file=False)
-            if why:
-                errors.append(f"`where:` {why}")
+            for item in [x for x in f["where"].split(",") if x.strip()]:      # several places (impl round 1)
+                _, why = _locate(places, item, whole_file=False)
+                if why:
+                    errors.append(f"`where:` {why}")
     elif kind == "NONE" and not errors:
         items = [x.strip() for x in f["read"].split(",") if x.strip()]
         found: "list[str]" = []
@@ -291,12 +295,23 @@ def _checked(r: dict, places: "Places | None") -> Record:
         if not items:
             errors.append("`read:` names no place")
         changed = places.changed if places is not None else None
-        if not errors and changed and not set(found) & changed:
+        if not errors and changed and not ({places.identity(n) for n in found} & {places.identity(n) for n in changed}):
             some = ", ".join(sorted(changed)[:3]) + (", …" if len(changed) > 3 else "")
             errors.append(f"`read:` names none of the files this task changed ({some})")
     if errors or not kind:
         return Record("BROKEN", r["lines"], f, "; ".join(errors))
     return Record(kind, r["lines"], f)
+
+
+def _names_a_file(scenario: str, places: "Places | None") -> bool:
+    """A scenario names a file: a token with a `/`, a name with an extension (`calc.h`; not `e.g.`), or — when the
+    places are known — a bare word an existing project file is called (`Makefile`; impl round 1, grok)."""
+    if any(m.group(0).lower() not in _NOT_FILES for m in _FILE_TOKEN_RE.finditer(scenario or "")):
+        return True
+    if places is None:
+        return False
+    names = {f.rsplit("/", 1)[-1] for f in places._project_files()}
+    return any(w.strip(".") in names for w in _WORD_RE.findall(scenario or ""))
 
 
 def _parse_location(item: str, whole_file: bool):
@@ -356,6 +371,7 @@ class Places:
         self.live = [posixpath.normpath(x).strip("/") for x in live if x]
         self.task_md = task_md
         self._files: "list[str] | None" = None
+        self._base_files: "list[str] | None" = None
 
     @classmethod
     def for_task(cls, project: Path, root: "Path | None", task_dir: Path, *, live=(), impl: bool = True) -> "Places":
@@ -397,7 +413,34 @@ class Places:
                 # and deleted since is on neither)
                 places.changed = {n for n in named
                                   if places._current_lines(n)[0] is not None or places._base_lines(n)[0] is not None}
+        places._project_files()     # the index of the tree as it is now, before the spawn (impl round 1, codex)
         return places
+
+    def identity(self, rel: str) -> str:
+        """The file a project-relative path is, once links are followed — so an alias of a changed file is that file
+        (impl round 1, codex); a path that leaves the project, or is gone, is its own spelling."""
+        top = os.path.realpath(self.project)
+        real = os.path.realpath(self.project / rel)
+        return os.path.relpath(real, top).replace(os.sep, "/") if _inside(real, top) else rel
+
+    def _start_files(self) -> "list[str]":
+        """Every file of each repository's start commit, project-relative — for a `base:` path cited by its suffix
+        (impl round 1, codex). Read once."""
+        if self._base_files is None:
+            from tasks import red
+            out: "list[str]" = []
+            for name, (repo, head) in sorted(self.scopes.items()):
+                if not head:
+                    continue
+                try:
+                    with red._no_git_overrides():
+                        r = red._git(repo, ["ls-tree", "-r", "--name-only", "-z", head, "--", "."])
+                except (OSError, subprocess.SubprocessError):
+                    continue
+                if r.returncode == 0:
+                    out += [f"{name + '/' if name else ''}{n}" for n in red._z(r.stdout)]
+            self._base_files = out
+        return self._base_files
 
     def _project_files(self) -> "list[str]":
         """Every file of each repository (`git ls-files -co --exclude-standard`), project-relative — for a path
@@ -440,8 +483,9 @@ class Places:
                 out.append(f"{scope}/{rel}")
         return out
 
-    def _by_suffix(self, rel: str) -> "tuple[str | None, str]":
-        hits = sorted({f for f in self._project_files() if f.endswith("/" + rel)})
+    def _by_suffix(self, rel: str, base: bool = False) -> "tuple[str | None, str]":
+        files = self._start_files() if base else self._project_files()
+        hits = sorted({f for f in files if f.endswith("/" + rel)})
         if len(hits) == 1:
             return hits[0], ""
         if hits:
@@ -451,14 +495,17 @@ class Places:
 
     def _current_lines(self, rel: str) -> "tuple[int | None, str]":
         """(the file's line count, "") in the tree the judges read; (None, why) when it is no regular file there."""
+        # the copy alone: what it lacks was made after the seal — but an entry it binds live is read from the project
+        # (impl round 1, codex and opus)
         live = any(_inside(rel, x) for x in self.live)
-        for top in ((self.project,) if live or self.root == self.project else (self.root, self.project)):
+        for top in ((self.project,) if live else (self.root,)):
             p = top / rel
             if not os.path.lexists(p):
                 continue
             try:
-                real, inside = os.path.realpath(p), os.path.realpath(top)
-                if not _inside(real, inside):
+                # a link into the project resolves: the judges' mount maps the project's path to the copy (codex)
+                real = os.path.realpath(p)
+                if not (_inside(real, os.path.realpath(top)) or _inside(real, os.path.realpath(self.project))):
                     return None, f"`{rel}` leads outside the project"
                 if not os.path.isfile(real):
                     return None, f"`{rel}` is not a file"
@@ -478,8 +525,9 @@ class Places:
         scope = next((sc for sc in sorted(self.scopes, key=len, reverse=True) if sc and _inside(rel, sc)), "")
         repo, head = self.scopes.get(scope, (None, None))
         if repo is None or not head:
-            return None, f"the task's start is not recorded for {scope or 'the project'}"
-        inner = rel[len(scope) + 1:] if scope else rel
+            return None, f"`{rel}` is not in the task's start commit (none is recorded for {scope or 'the project'})"
+        # `./`: the path from the repository's folder — a project in a subfolder of its repository (impl round 1)
+        inner = "./" + (rel[len(scope) + 1:] if scope else rel)
         from tasks import red
         try:
             with red._no_git_overrides():
@@ -520,7 +568,7 @@ class Places:
             if last is not None and last > n:
                 return None, f"`{rel}` has {n} line(s), not {last}" + (" in the start commit" if base else "")
             return rel, ""
-        hit, why_suffix = self._by_suffix(cands[0])
+        hit, why_suffix = self._by_suffix(cands[0], base)
         if why_suffix:
             return None, why_suffix
         if hit:
