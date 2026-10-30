@@ -1409,7 +1409,8 @@ def _brace_alternatives(t):
 # Task 345 (G4; plan panel K5; impl rounds 1-2): the variables whose value is the project or the working directory.
 _PROJECT_NAMES = ("PWD", "OLDPWD", "CLAUDE_PROJECT_DIR")
 _PROJECT_BARE = re.compile(r"^\$(PWD|OLDPWD|CLAUDE_PROJECT_DIR)(?![A-Za-z0-9_])(.*)$", re.S)
-_PROJECT_BRACED = re.compile(r"^\$\{(PWD|OLDPWD|CLAUDE_PROJECT_DIR)([:%#/^,@+\-=?][^}]*)?\}(.*)$", re.S)  # N5
+# N5: after the name, `}` or an operator; Q5: `[` too — `${PWD[0]}` is `$PWD`
+_PROJECT_BRACED = re.compile(r"^\$\{(PWD|OLDPWD|CLAUDE_PROJECT_DIR)([:%#/^,@+\-=?\[][^}]*)?\}(.*)$", re.S)
 # `${NAME:?…}` aborts when NAME is empty or unset — the case G4 is about (K6): exempt only when it is the token's one
 # expansion (L8), its name is no project name (M1: `"${PWD:?}"/*` is the project's tree), and its tail climbs nowhere (M15).
 _ABORTS_IF_EMPTY = re.compile(r'^("?)\$\{([A-Za-z_][A-Za-z0-9_]*):\?[^}]*\}\1([^$`"\']*)$')
@@ -1464,8 +1465,9 @@ def _glob_outside_quotes(raw):
             j = raw.find("}", i + 2)
             inner = raw[i + 2:n if j == -1 else j]
             # impl round 3, N1: only a removal pattern's `*` (`${f%.*}`) is no glob; a default, assign or alternate
-            # word is expanded as a target (`${f:-*}` is `*`, `${f:-~}` is the home)
-            w = _PARAM_WORD.match(inner)
+            # word is expanded as a target (`${f:-*}` is `*`, `${f:-~}` is the home), and so is a replacement (Q6:
+            # `${f/a/*}` is globbed, `${f/x/~}` expanded)
+            w = _PARAM_WORD.match(inner) or _PARAM_REPL.match(inner)
             if w and ("*" in w.group(1) or w.group(1).startswith("~")):
                 return True
             i = n if j == -1 else j + 1
@@ -1485,6 +1487,7 @@ def _glob_outside_quotes(raw):
 
 
 _PARAM_WORD = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-]):?[-=+?](.*)$", re.S)
+_PARAM_REPL = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*])/[/#%]?(?:\\.|[^/\\])*/(.*)$", re.S)   # Q6
 
 
 def _project_rest_is_dangerous(rest):
