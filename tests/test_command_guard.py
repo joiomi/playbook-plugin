@@ -3120,5 +3120,32 @@ class G4Part2Round2(_G4Asserts, unittest.TestCase):
                            "git maintenance run --task=gc", "find .github -name '*.yml' -delete")
 
 
+class G4Part2PostPanel(_G4Asserts, unittest.TestCase):
+    """Task 346, the post-panel judge's run 1: D1-D4, fail-opens of round 2's own fixes and one new hole."""
+
+    def test_an_empty_parameter_with_a_modifier_and_a_slash_is_the_root(self):
+        """Row 20 (D1): `"${D%/}/"` with `D` unset is `/`."""
+        self.assert_blocks('find "${D%/}/" -delete', 'find "${D#x}/" -delete', "find ${D%/}/ -name x -delete",
+                           'find "${D:+x}/" -delete', "find ${D%/} -delete")
+        self.assert_passes('find "${D%/}" -name x -delete', 'find "${D:?}/x" -delete', "find ${D:?}/x -delete")
+
+    def test_an_exec_placeholder_takes_the_elided_start_point(self):
+        """Row 21 (D2): with `D` unset, `find $D …` walks `.`, so `{}` is `.`."""
+        self.assert_blocks("find $D -maxdepth 0 -exec git restore {} \\;", "find $D -exec git checkout -- {} +",
+                           "find ${D} -maxdepth 0 -exec git restore {} +")
+        self.assert_passes('find "$D" -maxdepth 0 -exec git restore {} \\;', "find src -exec git restore {} +")
+
+    def test_nested_defaults_are_followed(self):
+        """Row 22 (D3)."""
+        self.assert_blocks('find "${R:-${S:-.}}" -delete', 'find "${R:-${S:-/}}" -delete',
+                           'git checkout -- "${P:-${Q:-.}}"', 'find "${R:-${S:-.git}}" -delete')
+        self.assert_passes('find "${R:-${S:-build}}" -name x -delete')
+
+    def test_push_options_are_read_in_order(self):
+        """Row 23 (D4): each `-o` takes the next word, so `-o -o :main` leaves `:main` a refspec."""
+        self.assert_blocks("git push origin -o -o :main", "git push origin --push-option --push-option :main")
+        self.assert_passes("git push -o :main origin", "git push -o x -o :y origin main")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
