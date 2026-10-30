@@ -1486,8 +1486,31 @@ def _glob_outside_quotes(raw):
     return False
 
 
-_PARAM_WORD = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-]):?[-=+?](.*)$", re.S)
-_PARAM_REPL = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*])/[/#%]?(?:\\.|[^/\\])*/(.*)$", re.S)   # Q6
+# a parameter's name, with a subscript (post-panel run 2, R2: `${f[0]:-*}`)
+_PARAM_NAME = r"(?:[A-Za-z_][A-Za-z0-9_]*(?:\[[^]]*\])?|[0-9]+)"
+_PARAM_WORD = re.compile(r"(?:" + _PARAM_NAME + r"|[@*#?$!-]):?[-=+?](.*)$", re.S)
+_PARAM_REPL = re.compile(r"(?:" + _PARAM_NAME + r"|[@*])/[/#%]?(?:\\.|[^/\\])*/(.*)$", re.S)   # Q6
+# a target that starts with a parameter's default, assign or alternate form (R3: `${X:-${PWD}}`)
+_PARAM_OPEN = re.compile(r"\$\{(?:" + _PARAM_NAME + r"|[@*])(:?[-=+])")
+
+
+def _param_word_target(cand):
+    """Post-panel run 2, R3: the value a target that starts with `${NAME:-word}` (`-`, `=`, `+`, with or without `:`)
+    may take — the word and the text after the closing brace, nested braces counted — or None."""
+    m = _PARAM_OPEN.match(cand)
+    if not m:
+        return None
+    depth, i = 1, m.end()
+    while i < len(cand):
+        if cand.startswith("${", i):
+            depth, i = depth + 1, i + 2
+            continue
+        if cand[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return cand[m.end():i] + cand[i + 1:]
+        i += 1
+    return None
 
 
 def _project_rest_is_dangerous(rest):
@@ -1547,8 +1570,11 @@ def _rm_is_dangerous(values, kinds=None, raws=None):
                 pt = _project_target(cand)
                 if pt is not None and pt[0] == "param" and _project_rest_is_dangerous(pt[1]):
                     return True
-                if pt is not None and pt[0] == "word" and pt[1] and _rm_is_dangerous(["rm", "-rf", pt[1]]):
-                    return True                        # N2: `"${PWD:+/}"` is `rm -rf /`
+                # any parameter's default, assign or alternate word is a value the target may take, judged as a target
+                # of its own (N2: `"${PWD:+/}"` is `rm -rf /`; post-panel run 2, R3: `"${X:-${PWD}}"`, `"${X:-/}"`)
+                alt = _param_word_target(cand)
+                if alt and _rm_is_dangerous(["rm", "-rf", alt]):
+                    return True
             if not cand.startswith(("/", "$", "~")):
                 rel = posixpath.normpath(cand)
                 if rel in _RECORDS or rel == ".." or rel.startswith("../"):
@@ -2598,6 +2624,13 @@ def _top_level_segments(line):
             if q == '"' and c == "\\" and i + 1 < n:
                 i += 2
                 continue
+            if q == '"' and line.startswith("$(", i):
+                # post-panel run 2, R1: a substitution inside double quotes has quotes of its own
+                # (`"$(tr -d '"' < v)"`), so the double quote is set aside until the substitution's `)`
+                stack.append('sub"')
+                q = ""
+                i += 2
+                continue
             if c == q:
                 q = ""
             i += 1
@@ -2618,17 +2651,19 @@ def _top_level_segments(line):
         elif c == "(":
             # impl round 1, L3: a substitution (`$(`, `<(`, `>(`) stays whole; a bare `( … )` group is cut like the
             # rest of the line, so `(true; bash <(curl …))` is read segment by segment
-            inside = "sub" in stack
+            inside = any(k != "group" for k in stack)
             stack.append("sub" if i > 0 and line[i - 1] in "$<>" else "group")
             if stack[-1] == "group" and not inside and not bt:
                 out.append(line[start:i])
                 start = i + 1
         elif c == ")":
             kind = stack.pop() if stack else "group"
-            if kind == "group" and "sub" not in stack and not bt:
+            if kind == 'sub"':
+                q = '"'                                # back inside the double quote the substitution opened in
+            elif kind == "group" and not any(k != "group" for k in stack) and not bt:
                 out.append(line[start:i])
                 start = i + 1
-        elif "sub" not in stack and not bt:
+        elif not any(k != "group" for k in stack) and not bt:
             hit = next((op for op in ("&&", "||", ";", "|", "&", "\n") if line.startswith(op, i)), None)
             if hit and _is_redirection_char(line, i, hit):
                 hit = None
@@ -2895,6 +2930,8 @@ def _shell_consumes_a_downloader(text):
     segs = _top_level_segments(text)
     if "\\\n" in text:
         segs += _top_level_segments(text.replace("\\\n", ""))
+    if "\n" in text:                                   # post-panel run 2, R1: each line on its own too, as before N6
+        segs += [seg for line in text.split("\n") for seg in _top_level_segments(line)]
     for seg in segs:
         rest, _executes, _payloads = _walk_prefix(seg)
         lexed = _lex(rest)
