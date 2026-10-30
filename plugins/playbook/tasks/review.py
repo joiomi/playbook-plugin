@@ -198,20 +198,6 @@ def _judge_error(output, status, timeout_label=None):
         return ""
 
 
-def _as_review_or_failure(output):
-    """A judge's text as it stands when it is a review, else failure-marked (task 320, audit 5's G6): an exit-0
-    refusal, filter block, plan-only stop or wait counted as a judge that succeeded. The marker comes first, so every
-    reader — the verdict, the retry bookkeeping, the spend status, judge.md — takes it for a failure, and the judge's
-    own text follows it. The carried usage, soft cut and note stay with it."""
-    from tasks.models_check import NOT_A_REVIEW_HEAD, not_a_review
-    why = not_a_review(output)
-    if why is None:
-        return output
-    from provider.usage import JudgeOutput
-    return JudgeOutput(f"{NOT_A_REVIEW_HEAD} {why})\n\n{output}", usage=getattr(output, "usage", None),
-                       soft_cut=getattr(output, "soft_cut", None), note=getattr(output, "note", None))
-
-
 def _parse_judge_usage(output_text):
     """Token usage for the spend record — else None (the caller then records
     `{"status":"unknown"}`). NEVER fabricates numbers.
@@ -295,9 +281,13 @@ def _round_head_line(title: str, label: str, mark: bool = True) -> str:
     return head + f"{ROUND_FORMAT_MARK}\n" if mark else head
 
 
-def _judge_block_lines(label: str, text: str, failed: bool) -> "list[str]":
+def _judge_block_lines(label: str, text: str, failed: bool, records: "list[str] | None" = None,
+                       first: "tuple[str, str] | None" = None) -> "list[str]":
     """One judge's block in a round: the writer's bars and label, then the judge's text QUOTED line by line
-    (task 200, #3) — no line of it can be a heading, a header field, a bar or triage to a reader of judge.md."""
+    (task 200, #3) — no line of it can be a heading, a header field, a bar or triage to a reader of judge.md.
+    Task 347: before it, the CLI's own lines — a first answer that was not in the review form (`first`: why, and
+    that answer quoted) and `SEAT FAILED` when the re-run failed too; the seat's records as `review_form.render`
+    wrote them (`F<n> | …`), which `stop_rule.round_findings` counts."""
     from tasks.core import quote_judge_text
     bar = "═" * 60
     # task 264: playbook's own line about the call (agy's soft deadline) is the writer's, above the quoted text
@@ -305,6 +295,14 @@ def _judge_block_lines(label: str, text: str, failed: bool) -> "list[str]":
     head = [bar, f"  JUDGE: {label}{'  [FAILED]' if failed else ''}", bar + "\n"]
     if isinstance(note, str) and note:
         head.append(_one_line(note) + "\n")
+    if first is not None:
+        if failed:
+            head.append(f"SEAT FAILED | {_one_line(label)} | its answer failed again after one re-run "
+                        "(the head of its answer below says why)")
+        head += [f"FIRST ANSWER | not in the review form: {_one_line(first[0])} | {_one_line(label)}",
+                 quote_judge_text(first[1]), "", f"ANSWER | the re-run | {_one_line(label)}\n"]
+    if records:
+        head += records + [""]
     return head + [quote_judge_text(text), "\n\n"]
 
 
@@ -2004,6 +2002,19 @@ def _cmd_panel_review(cmd_args):
     else:
         prompt_fn = None
         review_label = "panel"
+    # Task 347 (DESIGN-PLAYBOOK-2.md §3): the round's code — every seat's, and a seat's re-run's. The places a record
+    # names are read in the tree the judges read, and an impl review's changed files once, now, before any spawn.
+    from tasks import review_form as _rf
+    _code = _rf.new_code() if task_file else ""
+    _places = None
+    if task_file:
+        try:
+            _places = _rf.Places.for_task(
+                project_path, _ctx_root, task_file.parent, impl=review_mode == "impl",
+                live=(list(_view.live_binds) + list(_view.agent_live)) if _view is not None else ())
+        except Exception:      # noqa: BLE001 — the start or the changed files unread: the current side still reads
+            _places = _rf.Places(project_path, root=_ctx_root)
+    _changed_named = sorted(_places.changed) if _places is not None and _places.changed else None
 
     # Output path: task dir when task given, agent_dir/ otherwise
     if task_file:
@@ -2141,7 +2152,7 @@ def _cmd_panel_review(cmd_args):
     )
     _print_background_advisory(timeout_secs)
 
-    def run_judge(judge_spec):
+    def run_judge(judge_spec, rerun=""):
         adapter_cls, variant = judge_spec
         provider_name = adapter_cls.binary_name()
         label = f"{provider_name}:{variant}" if variant else provider_name
@@ -2157,9 +2168,13 @@ def _cmd_panel_review(cmd_args):
                 trim_notice=_payload["trim_notice"],
                 judge_verify=judge_verify_cmds,
                 settled=bool(_settled_part),
+                code=_code,
+                changed=_changed_named,
             )
             if extra_prompt:
                 prompt += f"\n\nAdditional steering from the user:\n{extra_prompt}"
+            if rerun:          # task 347: the one re-run of a seat whose first answer was not in the form
+                prompt += "\n\n" + rerun
         else:
             # Taskless / --bare: still prepend the soft-deadline steering when
             # there is a soft budget, so free-form panel prompts self-regulate too.
@@ -2324,9 +2339,41 @@ def _cmd_panel_review(cmd_args):
     _tried_failed: dict = {}
     _answered: dict = {}
 
+    _answers: dict = {}         # task 347: label → its answer as the form reads it
+    _first_answers: dict = {}   # label → (why, text): its first answer was not in the form, and it ran once more
+    _no_rerun = [False]         # a refused panel runs nothing more
+
+    def _spend(spec, output, dur_ms, timed_out):
+        # Seat carries model:effort (not the display `label`, which omits
+        # claude's fixed effort) — derived from the judge spec for this future.
+        _cls, _var = spec
+        _st_now = _judge_status(output, timed_out=timed_out)
+        _spend_pending.append((_seat_with_effort(_cls.binary_name(), _var),
+                               dur_ms, _st_now,
+                               _parse_judge_usage(output),
+                               _judge_error(output, _st_now),
+                               getattr(output, "soft_cut", None) or ""))
+
     def _take(spec, label, output, dur_ms, timed_out):
-        if task_path:       # a review round: a consultation (`--prompt`) asks for no review protocol
-            output = _as_review_or_failure(output)
+        """One call's answer. A review round's exit-0 answer counts by its form (task 347, DESIGN-PLAYBOOK-2.md §3;
+        a consultation, `--prompt`, asks for none); one that is not in it is run once more — the note to return —
+        then failed. A failure-marked answer stays failed. The outage bookkeeping reads a seat's final answer."""
+        if task_path and not _judge_failed(output):
+            _ans = _rf.read_answer(str(output), _code, _places)
+            if _ans.ok:
+                _answers[label] = _ans
+            else:
+                from provider.usage import JudgeOutput as _JO
+                from tasks.models_check import NOT_A_REVIEW_HEAD
+                _marked = _JO(f"{NOT_A_REVIEW_HEAD} {_ans.why})\n\n{output}", usage=getattr(output, "usage", None),
+                              soft_cut=getattr(output, "soft_cut", None), note=getattr(output, "note", None))
+                if label not in _first_answers and not _no_rerun[0]:
+                    _first_answers[label] = (_ans.why, str(output))
+                    _spend(spec, _marked, dur_ms, timed_out)
+                    print(f"  [{label}] not in the review form ({_one_line(_ans.why)}) — running it once more",
+                          flush=True)
+                    return _rf.rerun_note(_ans.why, str(output))
+                output = _marked
         if label in _retry:
             _failed_now = _judge_failed(output)
             _o = _seat_outage.classify_outage(output, provider=label.split(":", 1)[0]) if _failed_now else None
@@ -2349,15 +2396,8 @@ def _cmd_panel_review(cmd_args):
                 _tried_failed[label] = _o
         results[label] = output
         print(f"  [{label}] done", flush=True)
-        # Seat carries model:effort (not the display `label`, which omits
-        # claude's fixed effort) — derived from the judge spec for this future.
-        _cls, _var = spec
-        _st_now = _judge_status(output, timed_out=timed_out)
-        _spend_pending.append((_seat_with_effort(_cls.binary_name(), _var),
-                               dur_ms, _st_now,
-                               _parse_judge_usage(output),
-                               _judge_error(output, _st_now),
-                               getattr(output, "soft_cut", None) or ""))
+        _spend(spec, output, dur_ms, timed_out)
+        return None
 
     def _label_of(spec):
         return f"{spec[0].binary_name()}:{spec[1]}" if spec[1] else spec[0].binary_name()
@@ -2371,24 +2411,38 @@ def _cmd_panel_review(cmd_args):
     _rest = [j for j in judges if j not in _first]
     _possible = None
     with concurrent.futures.ThreadPoolExecutor(max_workers=len(judges)) as executor:
-        futures = {executor.submit(run_judge, j): j for j in _first}
-        _taken: set = set()
+        futures: dict = {}
+        _pending: set = set()
+
+        def _submit(spec, rerun=""):
+            f = executor.submit(run_judge, spec, rerun)
+            futures[f] = spec
+            _pending.add(f)
 
         def _collect(fs):
             for f in fs:
-                if f not in _taken:
-                    _taken.add(f)
-                    _take(futures[f], *f.result())
+                _pending.discard(f)
+                _again = _take(futures[f], *f.result())
+                if _again:          # task 347: the seat's one re-run joins the calls still working
+                    _submit(futures[f], _again)
 
+        for j in _first:
+            _submit(j)
         if _first:
-            _done, _working = concurrent.futures.wait(list(futures), timeout=_RETRY_FIRST_TRY_SECS)
+            _done, _ = concurrent.futures.wait(list(_pending), timeout=_RETRY_FIRST_TRY_SECS)
             _collect(_done)
-            _possible = (len(_rest) + len(_working)
+            # still working: the first tries not done, and the re-run of one whose answer was not in the form
+            _possible = (len(_rest) + len(_pending)
                          + sum(1 for _l in _answered if _l in results and not _judge_failed(results[_l])))
         if _possible is None or _possible >= _need:
-            futures.update({executor.submit(run_judge, j): j for j in _rest})
+            for j in _rest:
+                _submit(j)
+        else:
+            _no_rerun[0] = True
         # (refused: the seats still working finish — none is killed — and the live seats are never called)
-        _collect(concurrent.futures.as_completed(list(futures)))
+        while _pending:
+            _done, _ = concurrent.futures.wait(list(_pending), return_when=concurrent.futures.FIRST_COMPLETED)
+            _collect(_done)
     # A skipped seat has no place in the context receipt or the model-gone probe either.
     judges = [j for j in judges if _label_of(j) not in _refused]
 
@@ -2624,8 +2678,13 @@ def _cmd_panel_review(cmd_args):
     # panel reviews (where findings live in judge.md, not task.md) the
     # discipline rides with the data. Helper is unit-tested in tests/test_cli.py.
     lines.extend(_panel_triage_frame())
+    _fn = 1                 # task 347: the round's records are numbered F1… across its seats, in seat order
     for label in sorted(results.keys()):
-        lines.extend(_judge_block_lines(label, results[label], failed=label in failed))
+        _recs = None
+        if label in _answers and label not in failed:
+            _recs, _fn = _rf.render(_answers[label], label, _fn)
+        lines.extend(_judge_block_lines(label, results[label], failed=label in failed, records=_recs,
+                                        first=_first_answers.get(label)))
     # Stack, never clobber (1.5.3): a re-run panel must not destroy the
     # previous round's verdicts. Newest round first; the close gate reads
     # only the newest round's mode+verdict. Best-effort so a hostile tree can't
@@ -2937,6 +2996,17 @@ def _cmd_single_review(cmd, cmd_args):
         review_mode = "impl" if _extract_status(task_file).startswith("done") else "plan"
 
     _base_prompt_fn = plan_review_prompt if review_mode == "plan" else impl_review_prompt
+    # Task 347 (DESIGN-PLAYBOOK-2.md §3): this run's code, and where the places its answer names are read — the tree
+    # the judge reads, and an impl review's changed files, read now, before the spawn.
+    from tasks import review_form as _rf
+    _sj_code = _rf.new_code()
+    try:
+        _sj_places = _rf.Places.for_task(
+            project_path, _ctx_root, task_file.parent, impl=review_mode == "impl",
+            live=(list(_view.live_binds) + list(_view.agent_live)) if _view is not None else ())
+    except Exception:          # noqa: BLE001 — the start or the changed files unread: the current side still reads
+        _sj_places = _rf.Places(project_path, root=_ctx_root)
+    _sj_changed = sorted(_sj_places.changed) if _sj_places.changed else None
 
     def prompt_fn(task_path_arg, inline_context=False):
         return _base_prompt_fn(
@@ -2947,6 +3017,8 @@ def _cmd_single_review(cmd, cmd_args):
             trim_notice=sj_trim_notice,
             judge_verify=sj_judge_verify,
             settled=bool(_sj_settled),
+            code=_sj_code,
+            changed=_sj_changed,
         )
 
     review_label = "plan review" if review_mode == "plan" else "impl review"
@@ -3473,12 +3545,14 @@ def _cmd_single_review(cmd, cmd_args):
             _text += "\n"
         result = subprocess.CompletedProcess(
             getattr(result, "args", None), _rc, stdout=_text, stderr=result.stderr or "")
-    # Task 320 (audit 5's G6): an exit-0 answer that is no review — a refusal, a filter block, a plan-only stop, a
-    # wait — takes the failure path below as a failure-marked one does: no saved log, no findings, rc 1, and a
-    # post-panel run is released (`fail_run`, it produced no review). Every backend, before the operator stream.
+    # Task 347 (DESIGN-PLAYBOOK-2.md §3; task 320 read words): an exit-0 answer not in the review form — a refusal, a
+    # filter block, a plan-only stop, a wait, a review in other words — takes the failure path below as a
+    # failure-marked one does: no saved log, no findings, rc 1, the run released. The agent runs it again: no
+    # automatic re-run here. Every backend, before the operator stream.
     if result.returncode == 0:
-        from tasks.models_check import NOT_A_REVIEW_HEAD, not_a_review as _not_a_review
-        _why_not = _not_a_review(result.stdout or "")
+        from tasks.models_check import NOT_A_REVIEW_HEAD
+        _form = _rf.read_answer(result.stdout or "", _sj_code, _sj_places)
+        _why_not = "" if _form.ok else _form.why
         if _why_not:
             result = subprocess.CompletedProcess(
                 getattr(result, "args", None), 1,

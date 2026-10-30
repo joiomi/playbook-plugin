@@ -137,7 +137,7 @@ class AJudgesTextIsQuotedInTheRecord(_Project):
         lines = jm.splitlines()
         self.assertTrue(lines[0].startswith("# Panel Impl Review — "), lines[:2])
         self.assertEqual(lines[1], "**Round-format:** 2")
-        finding = "**Important** — `src/x.py:1` a finding from the stand-in judge"
+        finding = "scenario: a finding from the stand-in judge"
         self.assertEqual(sum(ln.startswith("> " + finding) for ln in lines), 3, jm)
         self.assertFalse(any(ln.startswith(finding) for ln in lines), jm)
 

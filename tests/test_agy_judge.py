@@ -36,7 +36,7 @@ from provider.adapters.antigravity import AntigravityAdapter  # noqa: E402
 from provider.usage import JudgeOutput  # noqa: E402
 from tasks import models_check as mc  # noqa: E402
 from tasks import review  # noqa: E402
-from tests._judge_stub import agy_as_review  # noqa: E402  (task 320)
+from tests._judge_stub import agy_as_review, fill_code  # noqa: E402  (task 320, task 347)
 
 FIX = _HERE / "fixtures" / "agy-1.2.17"
 
@@ -1720,6 +1720,8 @@ class ReviewRunner(unittest.TestCase):
             self.calls.append((agent, list(args), kw))
             if raises is not None:
                 raise raises
+            if result is not None and "{CODE}" in (result.stdout or ""):     # task 347: the run's code
+                return _cp(fill_code(result.stdout, kw.get("input") or ""), result.returncode, result.stderr)
             return result
         return (mock.patch.object(sandbox, "run", fake_run),
                 mock.patch.object(shutil, "which", lambda name: "/usr/bin/" + name))

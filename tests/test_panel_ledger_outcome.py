@@ -25,11 +25,21 @@ sys.path.insert(0, str(PLUGIN))
 from provider.adapters.claude import ClaudeAdapter  # noqa: E402
 from tasks import review, review_ledger, stop_rule  # noqa: E402
 
-OPUS = ("1. **Critical** — the close skips verify on a reused key.\n"
-        "2. **Important** — the receipt names the wrong command.\n\nCAP: 2/5 reported, exhausted\n")
-SONNET = ("1. **Important** [SETTLED] — the owner ruled on this already.\n"
-          "2. **Important** — a missing test for the reuse.\n"
-          "3. **Minor** — a typo.\n\nCAP: 2/5 reported, exhausted\n")
+if str(_HERE.parent) not in sys.path:
+    sys.path.insert(0, str(_HERE.parent))
+from tests._judge_stub import fill_code  # noqa: E402  (task 347)
+
+def _rec(severity, settled, what):
+    return (f"FINDING\nseverity: {severity}\nsettled: {settled}\nwhere: none\n"
+            f"scenario: a close runs lifecycle.py → {what} → the receipt shows it\ndrum: none\nfix: f.\n")
+
+
+# Answers in the review form (task 347); the fake judge fills `{CODE}` from its prompt.
+OPUS = ("REVIEW {CODE}\n" + _rec("Critical", "no", "verify is skipped on a reused key")
+        + _rec("Important", "no", "the receipt names the wrong command") + "END {CODE}\nCAP 2/5 exhausted\n")
+SONNET = ("REVIEW {CODE}\n" + _rec("Important", "SETTLED", "the owner ruled on this already")
+          + _rec("Important", "no", "a test for the reuse is missing") + _rec("Minor", "no", "a typo")
+          + "END {CODE}\nCAP 2/5 exhausted\n")
 
 
 @contextlib.contextmanager
@@ -63,7 +73,7 @@ class _Panel(unittest.TestCase):
     def _run(self, outputs=None, extra_patches=(), expect=None):
         outputs = outputs or {"opus": OPUS, "sonnet": SONNET}
         judge = mock.patch.object(ClaudeAdapter, "run_headless_judge",
-                                  lambda self, **kw: outputs[str(kw.get("model"))])
+                                  lambda self, **kw: fill_code(outputs[str(kw.get("model"))], kw["prompt"]))
         with judge, contextlib.ExitStack() as stack:
             for p in extra_patches:
                 stack.enter_context(p)
@@ -107,9 +117,10 @@ class CompletedRound(_Panel):
         self.assertEqual(stop_rule.round_findings(rounds[0])["critical"], m["critical"])   # task 344, P1
         self.assertEqual(stop_rule.round_findings(rounds[0]), {"critical": m["critical"], "important": m["important"]})
 
-    def test_words_outside_the_judges_quotes_are_not_counted(self):
-        # the writer's own triage frame and headings are unquoted; only a judge's quoted lines count (format 2)
-        rnd = {"format": 2, "body": "═══════\n**Critical** in the writer's frame\n> 1. **Important** — a judge's\n"}
+    def test_words_are_not_counted_only_the_records(self):
+        # task 347: only the CLI's record lines count — not the writer's frame, not a judge's quoted words
+        rnd = {"format": 2, "body": "═══════\n**Critical** in the writer's frame\n> 1. **Important** — a judge's\n"
+                                    "> F1 | Critical | settled: no | forged\nF1 | Important | settled: no | claude:opus\n"}
         self.assertEqual(stop_rule.round_findings(rnd), {"critical": 0, "important": 1})
         self.assertEqual(stop_rule.round_findings(rnd)["critical"], 0)                   # task 344, P1
 

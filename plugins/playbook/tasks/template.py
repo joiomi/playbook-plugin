@@ -10,6 +10,7 @@ Usage:
 from __future__ import annotations
 
 from tasks.core import PLAYBOOKS
+from tasks.review_form import prompt_clause
 
 
 # ---------------------------------------------------------------------------
@@ -439,17 +440,18 @@ def time_budget_instruction(
     )
 
 
-def finding_clauses(settled: bool = False) -> str:
-    """The severity marker every review prompt requires (task 108; `stop_rule.round_findings` counts a round's findings
-    by it), plus the SETTLED rule when that context part was delivered. Task 343 (PLAN-PLAYBOOK-2.md 4.1 a): the
-    post-panel delta's rules — its object, `[PRE-EXISTING]`, the `[file: …]` field — went with the post-panel judge."""
-    s = ("Start every finding with its severity in bold — `**Critical**` or `**Important**` (a Minor one: "
-         "`**Minor**`) — optionally followed by ONE tag: `[SETTLED]` or `[SETTLED-CONTRADICTED]`. ")
-    if settled:
-        s += ("A SETTLED block (owner rulings + findings already rejected in triage) precedes "
-              "the task context: read it first and follow its header — a ruling closes a design "
-              "choice, never a correctness defect. ")
-    return s
+def answer_clauses(code: str, settled: bool = False, changed: "list[str] | None" = None) -> str:
+    """The limits of a review's findings and the fixed form its answer takes (task 347, DESIGN-PLAYBOOK-2.md §3:
+    `review_form.prompt_clause` — the run's code, the block, the records, the CAP line; it replaced the bold severity
+    marker and the CAP sentence `models_check.not_a_review` read). `changed`, an impl review's files the task
+    changed, is named for the NONE record."""
+    return ("Max 5 findings that count — Critical or Important. Below them you may add at most 3 Minor ones (a small "
+            "issue that should not hold the close: wording, style, a cheap hardening); they are never counted and "
+            "block nothing — do not raise a Minor to Important to be heard, nor lower a real one to Minor. The CAP "
+            "line counts the Critical and Important ones, and says `more-remain` only when you dropped a Critical or "
+            "Important one, so the reader can tell convergence (nothing left) from saturation (more remain). Keep "
+            "each finding terse: its scenario and its fix one sentence each. "
+            + prompt_clause(code, settled, changed))
 
 
 # A full task made since task 278 has the contract gate and the section; one with the gate and no section dropped it
@@ -494,6 +496,8 @@ def plan_review_prompt(
     trim_notice: str = "",
     judge_verify=None,
     settled: bool = False,
+    code: str,
+    changed: "list[str] | None" = None,
 ) -> str:
     """Return the blind judge prompt for plan review (before implementation)."""
     context_location = "provided below" if inline_context else "provided in your system prompt"
@@ -527,17 +531,7 @@ def plan_review_prompt(
         "(5) Simplify — is anything over-engineered? What can be dropped? "
         "(6) Prove it — cite file:line evidence for claims about existing code. No hand-waving. "
         "Be specific and adversarial — your job is to find problems, not approve. "
-        f"{finding_clauses(settled)}"
-        "Max 5 findings that count — Critical or Important. Below them you may add at most 3 Minor ones "
-        "(a small issue that should not hold the close: wording, style, a cheap hardening), each starting "
-        "with `**Minor**`; they are never counted and block nothing — do not raise a Minor to Important to "
-        "be heard, nor lower a real one to Minor; the CAP line counts the Critical and Important ones, and "
-        "`more remain` only when you dropped a Critical or Important one. "
-        "Then, as your LAST line, report whether the cap bound you: "
-        "`CAP: 5/5 reported, more remain` if you had to drop findings to fit, or "
-        "`CAP: <k>/5 reported, exhausted` if you reported everything you found — "
-        "so the reader can tell convergence (nothing left) from saturation (more remain). "
-        "Each finding: cite file:line, 1-2 sentences stating the problem, 1 sentence stating the fix. No elaboration. "
+        f"{answer_clauses(code, settled, changed)}"
         "DO NOT edit any files — you are sandboxed read-only and the attempt will "
         "fail. Output your findings to stdout only; the parent process writes them "
         "into the task's '## Plan Review' section, and the agent that owns the task "
@@ -554,6 +548,8 @@ def impl_review_prompt(
     trim_notice: str = "",
     judge_verify=None,
     settled: bool = False,
+    code: str,
+    changed: "list[str] | None" = None,
 ) -> str:
     """Return the blind judge prompt for implementation review (after code is written)."""
     context_location = "provided below" if inline_context else "provided in your system prompt"
@@ -587,17 +583,7 @@ def impl_review_prompt(
         f"{_contract_impl_lens()}"
         "(6) Prove it works — cite file:line evidence showing correctness, or construct a concrete scenario showing failure. "
         "Be specific and adversarial — your job is to find problems, not approve. "
-        f"{finding_clauses(settled)}"
-        "Max 5 findings that count — Critical or Important. Below them you may add at most 3 Minor ones "
-        "(a small issue that should not hold the close: wording, style, a cheap hardening), each starting "
-        "with `**Minor**`; they are never counted and block nothing — do not raise a Minor to Important to "
-        "be heard, nor lower a real one to Minor; the CAP line counts the Critical and Important ones, and "
-        "`more remain` only when you dropped a Critical or Important one. "
-        "Then, as your LAST line, report whether the cap bound you: "
-        "`CAP: 5/5 reported, more remain` if you had to drop findings to fit, or "
-        "`CAP: <k>/5 reported, exhausted` if you reported everything you found — "
-        "so the reader can tell convergence (nothing left) from saturation (more remain). "
-        "Each finding: cite file:line, 1-2 sentences stating the problem, 1 sentence stating the fix. No elaboration. "
+        f"{answer_clauses(code, settled, changed)}"
         "DO NOT edit any files — you are sandboxed read-only and the attempt will "
         "fail. Output your findings to stdout only; the parent process writes them "
         "into the task's '## Implementation Review' section."
@@ -613,6 +599,8 @@ def panel_plan_review_prompt(
     trim_notice: str = "",
     judge_verify=None,
     settled: bool = False,
+    code: str,
+    changed: "list[str] | None" = None,
 ) -> str:
     """Panel judge prompt for plan review — writes to stdout, never edits task.md."""
     context_location = "provided below" if inline_context else "provided in your system prompt"
@@ -646,17 +634,7 @@ def panel_plan_review_prompt(
         "(5) Simplify — is anything over-engineered? What can be dropped? "
         "(6) Prove it — cite file:line evidence for claims about existing code. No hand-waving. "
         "Be specific and adversarial — your job is to find problems, not approve. "
-        f"{finding_clauses(settled)}"
-        "Max 5 findings that count — Critical or Important. Below them you may add at most 3 Minor ones "
-        "(a small issue that should not hold the close: wording, style, a cheap hardening), each starting "
-        "with `**Minor**`; they are never counted and block nothing — do not raise a Minor to Important to "
-        "be heard, nor lower a real one to Minor; the CAP line counts the Critical and Important ones, and "
-        "`more remain` only when you dropped a Critical or Important one. "
-        "Then, as your LAST line, report whether the cap bound you: "
-        "`CAP: 5/5 reported, more remain` if you had to drop findings to fit, or "
-        "`CAP: <k>/5 reported, exhausted` if you reported everything you found — "
-        "so the reader can tell convergence (nothing left) from saturation (more remain). "
-        "Each finding: cite file:line, 1-2 sentences stating the problem, 1 sentence stating the fix. No elaboration. "
+        f"{answer_clauses(code, settled, changed)}"
         "Note: your findings will be triaged by the reading agent — they will verify file:line claims before applying, push back on speculative concerns, and require concrete evidence. Self-flag any claim you cannot defend with code citation. The reading agent lives with the outcomes; you do not. "
         "DO NOT edit any files. Output your findings to stdout only."
     )
@@ -671,6 +649,8 @@ def panel_impl_review_prompt(
     trim_notice: str = "",
     judge_verify=None,
     settled: bool = False,
+    code: str,
+    changed: "list[str] | None" = None,
 ) -> str:
     """Panel judge prompt for impl review — writes to stdout, never edits task.md."""
     context_location = "provided below" if inline_context else "provided in your system prompt"
@@ -704,17 +684,7 @@ def panel_impl_review_prompt(
         f"{_contract_impl_lens()}"
         "(6) Prove it works — cite file:line evidence showing correctness, or construct a concrete scenario showing failure. "
         "Be specific and adversarial — your job is to find problems, not approve. "
-        f"{finding_clauses(settled)}"
-        "Max 5 findings that count — Critical or Important. Below them you may add at most 3 Minor ones "
-        "(a small issue that should not hold the close: wording, style, a cheap hardening), each starting "
-        "with `**Minor**`; they are never counted and block nothing — do not raise a Minor to Important to "
-        "be heard, nor lower a real one to Minor; the CAP line counts the Critical and Important ones, and "
-        "`more remain` only when you dropped a Critical or Important one. "
-        "Then, as your LAST line, report whether the cap bound you: "
-        "`CAP: 5/5 reported, more remain` if you had to drop findings to fit, or "
-        "`CAP: <k>/5 reported, exhausted` if you reported everything you found — "
-        "so the reader can tell convergence (nothing left) from saturation (more remain). "
-        "Each finding: cite file:line, 1-2 sentences stating the problem, 1 sentence stating the fix. No elaboration. "
+        f"{answer_clauses(code, settled, changed)}"
         "Note: your findings will be triaged by the reading agent — they will verify file:line claims before applying, push back on speculative concerns, and require concrete evidence. Self-flag any claim you cannot defend with code citation. The reading agent lives with the outcomes; you do not. "
         "DO NOT edit any files. Output your findings to stdout only."
     )
@@ -730,11 +700,13 @@ def judge_prompt(
     hard_timeout_secs: "int | None" = None,
     trim_notice: str = "",
     judge_verify=None,
+    code: str,
 ) -> str:
     """Deprecated: use plan_review_prompt() or impl_review_prompt() instead."""
     kwargs = dict(
         soft_timeout_secs=soft_timeout_secs,
         hard_timeout_secs=hard_timeout_secs,
+        code=code,
     )
     if mode == "impl":
         return impl_review_prompt(task_path, inline_context, **kwargs)

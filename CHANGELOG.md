@@ -92,13 +92,17 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 - **The chat log keeps a second session's identical prompt** (task 337). Two sessions that sent the same text in the
   same second logged one entry. The duplicate check now reads the newest prompt entry whole, under the log's lock, and
   needs the same session too; with the session unresolved nothing is skipped.
-- **A judge's answer counts as a review only when it is one** (task 320, audit 5's G6). A panel counted any exit-0
-  text as a judge that succeeded, and a single judge saved it as findings. Real judges had returned refusals, a filter
-  block, plan-only stops and waits for a command they had started. Now an answer must open a line with a
-  `**Critical**`/`**Important**`/`**Minor**` finding, or end with the protocol's CAP line. A CAP of 0 with other text
-  must say it found nothing (not "yet") or cite a `file:line` it read, and must be neither a plan nor a wait. Otherwise it is recorded as `(FAILED — not a review: …)`: it does
-  not count toward the quorum, a single review fails with exit 1, and a post-panel run is released. Such an answer is
-  never read as the provider's outage or a dead model. A `--prompt` consultation is unchanged.
+- **A judge's answer counts as a review by its form, never by its words** (task 347, audit 6's G1/G2; it replaces task
+  320's word check, which audit 6 found wrong both ways: a plan counted, a clean review in plain words failed). Each
+  review run has a code the prompt names, and the answer is one block: `REVIEW <code>`, FINDING records (`severity`,
+  `settled`, `where`, `scenario`, `drum`, `fix`, one field a line) or a NONE record (`read`, `checked`), `END <code>`,
+  then the CAP line. Every place a record names must exist in the reviewed tree or (`base:`) the task's start commit,
+  and an impl review's NONE must read a file the task changed. A record that fails is kept as broken, for the triage;
+  an answer with no good record is no review. A panel seat that fails the form runs once more with its first answer
+  quoted, then is `SEAT FAILED`, out of the quorum; a single judge exits 1. The panel writes each seat's records into
+  judge.md as its own numbered lines (`F1 | Critical | settled: no | <seat>`), and the run ledger counts only those. A
+  `--prompt` consultation is unchanged. Real judges had returned refusals, a filter block, plan-only stops and waits;
+  none of them carries the run's code.
 
 ## [1.6.9] — 2026-10-26
 

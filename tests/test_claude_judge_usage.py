@@ -32,6 +32,10 @@ from tasks import review  # noqa: E402
 from tasks.models_check import MODEL_UNAVAILABLE, classify_failure, judge_failed  # noqa: E402
 from tasks.seat_outage import classify_outage  # noqa: E402
 
+if str(_HERE.parent) not in sys.path:
+    sys.path.insert(0, str(_HERE.parent))
+from tests._judge_stub import FORM_ANSWER, fill_code  # noqa: E402  (task 347)
+
 FIX = _HERE / "fixtures" / "claude-2.1.302"
 
 
@@ -407,7 +411,8 @@ class SinglePathReadsTheEnvelope(_Project):
 
         def _run(agent, args, **kw):
             calls.append(list(args))
-            return types.SimpleNamespace(returncode=rc, stdout=stdout, stderr=stderr, args=list(args))
+            return types.SimpleNamespace(returncode=rc, stdout=fill_code(stdout, kw.get("input") or ""),
+                                         stderr=stderr, args=list(args))
         buf = io.StringIO()
         with mock.patch.object(sandbox, "run", _run), mock.patch.object(shutil, "which", lambda n: "/usr/bin/" + n):
             with _chdir(self.project), contextlib.redirect_stdout(buf), contextlib.redirect_stderr(io.StringIO()):
@@ -416,8 +421,8 @@ class SinglePathReadsTheEnvelope(_Project):
         return calls, [r for r in self._journal() if r.get("hook") == "review"], buf.getvalue()
 
     def test_single_records_usage_and_saves_the_prose(self):
-        obj = json.loads(_fx("multiturn.stdout"))         # task 320: a review ends with the protocol's CAP line
-        obj["result"] += "\n\nNo findings.\n\nCAP: 0/5 reported, exhausted"
+        obj = json.loads(_fx("multiturn.stdout"))         # task 347: a review is an answer in the form
+        obj["result"] += "\n\n" + FORM_ANSWER
         calls, recs, printed = self._single(json.dumps(obj))
         argv = calls[0]
         i = argv.index("--output-format")
@@ -470,7 +475,9 @@ class BudgetExceeded(unittest.TestCase):
 class PanelSeatRecordsUsage(_Project):
     def test_a_claude_panel_seat_journals_its_counts(self):
         def _run(binary, args, **kw):
-            return _cp(_fx("multiturn.stdout"))
+            obj = json.loads(_fx("multiturn.stdout"))     # task 347: a review is an answer in the form
+            obj["result"] += "\n\n" + FORM_ANSWER
+            return _cp(fill_code(json.dumps(obj), kw.get("input") or ""))
         with mock.patch.object(ClaudeAdapter, "is_available", classmethod(lambda cls: True)), \
                 mock.patch.object(sandbox, "run", _run), \
                 mock.patch("shutil.which", lambda n: "/usr/bin/" + n):

@@ -153,15 +153,19 @@ def fresh_task(text: str = TASK_MD) -> Path:
     return f
 
 
+CODE = "0123456789ab"   # task 347: every review prompt carries its run's code
+
+
 class PromptContractTest(unittest.TestCase):
     """The prompts must not ask the judge for something it cannot do."""
 
     SINGLE = ("plan_review_prompt", "impl_review_prompt")
     PANEL = ("panel_plan_review_prompt", "panel_impl_review_prompt")
 
+
     def test_single_judge_prompts_no_longer_instruct_editing(self):
         for name in self.SINGLE:
-            rendered = getattr(template, name)("a/007-demo/task.md")
+            rendered = getattr(template, name)("a/007-demo/task.md", code=CODE)
             with self.subTest(builder=name):
                 self.assertNotIn("Then edit", rendered)
                 self.assertIn("DO NOT edit any files", rendered)
@@ -171,13 +175,13 @@ class PromptContractTest(unittest.TestCase):
         """Rewriting the Work Plan was the judge's job and is now the agent's —
         the task template's own triage gate always said the agent decides what
         to accept, so a judge editing gates pre-empted that."""
-        rendered = template.plan_review_prompt("a/007-demo/task.md")
+        rendered = template.plan_review_prompt("a/007-demo/task.md", code=CODE)
         self.assertNotIn("revise the ## Work Plan gates", rendered)
 
     def test_panel_prompts_are_unchanged(self):
         """Guard against fixing the wrong pair: the panel path already worked."""
         for name in self.PANEL:
-            rendered = getattr(template, name)("a/007-demo/task.md")
+            rendered = getattr(template, name)("a/007-demo/task.md", code=CODE)
             with self.subTest(builder=name):
                 self.assertIn(
                     "DO NOT edit any files. Output your findings to stdout only.",

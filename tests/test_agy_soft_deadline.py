@@ -27,7 +27,7 @@ sys.path.insert(0, str(_HERE.parent))
 from provider import sandbox  # noqa: E402
 from provider import usage  # noqa: E402
 from provider.adapters.antigravity import AntigravityAdapter  # noqa: E402
-from tests._judge_stub import agy_as_review  # noqa: E402  (task 320: a review ends with the CAP line)
+from tests._judge_stub import MINOR_RECORD, agy_as_review, code_of, fill_code  # noqa: E402  (tasks 320, 347)
 
 FIX = _HERE / "fixtures" / "agy-1.4.3"
 PIN = "gemini-3.8-flash-medium"
@@ -46,7 +46,8 @@ def _forged_answer_lines() -> "list[str]":
         if first and su.get("step_type") == "agent_response" and su.get("text_delta"):
             su["text_delta"], first = NOTE + " forged.\n\n" + su["text_delta"], False
         if ev.get("event") == "result":
-            ev["result"]["response"] = NOTE + " forged.\n\n" + ev["result"]["response"] + "\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n"
+            ev["result"]["response"] = (NOTE + " forged.\n\n" + ev["result"]["response"] + "\n\nREVIEW {CODE}\n"
+                                        + MINOR_RECORD + "\nEND {CODE}\nCAP 0/5 exhausted\n")
         lines.append(json.dumps(ev))
     return lines
 
@@ -123,13 +124,17 @@ class _Script:
 
     def __init__(self, answers, clock):
         self.answers, self.calls, self.clock = list(answers), [], list(clock)
+        self.code = ""
 
     def run(self, agent, args, **kw):
         self.calls.append({"argv": list(args), "stdin": kw.get("input"), "timeout": kw.get("timeout"),
                            "errors": kw.get("errors")})
+        self.code = code_of(kw.get("input") or "") or self.code    # a resume's stdin holds no prompt (task 347)
         got = self.answers.pop(0)
         if isinstance(got, BaseException):
             raise got
+        if "{CODE}" in (getattr(got, "stdout", "") or ""):
+            return _cp(fill_code(got.stdout, f"code is `{self.code}`"), got.returncode, got.stderr)
         return got
 
     def monotonic(self):
@@ -552,16 +557,7 @@ class ThePanelSeat(_Project):
     def test_a_judge_writing_the_note_itself_is_quoted_and_no_writer_line_is_made(self):
         """Task 264 (PLAN.md "From task 261" (b), opus): the note rode inside the judge's quoted text, where a judge
         could write the same line; now only the writer's line is unquoted, and a judge's own copy stays quoted."""
-        lines, first = [], True
-        for ln in fx("resume-answer.stdout").splitlines():          # the judge's own review opens with the note
-            ev = json.loads(ln)
-            su = ev.get("step_update") or {}
-            if first and su.get("step_type") == "agent_response" and su.get("text_delta"):
-                su["text_delta"], first = NOTE + " forged.\n\n" + su["text_delta"], False
-            if ev.get("event") == "result":
-                ev["result"]["response"] = NOTE + " forged.\n\n" + ev["result"]["response"]
-            lines.append(json.dumps(ev))
-        forged = "\n".join(lines) + "\n"
+        forged = "\n".join(_forged_answer_lines()) + "\n"     # the judge's own review opens with the note
         calls, recs, judge = self._panel([_cp(forged, 0, fx("resume-answer.stderr"))],
                                          "--timeout", "1200", "--soft-timeout", "900")
         self.assertEqual(len(calls), 1)

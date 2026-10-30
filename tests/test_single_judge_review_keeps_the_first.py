@@ -29,14 +29,18 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins" / "playbook"))
 sys.path.insert(0, str(ROOT))
+_TESTS_ROOT = str(Path(__file__).resolve().parents[1])
+if _TESTS_ROOT not in sys.path:
+    sys.path.insert(0, _TESTS_ROOT)
+from tests._judge_stub import FORM_ANSWER, fill_code  # noqa: E402  (task 347: answers in the review form)
 
 from provider import sandbox  # noqa: E402
 from tasks import review  # noqa: E402
 from tasks.core import _gate_counts  # noqa: E402
 from tests.test_review_findings_land import _chdir, _stdout_with_review  # noqa: E402
 
-RUN1 = "**Important** — FINDING-RUN-1: `x.py:1` prints instead of returning.\n\nCAP: 1/5 reported, exhausted"
-RUN2 = "**Important** — FINDING-RUN-2: `x.py:2` drops the error.\n\nCAP: 1/5 reported, exhausted"
+RUN1 = "**Important** — FINDING-RUN-1: `x.py:1` prints instead of returning.\n\n" + FORM_ANSWER   # task 347
+RUN2 = "**Important** — FINDING-RUN-2: `x.py:2` drops the error.\n\n" + FORM_ANSWER
 TRIAGE = "- ACCEPT, FINDING-RUN-1: fixed in x.py, red first (row 9)."
 GATE = "- [ ] MY-GATE: rerun the review once the fix is in"
 OPEN = "<!-- playbook:impl-review-findings -->"
@@ -77,7 +81,7 @@ class EndToEnd(unittest.TestCase):
         stdout = _stdout_with_review(text)
 
         def run(agent, args, **kw):
-            return subprocess.CompletedProcess(args, 0, stdout=stdout, stderr="")
+            return subprocess.CompletedProcess(args, 0, stdout=fill_code(stdout, kw.get("input") or ""), stderr="")
         with mock.patch.object(sandbox, "run", run), \
                 mock.patch.object(shutil, "which", lambda name: "/usr/bin/" + name), _chdir(self.project):
             try:

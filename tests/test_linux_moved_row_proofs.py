@@ -999,9 +999,11 @@ class ARealReviewWhereNothingContainsTheJudge(unittest.TestCase):
 
     def _review(self, judge: str):
         standin = self.bindir / "claude"
-        standin.write_text("#!/bin/sh\ncat >/dev/null\n" + _JUDGES[judge] +
-                           'echo "No Critical or Important findings."\necho "CAP: 0/5 reported, exhausted"\n',
-                           encoding="utf-8")
+        # task 347: the answer is in the review form, with the code its prompt carries
+        standin.write_text("#!/bin/sh\np=\"$(cat)\"\n" + _JUDGES[judge] +
+                           'code="$(printf \'%s\' "$p" | grep -o \'code is `[0-9a-f]\\{12\\}`\' | head -n1 | cut -c10-21)"\n'
+                           "printf 'REVIEW %s\\nNONE\\nread: code.py:1\\nchecked: code.py.\\nEND %s\\nCAP 0/5 exhausted\\n' "
+                           '"$code" "$code"\n', encoding="utf-8")
         standin.chmod(0o755)
         before = self.record.read_bytes()
         r = self._tasks("impl-review", "001", "--backend", "claude", "--timeout", "120")

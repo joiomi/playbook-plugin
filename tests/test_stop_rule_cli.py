@@ -22,6 +22,10 @@ from unittest import mock
 HERE = Path(__file__).resolve().parent
 PLUGIN = HERE.parent / "plugins" / "playbook"
 sys.path.insert(0, str(PLUGIN))
+_TESTS_ROOT = str(Path(__file__).resolve().parents[1])
+if _TESTS_ROOT not in sys.path:
+    sys.path.insert(0, _TESTS_ROOT)
+from tests._judge_stub import answer_for  # noqa: E402  (task 347: answers in the review form)
 
 from tasks import review_ledger  # noqa: E402
 
@@ -87,7 +91,7 @@ class PanelCap(unittest.TestCase):
 
         def judge(self_, *a, **kw):
             calls.append(1)
-            return "1. **Important** — `code.py:1` fine.\n\nCAP: 1/5 reported, exhausted\n"
+            return answer_for(kw, "1. **Important** — `code.py:1` fine.")
         err, out = io.StringIO(), io.StringIO()
         code = None
         cwd = os.getcwd()

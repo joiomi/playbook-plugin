@@ -16,6 +16,10 @@ from pathlib import Path
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "plugins/playbook"))
+_TESTS_ROOT = str(Path(__file__).resolve().parents[1])
+if _TESTS_ROOT not in sys.path:
+    sys.path.insert(0, _TESTS_ROOT)
+from tests._judge_stub import in_form  # noqa: E402  (task 347: answers in the review form)
 from tasks import core  # noqa: E402
 from tasks import template  # noqa: E402
 
@@ -467,7 +471,7 @@ class TheNoticeReachesTheJudges(unittest.TestCase):
 
         def judge(self_, prompt, model, system_context, **kw):
             seen.append(prompt + "\n" + system_context)
-            return "No findings.\n\nCAP: 0/5 reported, exhausted\n"
+            return in_form(prompt)
         cwd = os.getcwd()
         os.chdir(d)
         try:

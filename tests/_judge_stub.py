@@ -9,9 +9,10 @@ does at the boundary the review path drives — and no more:
     and says in its answer whether the write went through;
   * fails (exit 1, an error on stdout as claude prints one) when its `--model` is listed
     in $PB_STUB_FAIL_MODELS, so a panel can be given a controlled mix of verdicts;
-  * answers, exit 0, with the text of `$PB_STUB_SAY/<model>.txt` when that file exists (task 320:
-    a refusal, a wait, a plain answer — texts that are or are not a review);
-  * otherwise answers with one finding in the review format, exit 0.
+  * answers, exit 0, with the text of `$PB_STUB_SAY/<model>.<n>.txt` on its n-th call for that model, else of
+    `$PB_STUB_SAY/<model>.txt`, when one exists (task 320: a refusal, a wait, a plain answer — texts that are or
+    are not a review), each `{CODE}` in it replaced by the run's code the prompt carries (task 347);
+  * otherwise answers with one finding in the review form (task 347), exit 0.
 
 No network, no model: the review path, the sandbox and bubblewrap are the real ones.
 The leading underscore keeps `unittest discover` from collecting this module.
@@ -53,9 +54,17 @@ printf 'cwd=%s\nwrite=%s\nsandboxed=%s\n' "$PWD" "$w" "${PLAYBOOK_SANDBOXED:-}" 
 case " ${PB_STUB_FAIL_MODELS:-} " in
     *" $model "*) echo "API Error: the stub was told to fail for model $model"; exit 1 ;;
 esac
+# task 347: the review form's code, as the prompt names it ("This run's code is `<12 hex>`"), and this model's call count
+code="$(printf '%s' "$prompt" | grep -o 'code is `[0-9a-f]\{12\}`' | head -n1 | cut -c10-21)"
+calls="$(ls "$d" | grep -cF -- "prompt-$model-")"      # a fixed string: opus's model is `claude-opus-5-5[1m]`
 # task 320: answer with a given text, exit 0 — a refusal, a wait, a plain "OK" — when one is laid out for the model
-if [ -n "${PB_STUB_SAY:-}" ] && [ -f "$PB_STUB_SAY/$model.txt" ]; then cat "$PB_STUB_SAY/$model.txt"; exit 0; fi
-printf '**Important** — `src/x.py:1` a finding from the stand-in judge (%s).\n\nWRITE-ATTEMPT: %s\n\nCAP: 1/5 reported, exhausted\n' "$model" "$w"
+if [ -n "${PB_STUB_SAY:-}" ]; then
+    for f in "$PB_STUB_SAY/$model.$calls.txt" "$PB_STUB_SAY/$model.txt"; do
+        if [ -f "$f" ]; then sed "s/{CODE}/$code/g" "$f"; exit 0; fi
+    done
+fi
+# task 347: one finding in the review form, with the run's code
+printf 'WRITE-ATTEMPT: %s\n\nREVIEW %s\nFINDING\nseverity: Important\nsettled: no\nwhere: none\nscenario: a finding from the stand-in judge (%s) on README.md → it is reported → judge.md shows it\ndrum: none\nfix: none needed, it is the stand-in.\nEND %s\nCAP 1/5 exhausted\n' "$w" "$code" "$model" "$code"
 '''
 
 
@@ -70,10 +79,47 @@ exit 1
 '''
 
 
+_CODE_IN_PROMPT = r"code is `([0-9a-f]{12})`"
+# A record every test project can hold: a Minor finding names no place that must exist, and is never counted.
+MINOR_RECORD = ("FINDING\nseverity: Minor\nsettled: no\nwhere: none\n"
+                "scenario: a reader opens README.md → it reads well → nothing to change\ndrum: none\nfix: none.")
+
+
+# An answer in the form whose code a fake judge process fills from its prompt (`fill_code`).
+FORM_ANSWER = "REVIEW {CODE}\n" + MINOR_RECORD + "\nEND {CODE}\nCAP 0/5 exhausted\n"
+
+
+def code_of(prompt: str) -> str:
+    """The review form's code a prompt carries (task 347: "This run's code is `<12 hex>`"), or "" when it has none."""
+    import re
+    m = re.search(_CODE_IN_PROMPT, prompt or "")
+    return m.group(1) if m else ""
+
+
+def in_form(prompt: str, before: str = "", records: str = MINOR_RECORD, cap: str = "CAP 0/5 exhausted") -> str:
+    """`before` (text the review form does not read), then an answer in the form for the run whose prompt this is
+    (task 347) — by default one Minor finding, which counts nowhere and names no file."""
+    code = code_of(prompt)
+    return (before.rstrip("\n") + "\n\n" if before else "") + f"REVIEW {code}\n{records}\nEND {code}\n{cap}\n"
+
+
+def fill_code(text: str, prompt: str) -> str:
+    """`text` with each `{CODE}` replaced by the code `prompt` carries — what a fake judge process does with an answer
+    laid out before the run's code was known (task 347)."""
+    return (text or "").replace("{CODE}", code_of(prompt))
+
+
+def answer_for(kw: dict, before: str = "") -> str:
+    """`in_form` for the call whose keywords these are: a judge adapter's `prompt`, or the prompt a judge process reads
+    on stdin (`input`)."""
+    return in_form(str(kw.get("prompt") or kw.get("input") or ""), before)
+
+
 def agy_as_review(stream: str) -> str:
-    """A captured agy stream-json run as a review the protocol accepts (task 320): its `result` event's answer ends
-    with the CAP line. The captures under tests/fixtures/ stay verbatim; a test that needs the run to read as a review
-    passes it through this."""
+    """A captured agy stream-json run as a review the protocol accepts: its `result` event's answer ends with an answer
+    in the review form (task 347; task 320 wanted the CAP line), whose `{CODE}` the fake run fills from the prompt it
+    was given (`fill_code`). The captures under tests/fixtures/ stay verbatim; a test that needs the run to read as a
+    review passes it through this."""
     import json
     out = []
     for ln in stream.splitlines(keepends=True):
@@ -84,7 +130,8 @@ def agy_as_review(stream: str) -> str:
             continue
         res = ev.get("result") if isinstance(ev, dict) and ev.get("event") == "result" else None
         if isinstance(res, dict) and isinstance(res.get("response"), str) and res["response"].strip():
-            res["response"] = res["response"].rstrip("\n") + "\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n"
+            res["response"] = (res["response"].rstrip("\n") + "\n\nREVIEW {CODE}\n" + MINOR_RECORD
+                               + "\nEND {CODE}\nCAP 0/5 exhausted\n")
             ln = json.dumps(ev, ensure_ascii=False, separators=(",", ":")) + ("\n" if ln.endswith("\n") else "")
         out.append(ln)
     return "".join(out)

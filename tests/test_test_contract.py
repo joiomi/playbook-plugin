@@ -35,6 +35,8 @@ FULL = ("feature", "build", "refactor", "ops", "bugfix", "cleanup", None)
 OTHER = ("research", "audit", "eval", "light", "quick")
 PLAN_BUILDERS = (template.plan_review_prompt, template.panel_plan_review_prompt)
 IMPL_BUILDERS = (template.impl_review_prompt, template.panel_impl_review_prompt)
+CODE = "0123456789ab"   # task 347: every review prompt carries its run's code
+
 TASK = ".agent/tasks/007-example/task.md"
 
 
@@ -131,7 +133,7 @@ class Prompts(unittest.TestCase):
     def test_the_four_prompts_carry_the_contract_lens(self):
         # row 5: the plan lens names every class; the impl test lens asks each row for its test
         for f in PLAN_BUILDERS:
-            p = f(TASK)
+            p = f(TASK, code=CODE)
             self.assertIn("(4) Test contract", p, f.__name__)
             self.assertNotIn("(4) Test coverage", p, f.__name__)
             for n in NAMES:
@@ -140,7 +142,7 @@ class Prompts(unittest.TestCase):
                           "raised is not raised again here.", p, f.__name__)   # rows 17, 21 (P8; impl round 1, opus)
             self.assertIn("a reason that holds is not", p, f.__name__)
         for f in IMPL_BUILDERS:
-            p = f(TASK)
+            p = f(TASK, code=CODE)
             self.assertIn("(5) Test quality", p, f.__name__)
             self.assertIn("Each row of the task's `## Test contract` needs its test", p, f.__name__)
             # row 18 (impl round 1, opus and codex): only new or changed behavior must fail on the old code
@@ -161,7 +163,7 @@ class Prompts(unittest.TestCase):
             self.assertNotIn("- Concurrency and order", sec)
             self.assertIn("> - Gremlins: a gremlin in the wire.", template.guide_text("feature"))
             for f in PLAN_BUILDERS:
-                p = f(TASK)
+                p = f(TASK, code=CODE)
                 self.assertIn("Gremlins", p, f.__name__)
                 self.assertNotIn("Concurrency and order", p, f.__name__)
 
@@ -172,11 +174,11 @@ class Prompts(unittest.TestCase):
         neither = ("With neither (a light, quick, research, audit or eval task, or a record from before the "
                    "contract), ")
         for f in PLAN_BUILDERS:
-            p = f(TASK)
+            p = f(TASK, code=CODE)
             self.assertIn(missing, p, f.__name__)
             self.assertIn(neither + "judge the test plan it has.", p, f.__name__)
         for f in IMPL_BUILDERS:
-            p = f(TASK)
+            p = f(TASK, code=CODE)
             self.assertIn(missing, p, f.__name__)
             self.assertIn(neither + "judge the tests against the Intent.", p, f.__name__)
 
@@ -194,7 +196,7 @@ class Prompts(unittest.TestCase):
         names = [n for n, _ in template.HOSTILE_CLASSES]
         self.assertEqual(tuple(names), NAMES)
         for f in PLAN_BUILDERS:
-            p = f(TASK)
+            p = f(TASK, code=CODE)
             for words, cls in sequences.items():
                 self.assertIn(words, p, (f.__name__, words))
                 self.assertIn(cls, names, words)

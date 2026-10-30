@@ -129,107 +129,11 @@ def judge_failed(text: str) -> bool:
             or t.startswith(_BUDGET_EXCEEDED))
 
 
-# Task 320 (audit 5's G6): the head of a judge's answer that is no review. It holds none of the judge's own text, so no
-# reader of a failure's first line (`seat_outage.classify_outage`, `classify_failure`) takes the judge's words for the
-# provider's (impl round 1, opus and codex: a quoted usage limit recorded a healthy seat as out of credit).
+# The head of a judge's answer that is no review — not in the review form (task 347, DESIGN-PLAYBOOK-2.md §3; task 320
+# read words instead). It holds none of the judge's own text, so no reader of a failure's first line
+# (`seat_outage.classify_outage`, `classify_failure`) takes the judge's words for the provider's (task 320's impl round
+# 1, opus and codex: a quoted usage limit recorded a healthy seat as out of credit).
 NOT_A_REVIEW_HEAD = "(FAILED — not a review:"
-# What the review protocol makes a judge's last line — `CAP: <k>/5 reported, exhausted|more remain` (template.py) —
-# here bare, bold, in backticks, after a list mark (impl round 2, agy and sonnet), and with words after it.
-_SEAT_CAP_RE = re.compile(r"^[\s*_`>]*(?:(?:[-*+]|\d+[.)])\s+[\s*_`]*)?CAP:\s*(\d+)\s*/\s*\d+\s+reported\b",
-                          re.IGNORECASE)
-# A rule or a fence closing the answer after its CAP line (impl round 1, agy and sonnet).
-_SEAT_TRAILER_RE = re.compile(r"\s*(-{3,}|\*{3,}|_{3,}|`{3,}|~{3,})\s*")
-# A finding as the prompt asks for one ("Start every finding with its severity in bold"): at the start of a line,
-# alone or after a list mark — a plan that echoes the severities mid-sentence is no finding (impl round 1) — in the
-# stop rule's forms: any case, a `[` or a `:` (impl round 2, opus; `stop_rule._FINDING_RE`) — the bold holding the
-# severity alone, so `**Important context**` over a plan is no finding (post-panel run 1, codex).
-_SEAT_FINDING_RE = re.compile(
-    r"^\s*(?:[-*+]\s+|\d+[.)]\s+)?\*\*\s*\[?\s*(Critical|Important|Minor)\s*\]?\s*:?\s*\*\*",
-    re.IGNORECASE | re.MULTILINE)
-# A turn that stopped to wait on a command it had started — agy's measured shapes ended `CAP: 0/5 …`; a line of the
-# answer, anywhere (impl round 2, codex: the prompt's lens sentence put before the wait hid it from a first-line test).
-_SEAT_WAIT_RE = re.compile(
-    r"^\W*(I have launched|I've launched|I('m| am) waiting|Waiting (?:for|on)|Please wait|Wait (?:for|on))\b",
-    re.IGNORECASE | re.MULTILINE)
-# A CAP of 0 is a review when the answer says it found nothing, or points at what it read (impl round 2, opus, sonnet
-# and codex: a refusal or a plan that still wrote the CAP line counted). The forms are the ones counted seats used
-# (`.agent/tasks/320-*/cap0_probe.out`, this repo and WoW): "No Critical or Important findings", "No new findings",
-# "I found no …", "Nothing to report", a lone "None.", the Romanian "Nu am găsit / identificat …"; a severity in bold
-# or backticks too (WoW's agy: "No `**Critical**` or `**Important**` defects found").
-_SEAT_NONE_RE = re.compile(
-    r"\bno\s+(?:(?:new|further|other|more|actionable|grounded|counted|real)\s+)*[`*]*(?:critical|important|minor)?"
-    r"[`*]*(?:\s*(?:or|and|,|/)\s*[`*]*(?:critical|important|minor)[`*]*)*\s*"
-    r"(?:findings?|issues?|problems?|defects?)\b|\bfound\s+no(?:thing)?\b|\bnothing\s+(?:to\s+report|found)\b"
-    r"|^\W*none\W*$|\bnu\s+am\s+(?:găsit|gasit|identificat)\b",
-    re.IGNORECASE | re.MULTILINE)
-# A "none" that is provisional is none: "no findings yet", "So far, no findings", "I found no findings yet" — the
-# word anywhere in its sentence, before or after it (post-panel runs 1-3, codex). A sentence ends at a stop that a
-# space or the text's end follows, or a line break: the stop of `review.py` is no sentence's end.
-_SEAT_PROVISIONAL_RE = re.compile(
-    r"\b(?:yet|so\s+far|for\s+now|încă|still\s+(?:reviewing|reading|checking|working|running|looking))\b",
-    re.IGNORECASE)
-_SEAT_SENTENCE_END_RE = re.compile(r"[.!?;](?=\s|$)|\n")
-# A plan, not a finding: words that say what the judge will do, anywhere — after "Next," or "Then" too (post-panel
-# runs 2-3, codex: "I'll read `tasks/review.py:2296` first, then run the tests." + CAP 0 passed the citation test).
-_SEAT_PLAN_RE = re.compile(r"\b(?:I'll|I will|I'm going to|I am going to|Let me|Voi|O să)\b", re.IGNORECASE)
-# What a judge read, cited at a line: `path/file.ext:12`, `file.ext#L12`. A file's name alone is no citation — a plan
-# names the files it means to read (post-panel run 1, codex: "I'll read `tasks/review.py` first" counted).
-_SEAT_CITE_RE = re.compile(r"[\w./@+-]+\.[A-Za-z]\w*(?::\d+|#L\d+)")
-
-
-def _sentence(text: str, start: int, end: int) -> "tuple[int, int]":
-    """The bounds of the sentence that holds text[start:end] (`_SEAT_SENTENCE_END_RE`)."""
-    before = [m.end() for m in _SEAT_SENTENCE_END_RE.finditer(text, 0, start)]
-    after = _SEAT_SENTENCE_END_RE.search(text, end)
-    return (before[-1] if before else 0), (after.start() if after else len(text))
-
-
-def _says_none(text: str) -> bool:
-    """The answer says, for good, that it found nothing: a `_SEAT_NONE_RE` statement whose sentence holds no
-    provisional word ("yet", "so far", "for now", "still reviewing", …) before or after it."""
-    for m in _SEAT_NONE_RE.finditer(text):
-        a, b = _sentence(text, m.start(), m.end())
-        if not _SEAT_PROVISIONAL_RE.search(text, a, b):
-            return True
-    return False
-
-
-def not_a_review(text: str) -> "str | None":
-    """Why a judge's exit-0 text is no review, or None when it is one (task 320, audit 5's G6).
-
-    `judge_failed` knows the failure markers only, so a refusal, a filter block, a plan-only stop or a wait counted
-    as a judge that succeeded. A text is a review when a line opens with a finding the way the prompt asks
-    (`**Critical**`, `**Important**`, `**Minor**`), or when its last non-empty line — a closing rule or fence aside —
-    is the protocol's CAP line. A CAP of 0 with no finding and some prose is a review only when the answer says it
-    found nothing (not "yet") or cites a line it read, and never when, without that statement, it says what it
-    will do (a plan) or a line of it is a wait on a command the judge had started
-    without that statement; a bare CAP line is a review. A failure-marked text is `judge_failed`'s and gets no second
-    reason here. The reason never quotes the judge."""
-    t = (text or "").lstrip("\ufeff").replace("\u2019", "'").replace("\u2018", "'")
-    if judge_failed(t):
-        return None
-    lines = [ln for ln in t.splitlines() if ln.strip()]
-    while lines and _SEAT_TRAILER_RE.fullmatch(lines[-1]):
-        lines.pop()
-    if not lines:
-        return "the answer is empty"
-    finding = _SEAT_FINDING_RE.search(t)
-    cap = _SEAT_CAP_RE.match(lines[-1])
-    if cap:
-        if int(cap.group(1)) == 0 and not finding and len(lines) > 1:
-            says_none = _says_none(t)
-            if not says_none and _SEAT_WAIT_RE.search("\n".join(lines[:-1])):
-                return "the judge stopped while waiting for a command it had started, and reports 0 findings"
-            if not says_none and _SEAT_PLAN_RE.search("\n".join(lines[:-1])):
-                return "it reports 0 findings and says what it will do, not what it found"
-            if not says_none and _SEAT_PROVISIONAL_RE.search("\n".join(lines[:-1])):
-                return "it reports 0 findings so far: its review is not finished"
-            if not says_none and not _SEAT_CITE_RE.search("\n".join(lines[:-1])):
-                return "it reports 0 findings, but neither says it found none nor points at anything it read"
-        return None
-    if finding:
-        return None
-    return "the answer does not end with the CAP line the review asks for, and names no finding"
 
 
 def budget_exceeded(text: str) -> bool:

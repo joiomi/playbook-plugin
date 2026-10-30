@@ -34,6 +34,8 @@ PROMPT_BUILDERS = (
     "panel_plan_review_prompt",
     "panel_impl_review_prompt",
 )
+CODE = "0123456789ab"   # task 347: every review prompt carries its run's code
+
 
 
 def load_template_module(path: Path, name: str = ""):
@@ -117,7 +119,7 @@ class TestHostileSequenceLens(unittest.TestCase):
         for label, path in (("canonical", CANONICAL),):
             module = load_template_module(path, f"_tmpl_{label}")
             for name in PROMPT_BUILDERS:
-                rendered = getattr(module, name)("task.md")
+                rendered = getattr(module, name)("task.md", code=CODE)
                 with self.subTest(copy=label, prompt=name):
                     # Scope the numbering check to the lens list: these prompts
                     # end with a SECOND numbered list (the "then edit task.md"

@@ -7,28 +7,12 @@ Critical and the project's key for them are gone. Task 343: the close reads only
 state.)
 
 A round is an impl panel round that met its quorum (`PANEL VERDICT: PASS` in its header) in judge.md or
-judge-archive.md; a below-quorum round and a plan round are not rounds. A Critical is a `**Critical**` finding
-marker (`_FINDING_RE`, matched after one leading `> ` is stripped) in a judge's text — after the round's
-first `═` bar, and in a round 1.6.2 wrote (format 2) only on a quoted line, the judges' lines being the quoted
-ones — that is not tagged `[SETTLED]`; `round_findings` counts them for the run ledger."""
+judge-archive.md; a below-quorum round and a plan round are not rounds. `round_findings` counts a round's Critical and
+Important findings for the run ledger: the CLI's own record lines (`review_form.render`, task 347), never a line a
+judge wrote — those are quoted."""
 import os
 import re
 from pathlib import Path
-
-# A finding starts at the line start or right after a sentence end on the same
-# line (grok glues its preamble to the first finding: "…constatările.**Important**").
-_FINDING_RE = re.compile(
-    r"(?:^|(?<=[.!?:)]))[ \t]*(?:[-*+]\s+|\d+[.)]\s+)?\*\*\s*\[?\s*(Critical|Important)\b",
-    re.IGNORECASE)
-
-
-# The tag counts only RIGHT AFTER the severity marker (inside or just after the
-# bold), never a literal "[SETTLED]" later in the finding's prose — a `[file: …]`
-# field may stand between the two (task 201: judges reorder fixed markers).
-_TAG_AFTER_RE = re.compile(
-    r"\]?\s*(?:\*\*)?\s*(?:\[file:[^\]\n]*\]\s*(?:\*\*)?\s*)?"
-    r"\[(SETTLED-CONTRADICTED|SETTLED|PRE-EXISTING)\]", re.IGNORECASE)
-
 
 # At most this many impl panel rounds before the close (DESIGN §3.3 point 12); past it, the owner's word.
 ROUND_CAP = 2
@@ -67,28 +51,16 @@ def impl_rounds(task_dir: Path) -> "list[dict]":
 
 
 _BAR = re.compile(r"(?m)^═{6,}")
-_QUOTE = re.compile(r"^>[ \t]?")
 
 
 def round_findings(rnd: dict) -> "dict[str, int]":
-    """The Critical and Important findings the judges of one panel round wrote (not `[SETTLED]`), each judge's line
-    counted as written — the run ledger's measures (task 232)."""
-    counts = {"critical": 0, "important": 0}
+    """The Critical and Important findings of one panel round, not `settled: SETTLED` — the run ledger's measures
+    (task 232). Task 347: read from the CLI's record lines after the round's first `═` bar
+    (`review_form.count_records`), which a judge's quoted text can never be."""
+    from tasks.review_form import count_records
     body = rnd.get("body") or ""
     bar = _BAR.search(body)
-    if not bar:
-        return counts
-    for ln in body[bar.start():].splitlines():
-        quoted = ln.startswith(">")
-        if rnd.get("format") == 2 and not quoted:
-            continue                      # 1.6.2 quotes every line a judge wrote: the rest is the writer's
-        s = _QUOTE.sub("", ln)
-        for m in _FINDING_RE.finditer(s):
-            tag = _TAG_AFTER_RE.match(s, m.end())
-            if tag and tag.group(1).upper() == "SETTLED":
-                continue
-            counts[m.group(1).lower()] += 1
-    return counts
+    return count_records(body[bar.start():]) if bar else {"critical": 0, "important": 0}
 
 
 def panel_decision(rounds: "list[dict]", task: str = "<N>") -> "tuple[bool, str]":

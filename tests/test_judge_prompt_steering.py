@@ -37,6 +37,8 @@ CANONICAL = PLAYBOOK / "tasks" / "template.py"
 PLAN_BUILDERS = ("plan_review_prompt", "panel_plan_review_prompt")
 IMPL_BUILDERS = ("impl_review_prompt", "panel_impl_review_prompt")
 ALL_BUILDERS = PLAN_BUILDERS + IMPL_BUILDERS
+CODE = "0123456789ab"   # task 347: every review prompt carries its run's code
+
 
 sys.path.insert(0, str(PLAYBOOK))
 from tasks import template as canonical_template  # noqa: E402
@@ -98,7 +100,7 @@ class DepthBlockTest(unittest.TestCase):
     def test_depth_block_precedes_the_lens_list(self):
         """Order is the instruction: think first, then apply the lenses."""
         for name in ALL_BUILDERS:
-            rendered = getattr(canonical_template, name)("a/001-x/task.md")
+            rendered = getattr(canonical_template, name)("a/001-x/task.md", code=CODE)
             with self.subTest(builder=name):
                 depth = rendered.index("Work the problem deeply")
                 lenses = rendered.index("lenses: ")
@@ -109,7 +111,7 @@ class DepthBlockTest(unittest.TestCase):
         stale "six lenses" against seven items is exactly what
         test_review_prompt_lenses guards, and this block must not disturb it."""
         for name in ALL_BUILDERS:
-            rendered = getattr(canonical_template, name)("a/001-x/task.md")
+            rendered = getattr(canonical_template, name)("a/001-x/task.md", code=CODE)
             with self.subTest(builder=name):
                 self.assertEqual(rendered.count("six lenses"), 1)
 
@@ -127,7 +129,7 @@ class TimeBudgetInstructionTest(unittest.TestCase):
         for name in ALL_BUILDERS:
             with self.subTest(builder=name):
                 self.assertNotIn(
-                    "TIME BUDGET", getattr(canonical_template, name)("a/001-x/task.md"))
+                    "TIME BUDGET", getattr(canonical_template, name)("a/001-x/task.md", code=CODE))
 
     def test_no_soft_budget_means_no_soft_reference_anywhere(self):
         """Not just a missing heading — no dangling mention of a budget either.
@@ -138,7 +140,7 @@ class TimeBudgetInstructionTest(unittest.TestCase):
         that through, which is why this asserts on the vocabulary instead.
         """
         for name in ALL_BUILDERS:
-            rendered = getattr(canonical_template, name)("a/001-x/task.md")
+            rendered = getattr(canonical_template, name)("a/001-x/task.md", code=CODE)
             for phrase in ("TIME BUDGET", "soft time budget", "soft deadline",
                            "hang safety", "hard kill"):
                 with self.subTest(builder=name, phrase=phrase):
@@ -150,7 +152,7 @@ class TimeBudgetInstructionTest(unittest.TestCase):
     def test_present_in_every_builder_with_a_soft_budget(self):
         for name in ALL_BUILDERS:
             rendered = getattr(canonical_template, name)(
-                "a/001-x/task.md", soft_timeout_secs=900, hard_timeout_secs=1200)
+                "a/001-x/task.md", soft_timeout_secs=900, hard_timeout_secs=1200, code=CODE)
             with self.subTest(builder=name):
                 self.assertIn("TIME BUDGET — soft deadline ~15 minutes", rendered)
                 self.assertIn("hang safety at ~20 minutes", rendered)
@@ -184,7 +186,7 @@ class TimeBudgetInstructionTest(unittest.TestCase):
         keeps working — every pre-existing caller passes (task_path, inline)."""
         for name in ALL_BUILDERS:
             with self.subTest(builder=name):
-                getattr(canonical_template, name)("a/001-x/task.md", True)
+                getattr(canonical_template, name)("a/001-x/task.md", True, code=CODE)
 
     def test_legacy_judge_prompt_alias_forwards_the_budgets(self):
         for mode in ("plan", "impl"):
@@ -192,7 +194,7 @@ class TimeBudgetInstructionTest(unittest.TestCase):
                 self.assertIn(
                     "TIME BUDGET",
                     canonical_template.judge_prompt(
-                        "a/001-x/task.md", mode=mode, soft_timeout_secs=900),
+                        "a/001-x/task.md", mode=mode, soft_timeout_secs=900, code=CODE),
                 )
 
 

@@ -268,7 +268,7 @@ _LEAK_TOKENS = (
                re.IGNORECASE | re.MULTILINE),
     re.compile(r"\b(impl|plan)[- ]panel\b[^\n]*?(#\d+|\bF\d+\b|\bround \d+|\bfound\b|\bsaid\b|"
                r"\bflagged\b|\bcaught\b)", re.IGNORECASE),
-    re.compile(r"^\s*CAP:\s*\d+/\d+", re.MULTILINE),
+    re.compile(r"^\s*CAP:?\s*\d+/\d+", re.MULTILINE),          # the old CAP line and the review form's (task 347)
     re.compile(r"\btriage\b[^\n]*\b(accept|reject|park)(ed)?\b", re.IGNORECASE),
     # impl-panel round 1 (task 048): provenance the section filter cannot see
     re.compile(r"\((?:per[- ])?(?:plan[- ]|impl[- ])?panel\b[^()]*#\d", re.IGNORECASE),

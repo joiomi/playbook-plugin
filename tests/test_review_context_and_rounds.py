@@ -450,7 +450,7 @@ class JudgeVerifyClause(unittest.TestCase):
     def test_empty_when_undeclared(self):
         self.assertEqual(judge_verify_clause(None), "")
         self.assertEqual(judge_verify_clause([]), "")
-        p = panel_impl_review_prompt(".agent/tasks/001-x/task.md")
+        p = panel_impl_review_prompt(".agent/tasks/001-x/task.md", code="0123456789ab")
         self.assertNotIn("EXECUTION", p)
 
     def test_rules_present_when_declared(self):
@@ -463,7 +463,7 @@ class JudgeVerifyClause(unittest.TestCase):
         p = panel_impl_review_prompt(
             ".agent/tasks/001-x/task.md",
             trim_notice="your inline copy was TRIMMED (dropped: Work Plan) — read the file.",
-            judge_verify=["make check"])
+            judge_verify=["make check"], code="0123456789ab")
         self.assertIn("CONTEXT NOTE:", p)
         self.assertIn("dropped: Work Plan", p)
         self.assertIn("`make check`", p)

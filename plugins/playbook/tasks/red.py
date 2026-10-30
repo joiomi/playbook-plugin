@@ -1163,20 +1163,20 @@ def _shown(name: str) -> str:
     return name.encode("utf-8", "surrogateescape").decode("utf-8", "replace")
 
 
-def _code_changed(project: Path, task_dir: Path, cfg: dict) -> "tuple[list[str] | None, str]":
-    """The CODE files changed since the task's start (base.json): per scope, the paths that differ from the start
-    commit in the work tree or in HEAD (a commit undone in the work tree still changed the code — impl round 1, I7) —
-    no rename detection, untracked files, the flagged files by content — and every file that differed at the start
-    (`dirty`: one restored or deleted since changed too — I4), minus each of those that still holds its start bytes;
-    kept only when `core.classify_delta_paths` calls it behavioral (docs, tests, `.agent` and the root's `.md` are not).
-    Reads only. None with why when it cannot be read. A name that is not UTF-8 is shown with its bad bytes replaced."""
-    from tasks.core import _fingerprint_exclude_pathspecs, classify_delta_paths
+def _changed_by_scope(project: Path, task_dir: Path, cfg: dict) -> "tuple[dict[str, list[str]] | None, str]":
+    """Every file changed since the task's start (base.json), per scope, by the scope's own paths: those that differ
+    from the start commit in the work tree or in HEAD (a commit undone in the work tree still changed the code — impl
+    round 1, I7) — no rename detection, untracked files, the flagged files by content — and every file that differed
+    at the start (`dirty`: one restored or deleted since changed too — I4), minus each of those that still holds its
+    start bytes; `.agent` and Python's caches left out. `_code_changed` keeps the code among them; the review form's
+    changed-files rule reads them all (task 347). Reads only. (None, why) when it cannot be read."""
+    from tasks.core import _fingerprint_exclude_pathspecs
     base = _load_base(Path(task_dir))
     if not base or not isinstance(base.get("scopes"), dict) or "failed" in base:
-        return None, "`No behavior changes:` needs the task's recorded start (base.json) to show no code changed"
+        return None, "the task's recorded start (base.json) cannot be read"
     scopes = _scopes(Path(project), cfg)
     exclude = _fingerprint_exclude_pathspecs(cfg)
-    changed: "list[str]" = []
+    found: "dict[str, list[str]]" = {}
 
     def differ(repo: Path, start: "str | None", dirty: dict) -> "list[str] | None":
         tracked = (_git(repo, ["diff", "--name-only", "--no-renames", "-z", start, "--", ".", *exclude]) if start else
@@ -1219,14 +1219,30 @@ def _code_changed(project: Path, task_dir: Path, cfg: dict) -> "tuple[list[str] 
                 return None, f"whether code changed in {where} could not be read ({e.__class__.__name__})"
             if got is None:
                 return None, f"whether code changed in {where} could not be read"
-            code, _docs = classify_delta_paths(got, is_outer_scope=not scope)
-            changed += [_shown(f"{scope + '/' if scope else ''}{n}") for n in code]
+            found[scope] = got
         for scope in sorted(set(scopes) - set(base["scopes"])):   # a code root added since the start
             got = differ(scopes[scope], None, {})
             if got is None:
                 return None, f"whether {scope}'s code changed could not be read"
-            code, _docs = classify_delta_paths(got, is_outer_scope=False)
-            changed += [_shown(f"{scope}/{n}") for n in code]
+            found[scope] = got
+    return found, ""
+
+
+def _code_changed(project: Path, task_dir: Path, cfg: dict) -> "tuple[list[str] | None, str]":
+    """The CODE files changed since the task's start (base.json): `_changed_by_scope`'s files, kept only when
+    `core.classify_delta_paths` calls them behavioral (docs, tests, `.agent` and the root's `.md` are not). Reads
+    only. None with why when it cannot be read. A name that is not UTF-8 is shown with its bad bytes replaced."""
+    from tasks.core import classify_delta_paths
+    base = _load_base(Path(task_dir))
+    if not base or not isinstance(base.get("scopes"), dict) or "failed" in base:
+        return None, "`No behavior changes:` needs the task's recorded start (base.json) to show no code changed"
+    got, why = _changed_by_scope(project, task_dir, cfg)
+    if got is None:
+        return None, why
+    changed: "list[str]" = []
+    for scope, names in got.items():
+        code, _docs = classify_delta_paths(names, is_outer_scope=not scope)
+        changed += [_shown(f"{scope + '/' if scope else ''}{n}") for n in code]
     return changed, ""
 
 

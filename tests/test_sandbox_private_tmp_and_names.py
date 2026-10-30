@@ -317,12 +317,15 @@ class InsideTheSandbox(t308._Home):
                                      ".grok/sandbox.toml": ""}, [])
 
 
-def _codex_ok():
+def _codex_ok(args=(), kw=None):
+    """The captured "OK" answer as a review the protocol accepts (task 347: an answer in the form, with the code of the
+    run whose argv and keywords these are)."""
     spec = importlib.util.spec_from_file_location("_t315_judge_usage", _HERE / "test_judge_usage.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
-    # task 320: as a review the protocol accepts — the captured "OK" answer, ending with the CAP line
-    return mod.CODEX_OK.replace('"text":"OK"', '"text":"OK\\n\\nNo findings.\\n\\nCAP: 0/5 reported, exhausted"')
+    from tests._judge_stub import FORM_ANSWER, fill_code
+    text = mod.CODEX_OK.replace('"text":"OK"', '"text":"OK\\n\\n' + json.dumps(FORM_ANSWER)[1:-1] + '"')
+    return fill_code(text, " ".join(args) + ((kw or {}).get("input") or ""))
 
 
 class TheCodexSingleJudge(unittest.TestCase):
@@ -360,7 +363,7 @@ class TheCodexSingleJudge(unittest.TestCase):
 
         def _run(agent, args, **kw):
             given.extend(os.path.realpath(p) for p in (kw.get("extra_rw") or []))
-            return types.SimpleNamespace(returncode=0, stdout=_codex_ok(), stderr="", args=list(args))
+            return types.SimpleNamespace(returncode=0, stdout=_codex_ok(args, kw), stderr="", args=list(args))
         prev = Path.cwd()
         os.chdir(self.project)
         self.addCleanup(os.chdir, prev)
@@ -376,8 +379,6 @@ class TheCodexSingleJudge(unittest.TestCase):
 
     def test_the_message_folder_is_writable_for_the_run(self):
         from provider import sandbox
-        stdout = _codex_ok()
-
         given = []
 
         def _run(agent, args, **kw):
@@ -386,7 +387,7 @@ class TheCodexSingleJudge(unittest.TestCase):
             given.extend(rw)
             if any(os.path.realpath(out).startswith(p.rstrip("/") + "/") for p in rw):
                 Path(out).write_text("FINAL MESSAGE\n", encoding="utf-8")
-            return types.SimpleNamespace(returncode=0, stdout=stdout, stderr="", args=list(args))
+            return types.SimpleNamespace(returncode=0, stdout=_codex_ok(args, kw), stderr="", args=list(args))
         prev = Path.cwd()
         os.chdir(self.project)
         self.addCleanup(os.chdir, prev)

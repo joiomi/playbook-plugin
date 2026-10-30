@@ -26,13 +26,17 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "plugins" / "playbook"))
 sys.path.insert(0, str(ROOT))
+_TESTS_ROOT = str(Path(__file__).resolve().parents[1])
+if _TESTS_ROOT not in sys.path:
+    sys.path.insert(0, _TESTS_ROOT)
+from tests._judge_stub import FORM_ANSWER, fill_code  # noqa: E402  (task 347: answers in the review form)
 
 from provider import sandbox  # noqa: E402
 from tasks import review  # noqa: E402
 from tests.test_review_findings_land import _chdir, _stdout_with_review  # noqa: E402
 
 GIT = ["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false"]
-REVIEW = "**Important** — `code.py:1` returns the wrong value.\n\nCAP: 1/5 reported, exhausted"
+REVIEW = "**Important** — `code.py:1` returns the wrong value.\n\n" + FORM_ANSWER   # task 347: in the form
 
 
 class Plain(unittest.TestCase):
@@ -71,7 +75,8 @@ class Plain(unittest.TestCase):
 
         def run(agent, args, **kw):
             prompts.append(" ".join(str(a) for a in args) + str(kw.get("input") or ""))
-            return subprocess.CompletedProcess(args, 0, stdout=_stdout_with_review(REVIEW), stderr="")
+            return subprocess.CompletedProcess(args, 0, stdout=fill_code(_stdout_with_review(REVIEW), kw.get("input") or ""),
+                                               stderr="")
         out = io.StringIO()
         code = 0
         with mock.patch.object(sandbox, "run", run), mock.patch.object(shutil, "which", lambda n: "/usr/bin/" + n), \

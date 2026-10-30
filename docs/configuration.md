@@ -421,12 +421,41 @@ point 12, the owner's approval of 2026-10-28; task 344). No key changes it.
   Plan panels are not capped.
 - Each impl panel's reservation records the task's risk; the close takes the stricter of them all and today's, so
   lowering `## Risk` after the panel frees nothing (the freshness gate above).
-- Judges have a third severity: at most three `**Minor**` findings below the counted ones, never counted and stopping
-  nothing; the `CAP:` line counts the Critical and Important ones only.
+- Judges have a third severity: at most three Minor findings (`severity: Minor`) below the counted ones, never counted
+  and stopping nothing; the CAP line counts the Critical and Important ones only.
 - Gone (task 344): the caps per risk (reversible 1, assertive 2, irreversible 2), the round more after a Critical, and
   the `review_rounds` key — a config that still holds it is not read.
 - Limits: `--owner-ok` is a marker an agent can type, not an authentication; a task with no impl panel is out of the
   rule's reach.
+
+### The review form (what counts as a review)
+
+A judge's answer counts as a review by its form, never by its words (task 347; `docs/architecture.md`, "Judges").
+Each review run has a code, which the prompt names; the answer is one block — `REVIEW <code>`, the records, `END
+<code>`, then `CAP <k>/5 exhausted` or `CAP 5/5 more-remain`:
+
+```
+REVIEW 3fa2b9c1d0e4
+FINDING
+severity: Important
+settled: no
+where: src/app.py:42
+scenario: an empty list → max() raises → the request returns 500
+drum: src/routes.py:10 calls it on every request
+fix: return 0 for an empty list.
+END 3fa2b9c1d0e4
+CAP 1/5 exhausted
+```
+
+- With no Critical or Important finding the record is `NONE`, with `read:` (the places read, comma-separated; in an
+  impl review at least one file the task changed — the prompt names them) and `checked:`.
+- Every place must exist: `path:line` / `path:first-last` in the reviewed tree, `base:path:line` in the task's start
+  commit, or (in `read`) a whole `path`. A record that fails is kept as broken, for the triage; an answer with no good
+  record is no review.
+- A panel seat whose answer is not in the form runs once more; then it is `SEAT FAILED` and out of the quorum. A single
+  judge exits 1 and is run again by hand. No key changes this.
+- Limit: the form proves the answer was written for this run and what the judge says it read, not that it read with
+  care.
 
 ### The verify-contract guard (a change to `verify` is made visible)
 

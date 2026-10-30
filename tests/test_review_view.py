@@ -27,6 +27,10 @@ from unittest import mock
 
 _HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(_HERE.parent / "plugins/playbook"))
+_TESTS_ROOT = str(Path(__file__).resolve().parents[1])
+if _TESTS_ROOT not in sys.path:
+    sys.path.insert(0, _TESTS_ROOT)
+from tests._judge_stub import FORM_ANSWER, answer_for, fill_code  # noqa: E402  (task 347: answers in the review form)
 
 from tasks import review as R  # noqa: E402
 from tasks import core as C  # noqa: E402
@@ -869,7 +873,7 @@ class PanelReadsACopy(unittest.TestCase, _PanelHarness):
                                                                                    encoding="utf-8")
             root = Path(pv.root)
             assert (root / "src" / "a.py").read_text(encoding="utf-8") == "a = 2  # dirty\n"
-            return "1. **Note** — fine.\n"
+            return answer_for(kw, "1. **Note** — fine.")
 
         log = self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus,claude:sonnet"])
         self.assertEqual(len(seen), 2)
@@ -888,7 +892,7 @@ class PanelReadsACopy(unittest.TestCase, _PanelHarness):
         rv = _rv()
 
         def judge(adapter, *a, **kw):
-            return "1. **Note** — fine.\n"
+            return answer_for(kw, "1. **Note** — fine.")
 
         real = rv.View.matches
         calls = []
@@ -908,7 +912,7 @@ class PanelReadsACopy(unittest.TestCase, _PanelHarness):
         def judge(adapter, *a, **kw):
             (d / ".agent" / "config.json").write_text(json.dumps({"code_roots": ["sub"], "panel_quorum": 1}),
                                                       encoding="utf-8")
-            return "(error: seat down)" if kw.get("model") == "sonnet" else "1. **Note** — fine.\n"
+            return "(error: seat down)" if kw.get("model") == "sonnet" else answer_for(kw, "1. **Note** — fine.")
 
         log = self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus,claude:sonnet"])
         text = (d / ".agent" / "tasks" / "042-demo" / "judge.md").read_text(encoding="utf-8")
@@ -921,7 +925,7 @@ class PanelReadsACopy(unittest.TestCase, _PanelHarness):
 
         def judge(adapter, *a, **kw):
             seen.append(kw.get("project_view"))
-            return "1. **Note** — fine.\n"
+            return answer_for(kw, "1. **Note** — fine.")
 
         with mock.patch.object(rv.View, "sealed", lambda *a, **kw: False):
             log = self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus"])
@@ -931,7 +935,7 @@ class PanelReadsACopy(unittest.TestCase, _PanelHarness):
 
     def test_the_ready_line_comes_after_every_refusal(self):
         d = self.d
-        log = self._run(d, lambda adapter, *a, **kw: "1. **Note** — fine.\n",
+        log = self._run(d, lambda adapter, *a, **kw: answer_for(kw, "1. **Note** — fine."),
                         ["042", "--mode", "impl", "--models", "claude:opus,claude:sonnet,claude:haiku-x"])
         lines = log.splitlines()
         ready = [i for i, l in enumerate(lines) if "ready: you may write" in l]
@@ -946,7 +950,7 @@ class PanelReadsACopy(unittest.TestCase, _PanelHarness):
 
         def judge(adapter, *a, **kw):
             (d / ".agent" / "tasks" / "043-other" / "task.md").write_text("notes\n", encoding="utf-8")
-            return "1. **Note** — fine.\n"
+            return answer_for(kw, "1. **Note** — fine.")
 
         self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus"])
         text = (d / ".agent" / "tasks" / "042-demo" / "judge.md").read_text(encoding="utf-8")
@@ -966,7 +970,7 @@ class SingleJudgeReadsACopy(unittest.TestCase, _PanelHarness):
         with open(self.d / ".gitignore", "a", encoding="utf-8") as f:
             f.write("alias.py\n")
         os.symlink("docs/x.md", self.d / "alias.py")         # ignored: copied as a link, frozen
-        self._run(self.d, lambda adapter, *a, **kw: "1. **Note** — fine.\n",
+        self._run(self.d, lambda adapter, *a, **kw: answer_for(kw, "1. **Note** — fine."),
                   ["042", "--mode", "impl", "--models", "claude:opus"])
         text = (self.d / ".agent" / "tasks" / "042-demo" / "judge.md").read_text(encoding="utf-8")
         self.assertIn("**Panel-snapshot:**", text, "the panel left no snapshot")
@@ -982,7 +986,8 @@ class SingleJudgeReadsACopy(unittest.TestCase, _PanelHarness):
             during()
             if pv is not None:
                 seen.append((Path(pv.root) / "src" / "a.py").read_text(encoding="utf-8"))
-            return subprocess.CompletedProcess(args=[], returncode=0, stdout=judge_text, stderr="")
+            return subprocess.CompletedProcess(args=[], returncode=0, stdout=fill_code(judge_text, kw.get("input") or ""),
+                                               stderr="")
 
         out = io.StringIO()
         old = os.getcwd()
@@ -1005,7 +1010,7 @@ class SingleJudgeReadsACopy(unittest.TestCase, _PanelHarness):
         def during():
             (d / "src" / "a.py").write_text("a = 6  # written while the judge ran\n", encoding="utf-8")
 
-        seen, log = self._single("1. **Note** — fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n", during)
+        seen, log = self._single("1. **Note** — fine.\n\n" + FORM_ANSWER, during)
         self.assertTrue(seen and seen[0] is not None, "the single judge read the live tree\n" + log[-3000:])
         self.assertEqual(seen[1], "a = 5  # after the panel\n")
         self.assertNotIn("POST-D6", log)
@@ -1029,7 +1034,7 @@ class ATreeThatKeepsMoving(unittest.TestCase, _PanelHarness):
 
         def judge(adapter, *a, **kw):
             called.append(1)
-            return "1. **Note** — fine.\n"
+            return answer_for(kw, "1. **Note** — fine.")
 
         with mock.patch.object(rv, "_copy_listed_files", racing):
             log = self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus"])
@@ -1052,7 +1057,7 @@ class ACopyThatCannotBeMade(unittest.TestCase, _PanelHarness):
 
         def judge(adapter, *a, **kw):
             called.append(kw.get("project_view"))
-            return "1. **Note** — fine.\n"
+            return answer_for(kw, "1. **Note** — fine.")
 
         with mock.patch.object(rv, "make", side_effect=rv.Unavailable("disk full")):
             log = self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus"])
@@ -1074,7 +1079,7 @@ class ACopyThatCannotBeMade(unittest.TestCase, _PanelHarness):
 
         def judge(adapter, *a, **kw):
             called.append(1)
-            return "1. **Note** — fine.\n"
+            return answer_for(kw, "1. **Note** — fine.")
 
         with mock.patch.object(rv, "make", failing):
             log = self._run(d, judge, ["042", "--mode", "impl", "--models", "claude:opus"])
@@ -1088,7 +1093,7 @@ class PanelWithoutACopy(unittest.TestCase, _PanelHarness):
         self._models(self.d)
 
     def test_it_says_first_that_the_live_tree_is_read(self):
-        log = self._run(self.d, lambda adapter, *a, **kw: "1. **Note** — fine.\n",
+        log = self._run(self.d, lambda adapter, *a, **kw: answer_for(kw, "1. **Note** — fine."),
                         ["042", "--mode", "impl", "--models", "claude:opus"], view_ok=False)
         first = [ln for ln in log.splitlines() if "LIVE tree" in ln or "fixed copy" in ln]
         self.assertTrue(first and "LIVE tree" in first[0], log[:2000])
@@ -1099,7 +1104,7 @@ class PanelWithoutACopy(unittest.TestCase, _PanelHarness):
 
         def judge(adapter, *a, **kw):
             seen.append(kw.get("project_view"))
-            return "1. **Note** — fine.\n"
+            return answer_for(kw, "1. **Note** — fine.")
 
         self._run(self.d, judge, ["042", "--mode", "impl", "--models", "claude:opus"], view_ok=False)
         self.assertEqual(seen, [None])

@@ -24,6 +24,10 @@ from unittest import mock
 _HERE = Path(__file__).resolve().parent
 _PLUGIN = _HERE.parent / "plugins/playbook"
 sys.path.insert(0, str(_PLUGIN))
+_TESTS_ROOT = str(Path(__file__).resolve().parents[1])
+if _TESTS_ROOT not in sys.path:
+    sys.path.insert(0, _TESTS_ROOT)
+from tests._judge_stub import answer_for  # noqa: E402  (task 347: answers in the review form)
 
 from provider.adapters.claude import ClaudeAdapter  # noqa: E402
 from provider.adapters.antigravity import AntigravityAdapter  # noqa: E402
@@ -34,7 +38,7 @@ from tasks import cli as tcli  # noqa: E402
 from tasks import review as treview  # noqa: E402  (tamper trio moved by the 1.5.9 split)
 
 
-def _ok_result(stdout="REVIEW BODY\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n"):
+def _ok_result(stdout="REVIEW BODY\n"):
     return subprocess.CompletedProcess(args=[], returncode=0, stdout=stdout, stderr="")
 
 
@@ -1050,7 +1054,7 @@ class SingleJudgeExitTamperTest(unittest.TestCase):
         def fake(agent, agent_args, **kw):
             _sh.rmtree(tdir)     # rogue destroys the task dir, then returns clean
             return subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="REVIEW BODY\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n", stderr="")
+                args=[], returncode=0, stdout=answer_for(kw, "REVIEW BODY"), stderr="")
         code, err, _ = self._drive(proj, fake)
         self.assertEqual(code, 1)
         self.assertIn("TAMPER DETECTED", err,
@@ -1064,7 +1068,7 @@ class SingleJudgeExitTamperTest(unittest.TestCase):
 
         def fake(agent, agent_args, **kw):
             return subprocess.CompletedProcess(
-                args=[], returncode=0, stdout="REVIEW BODY\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n", stderr="")
+                args=[], returncode=0, stdout=answer_for(kw, "REVIEW BODY"), stderr="")
         patches = [mock.patch("tasks.review.atomic_write",
                               side_effect=OSError("disk full"))]
         code, err, _ = self._drive(proj, fake, patches=patches)

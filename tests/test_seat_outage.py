@@ -23,6 +23,10 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 PLUGIN = HERE.parent / "plugins" / "playbook"
 sys.path.insert(0, str(PLUGIN))
+_TESTS_ROOT = str(Path(__file__).resolve().parents[1])
+if _TESTS_ROOT not in sys.path:
+    sys.path.insert(0, _TESTS_ROOT)
+from tests._judge_stub import in_form  # noqa: E402  (task 347: answers in the review form)
 
 from tasks import seat_outage as so  # noqa: E402
 
@@ -649,7 +653,7 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
                 return outage_text
             if any(m in model for m in fail):
                 return "(FAILED — exit 1)\nTraceback: something else broke"
-            return "1. **Note** — fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n"
+            return in_form(prompt, "1. **Note** — fine.")
         return judge
 
     def _judge_md(self):
@@ -899,7 +903,7 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
                 return "(FAILED — exit 1)\nTraceback: something else broke"
             if any(m in model for m in still_working):
                 _time.sleep(1.5)
-            return "1. **Note** — fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n"
+            return in_form(prompt, "1. **Note** — fine.")
         return judge
 
     def _short_wait(self):
@@ -977,7 +981,7 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
             if "gpt-5.5" in model:
                 _time.sleep(1.5)
                 return CODEX_CREDITS
-            return "1. **Note** — fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n"
+            return in_form(prompt, "1. **Note** — fine.")
 
         self._panel(models, judge, codex_available=True)
         self.assertIn("gpt-5.5", starts, "the seat was not tried again")
@@ -1069,7 +1073,7 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
                 so.record_outage(agent, "codex:gpt-5.5", so.classify_outage(CODEX, NOW), NOW + dt.timedelta(seconds=5),
                                  started=NOW - dt.timedelta(seconds=10), retried=True)
                 return "(FAILED — exit 1)\nTraceback: something else broke"
-            return "1. **Note** — fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n"
+            return in_form(prompt, "1. **Note** — fine.")
 
         self._panel(models, judge, codex_available=True)
         entry = self._entry("codex:gpt-5.5")
@@ -1110,7 +1114,7 @@ class PanelSkipsOutagesAndHoldsTheQuorum(unittest.TestCase):
             if "gpt-5.5" in model:
                 so.clear_outage(agent, "codex:gpt-5.5", NOW + dt.timedelta(minutes=2))   # his enable, mid-call
                 return CODEX_CREDITS
-            return "1. **Note** — fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n"
+            return in_form(prompt, "1. **Note** — fine.")
 
         code, out, err = self._panel(models, judge, codex_available=True)
         self.assertIn("not recorded; the next panel calls it", out)

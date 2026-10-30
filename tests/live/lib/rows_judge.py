@@ -351,21 +351,19 @@ EDIT_WORDS = re.compile(r"\b((edit|update|modify|rewrite)\s+(the\s+)?(task|task\
 
 
 def names_the_defect(answer: str) -> bool:
-    """A finding marked Critical or Important that names `src/calc.py` itself and says what is wrong with its
-    arithmetic. A finding runs from its severity marker to the next one, a `CAP:` line or the end — so a judge may
-    write `**Critical** — src/calc.py:2 …`, or `**Critical: …**` with the file on the next line (haiku, task 170's
-    run of 21:32), or a blank line between them (round 2, Q2); a finding that only names the file ("Unable to
-    inspect src/calc.py") or names another one (`other_calc.py`) is not the planted defect found."""
-    # a finding starts where the PRODUCT's own reader of a judge's answer says it does (`stop_rule._FINDING_RE`, the
-    # marker the round cap counts — `post_d6`'s until task 343: any case, a list item, glued after a sentence) — not a reading of the harness's
-    # own (the final run of 22:48: haiku's `**CRITICAL**` in capitals)
-    finding_re = _product_finding_re()
-    starts = [ln.start() + fm.start() for ln in re.finditer(r"(?m)^.*$", answer)
-              for fm in finding_re.finditer(ln.group(0))]
-    for i, at in enumerate(starts):
-        end = starts[i + 1] if i + 1 < len(starts) else len(answer)
-        cap = re.search(r"(?m)^CAP:", answer[at:end])
-        finding = answer[at:at + cap.start()] if cap else answer[at:end]
+    """A counted finding — Critical or Important, not `settled: SETTLED` — of the answer's review form whose place,
+    scenario and fix name `src/calc.py` itself and say what is wrong with its arithmetic. The records are read by the
+    PRODUCT's own reader (`review_form.read_answer`, task 347; before it `stop_rule._FINDING_RE`), with the code of
+    the answer's own `REVIEW` line (the review run checked it against its own before it saved the log); a finding that
+    only names the file ("Unable to inspect src/calc.py") or names another one (`other_calc.py`) is not the planted
+    defect found, and an answer not in the form names nothing."""
+    m = re.search(r"(?m)^[ \t]*REVIEW ([0-9a-f]{12})[ \t]*$", answer)
+    if not m:
+        return False
+    for r in _product_form().read_answer(answer, m.group(1)).records:
+        if not r.counted:
+            continue
+        finding = " ".join(r.fields.get(k, "") for k in ("where", "scenario", "fix"))
         # the file itself (not `src/calc.py.bak`), an affirmative account (not "unable to inspect … cannot determine")
         if re.search(r"(?<![\w/.-])src/calc\.py(?!\w)(?!\.\w)", finding) and not re.search(
                 r"unable to|cannot|can't|could not|couldn't|not able to", finding, re.I) and re.search(
@@ -374,12 +372,12 @@ def names_the_defect(answer: str) -> bool:
     return False
 
 
-def _product_finding_re():
+def _product_form():
     import sys
     if str(PLUGIN) not in sys.path:
         sys.path.insert(0, str(PLUGIN))
-    from tasks.stop_rule import _FINDING_RE
-    return _FINDING_RE
+    from tasks import review_form
+    return review_form
 
 
 def seat_answer(task_dir: Path, cli: str, since_ns: int, rc: int) -> str:

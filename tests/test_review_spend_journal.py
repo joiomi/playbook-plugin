@@ -33,6 +33,9 @@ from pathlib import Path
 _HERE = Path(__file__).resolve().parent
 _PLAYBOOK = _HERE.parent / "plugins" / "playbook"
 sys.path.insert(0, str(_PLAYBOOK))
+if str(_HERE.parent) not in sys.path:
+    sys.path.insert(0, str(_HERE.parent))
+from tests._judge_stub import FORM_ANSWER, fill_code, in_form  # noqa: E402  (task 347: answers in the review form)
 
 from tasks import review  # noqa: E402
 
@@ -396,7 +399,7 @@ class PanelSpendE2E(_E2EBase):
         _orig_run = ClaudeAdapter.run_headless_judge
         ClaudeAdapter.is_available = classmethod(lambda cls: True)
         ClaudeAdapter.run_headless_judge = (
-            lambda self, **kw: "1. **Note** — looks fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n")
+            lambda self, **kw: in_form(kw["prompt"], "1. **Note** — looks fine."))
         try:
             with _chdir(self.project):
                 with contextlib.suppress(SystemExit):
@@ -431,7 +434,7 @@ class SingleSpendE2E(_E2EBase):
         from provider import sandbox
         _orig_run, _orig_which = sandbox.run, shutil.which
         sandbox.run = lambda agent, args, **kw: types.SimpleNamespace(
-            returncode=0, stdout="1. **Note** — looks fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n", stderr="")
+            returncode=0, stdout=in_form(kw.get("input") or "", "1. **Note** — looks fine."), stderr="")
         shutil.which = lambda name: "/usr/bin/" + name
         code = None
         try:
@@ -538,8 +541,11 @@ class SingleSpendE2E(_E2EBase):
         (self.agent / "journal").write_text("not a dir", encoding="utf-8")
         sab_code, sab_log = self._run_single()
         self.assertEqual(sab_code, base_code)          # same exit
-        # same judge log, byte-for-byte — its newest run: since task 304 the log keeps the earlier runs below it
-        self.assertEqual(sab_log.split("\n\n" + review._EARLIER_RUNS)[0], base_log)
+        # same judge log, byte-for-byte — its newest run: since task 304 the log keeps the earlier runs below it; each
+        # run's review code is its own (task 347)
+        import re
+        self.assertEqual(re.sub(r"\b[0-9a-f]{12}\b", "<code>", sab_log.split("\n\n" + review._EARLIER_RUNS)[0]),
+                         re.sub(r"\b[0-9a-f]{12}\b", "<code>", base_log))
         self.assertIn(review._EARLIER_RUNS, sab_log)
         # And nothing was appended (the file stayed the sabotage content).
         self.assertEqual((self.agent / "journal").read_text(encoding="utf-8"),
@@ -552,7 +558,7 @@ class TamperRecordsNothing(_E2EBase):
         from provider.adapters.claude import ClaudeAdapter
         _oa, _or = ClaudeAdapter.is_available, ClaudeAdapter.run_headless_judge
         ClaudeAdapter.is_available = classmethod(lambda cls: True)
-        ClaudeAdapter.run_headless_judge = lambda self, **kw: "1. **Note** — fine\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n"
+        ClaudeAdapter.run_headless_judge = lambda self, **kw: in_form(kw["prompt"], "1. **Note** — fine")
         p = mock.patch.object(review, "_detect_tamper_full",
                               lambda pp, t, b: {"mutations": ["dirty"], "cautions": []})
         p.start()
@@ -579,8 +585,9 @@ class StructuredUsageE2E(_E2EBase):
 
     @staticmethod
     def _as_review(fixture):
-        """A captured "reply with OK" answer, as a review the protocol accepts (task 320: it ends with the CAP line)."""
-        cap = "OK\\n\\nNo findings.\\n\\nCAP: 0/5 reported, exhausted"
+        """A captured "reply with OK" answer, as a review the protocol accepts (task 347: an answer in the form, whose
+        `{CODE}` the fake run fills)."""
+        cap = "OK\\n\\n" + json.dumps(FORM_ANSWER)[1:-1]
         out = fixture.replace('"text":"OK"', '"text":"' + cap + '"').replace('"text": "OK"', '"text": "' + cap + '"')
         assert out != fixture
         return out
@@ -608,11 +615,13 @@ class StructuredUsageE2E(_E2EBase):
             mock.patch.object(GrokAdapter, "is_available", classmethod(lambda cls: True)),
             # Production adapters return PROSE that CARRIES usage — never the JSON.
             mock.patch.object(ClaudeAdapter, "run_headless_judge",
-                              lambda self, **kw: "1. **Note** — looks fine.\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n"),
+                              lambda self, **kw: in_form(kw["prompt"], "1. **Note** — looks fine.")),
             mock.patch.object(CodexAdapter, "run_headless_judge",
-                              lambda self, **kw: JudgeOutput("1. fine (codex)", usage=self.__class__._U)),
+                              lambda self, **kw: JudgeOutput(in_form(kw["prompt"], "1. fine (codex)"),
+                                                             usage=self.__class__._U)),
             mock.patch.object(GrokAdapter, "run_headless_judge",
-                              lambda self, **kw: JudgeOutput("1. fine (grok)", usage=self.__class__._G)),
+                              lambda self, **kw: JudgeOutput(in_form(kw["prompt"], "1. fine (grok)"),
+                                                             usage=self.__class__._G)),
         ]
         CodexAdapter._U = self.CODEX_USAGE
         GrokAdapter._G = self.GROK_USAGE
@@ -646,7 +655,8 @@ class StructuredUsageE2E(_E2EBase):
             calls.append(list(args))
             if timeout_partial is not None:
                 raise subprocess.TimeoutExpired(cmd=agent, timeout=5, output=timeout_partial)
-            return types.SimpleNamespace(returncode=rc, stdout=stdout, stderr=stderr, args=list(args))
+            return types.SimpleNamespace(returncode=rc, stdout=fill_code(stdout, " ".join(args) + (kw.get("input") or "")),
+                                         stderr=stderr, args=list(args))
         patches = [mock.patch.object(sandbox, "run", _run),
                    mock.patch.object(shutil, "which", lambda name: "/usr/bin/" + name)]
         for p in patches:
@@ -702,7 +712,7 @@ class StructuredUsageE2E(_E2EBase):
         patches = [
             mock.patch.object(ClaudeAdapter, "is_available", classmethod(lambda cls: True)),
             mock.patch.object(GrokAdapter, "is_available", classmethod(lambda cls: True)),
-            mock.patch.object(ClaudeAdapter, "run_headless_judge", lambda self, **kw: "1. fine\n"),
+            mock.patch.object(ClaudeAdapter, "run_headless_judge", lambda self, **kw: in_form(kw["prompt"], "1. fine")),
             mock.patch.object(GrokAdapter, "run_headless_judge", lambda self, **kw: bad),
         ]
         for p in patches:
@@ -775,7 +785,7 @@ class StructuredUsageE2E(_E2EBase):
         patches = [
             mock.patch.object(ClaudeAdapter, "is_available", classmethod(lambda cls: True)),
             mock.patch.object(CodexAdapter, "is_available", classmethod(lambda cls: True)),
-            mock.patch.object(ClaudeAdapter, "run_headless_judge", lambda self, **kw: "1. fine\n"),
+            mock.patch.object(ClaudeAdapter, "run_headless_judge", lambda self, **kw: in_form(kw["prompt"], "1. fine")),
             mock.patch.object(CodexAdapter, "run_headless_judge", _boom),
         ]
         for p in patches:
@@ -902,7 +912,7 @@ class SpendErrorE2E(_E2EBase):
         def _judge(self, **kw):
             if "sonnet" in repr(kw):
                 return "(FAILED — exit 1)\n[stderr tail]\nHTTP 402 Payment Required\n"
-            return "1. fine\n\nNo findings.\n\nCAP: 0/5 reported, exhausted\n"
+            return in_form(kw["prompt"], "1. fine")
 
         for p in (mock.patch.object(ClaudeAdapter, "is_available", classmethod(lambda cls: True)),
                   mock.patch.object(ClaudeAdapter, "run_headless_judge", _judge)):

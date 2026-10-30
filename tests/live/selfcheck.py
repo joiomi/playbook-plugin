@@ -575,49 +575,52 @@ HAIKU_ANSWER = ("## Implementation Review Findings\n\nBased on my review of the 
                 "stated Intent (\"Add two numbers correctly in src/calc.py\"):\n\n**Critical: Function implements "
                 "subtraction instead of addition**  \nsrc/calc.py:2 — The `add` function returns `a - b` instead of "
                 "`a + b`.\n\n**Important: No test coverage for the core functionality**  \nNo test files exist.\n")
-CODEX_ANSWER = ("**Critical** — src/calc.py:2 subtracts instead of adding: executing `add(2, 3)` returns `-1`, violating "
-                "the stated Intent. Replace `return a - b` with `return a + b`.\n")
+
+
+def _form(*records: "tuple[str, str, str, str]", settled: str = "no") -> str:
+    """An answer in the review form (task 347): one FINDING per (severity, where, scenario, fix)."""
+    body = "".join(f"FINDING\nseverity: {sev}\nsettled: {settled}\nwhere: {where}\nscenario: {scenario}\n"
+                   f"drum: none\nfix: {fix}\n" for sev, where, scenario, fix in records)
+    return f"I read src/calc.py.\n\nREVIEW 0123456789ab\n{body}END 0123456789ab\nCAP 1/5 exhausted\n"
+
+
+DEFECT = ("Critical", "src/calc.py:2", "add(2, 3) is called → it returns -1: it subtracts instead of adding → the "
+          "Intent fails", "return a + b.")
+CODEX_ANSWER = _form(DEFECT)        # a seat's answer that names the planted defect (task 347: in the form)
 
 
 def triage_answer() -> None:
-    """PB-REVIEW-TRIAGE's reading of a judge's answer (task 170): the planted defect named inside a Critical or
-    Important finding, in either form a real judge wrote it (haiku's, verbatim from the final run of 21:32, and
-    codex's); not without a severity marker, not when the finding does not name the file."""
-    for label, answer, want in (("haiku's real answer (`**Critical: …**`, the file on the next line)", HAIKU_ANSWER, True),
-                                ("codex's real answer (`**Critical** — src/calc.py:2 …`)", CODEX_ANSWER, True),
-                                ("the same finding with no severity marker",
-                                 HAIKU_ANSWER.replace("**Critical: ", "").replace("**Important: ", ""), False),
-                                ("a Critical finding that names another file",
-                                 "**Critical** — src/other.py:2 returns the wrong value.\n", False)):
-        check(f"REVIEW-TRIAGE the judge's answer — {label}", rows_judge.names_the_defect(answer), want)
-    check("REVIEW-TRIAGE the OLD reading on haiku's real answer (it failed the run: one line only)",
-          re.search(r"\*\*(Critical|Important)\*\*[^\n]*calc\.py", HAIKU_ANSWER) is not None, False)
-    # task 170, impl round 2, Q2 (agy, codex): a blank line inside the finding; a finding that only names the file
+    """PB-REVIEW-TRIAGE's reading of a judge's answer (task 170; task 347: the review form): the planted defect named
+    in a counted finding — not a Minor one, not a settled one, not without the form, not when the finding does not
+    name the file."""
     for label, answer, want in (
-            ("a blank line between the severity heading and the file",
-             "**Critical: add() is wrong**\n\nsrc/calc.py:2 returns `a - b` instead of `a + b`.\n", True),
-            ("a finding that could not read the file",
-             "**Important: Unable to inspect src/calc.py**\nThe sandbox refused the read.\n", False),
-            ("a finding about another file whose name ends in calc.py",
-             "**Critical** — src/other_calc.py:2 subtracts instead of adding.\n", False),
-            # task 170, post-D6 run 1: an unrelated finding on the right file whose words hold "sign"
-            ("an unrelated finding on src/calc.py (its `signature`)",
-             "**Important** — src/calc.py:1 lacks a docstring describing its signature.\n", False),
-            # post-D6 run 2 (codex): a hedge is no detection, and `src/calc.py.bak` is another file
-            ("a hedged finding that could not determine the defect",
-             "**Important** — Unable to inspect src/calc.py; cannot determine whether add subtracts instead of adding.\n",
+            ("the defect in a Critical finding", _form(DEFECT), True),
+            ("the defect in an Important finding", _form(("Important",) + DEFECT[1:]), True),
+            ("the same finding as a Minor one", _form(("Minor",) + DEFECT[1:]), False),
+            ("the same finding, settled", _form(DEFECT, settled="SETTLED"), False),
+            ("haiku's real answer of 21:32, in no form", HAIKU_ANSWER, False),
+            ("a Critical finding that names another file",
+             _form(("Critical", "src/other.py:2", "add(2, 3) → it returns the wrong value → the Intent fails", "f.")),
              False),
-            ("the defect described on src/calc.py.bak", "**Critical** — src/calc.py.bak:2 subtracts instead of adding.\n",
+            ("a finding that could not read the file",
+             _form(("Important", "src/calc.py:1", "a read → unable to inspect src/calc.py → the sandbox refused it",
+                    "f.")), False),
+            ("a finding about another file whose name ends in calc.py",
+             _form(("Critical", "src/other_calc.py:2", "add → it subtracts instead of adding → wrong sums", "f.")),
+             False),
+            ("an unrelated finding on src/calc.py (its `signature`)",
+             _form(("Important", "src/calc.py:1", "a reader → no docstring describes its signature → it is unclear",
+                    "f.")), False),
+            ("a hedged finding that could not determine the defect",
+             _form(("Important", "none", "a read of src/calc.py → cannot determine whether add subtracts instead "
+                                         "of adding → unknown", "f.")), False),
+            ("the defect described on src/calc.py.bak",
+             _form(("Critical", "src/calc.py.bak:2", "add → it subtracts instead of adding → wrong sums", "f.")),
              False),
             ("the defect at the end of a sentence, `src/calc.py.`",
-             "**Critical** — add() subtracts instead of adding in src/calc.py.\n", True),
-            # the final run of 22:48: haiku wrote the marker in capitals and the file in bold — the product's own
-            # finding marker (`stop_rule._FINDING_RE`) reads both; so does a list item
-            ("haiku's real answer of 22:48 (`**CRITICAL** — **src/calc.py:2** —`)",
-             "**CRITICAL** — **src/calc.py:2** — Function `add()` returns `a - b` instead of `a + b`, implementing "
-             "subtraction rather than addition as required by the Intent.\n\nCAP: 1/5 reported, exhausted\n", True),
-            ("a finding as a list item", "- **Critical** — src/calc.py:2 subtracts instead of adding.\n", True)):
-        check(f"REVIEW-TRIAGE (Q2) — {label}", rows_judge.names_the_defect(answer), want)
+             _form(("Critical", "none", "add() is called → it subtracts instead of adding → wrong sums in "
+                                       "src/calc.py.", "f.")), True)):
+        check(f"REVIEW-TRIAGE the judge's answer — {label}", rows_judge.names_the_defect(answer), want)
 
 
 # `tasks models check`'s line for the grok seat on 2026-10-13 (task 185's installed run), grok out of credit

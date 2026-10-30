@@ -25,14 +25,17 @@ from tasks import stop_rule as SR  # noqa: E402
 BAR = "═" * 60
 
 
-def rnd(mode="Impl", verdict="PASS", judge_lines=(), v2=True, rid=""):
-    """One panel round as review.py writes it: the header, a bar, the judges' lines (quoted in format 2)."""
+def rnd(mode="Impl", verdict="PASS", judge_lines=(), v2=True, rid="", records=()):
+    """One panel round as review.py writes it: the header, a bar, the CLI's record lines of the seat (task 347), then
+    the judges' lines (quoted in format 2)."""
     head = f"# Panel {mode} Review — .agent/tasks/001-t/task.md\n" + ("**Round-format:** 2\n" if v2 else "")
     head += f"\n**PANEL VERDICT: {verdict}** — 2/2 judges succeeded, quorum 2\n\n"
     if rid:
         head += f"**Round-id:** {rid}\n\n"
+    recs = "".join(f"F{i} | {sev} | settled: {st} | claude:opus\n    where: a.py:1\n"
+                   for i, (sev, st) in enumerate(records, 1))
     body = "\n".join(("> " + ln if v2 else ln) for ln in judge_lines)
-    return head + BAR + "\n  JUDGE: claude:opus\n" + BAR + "\n\n" + body + "\n\n"
+    return head + BAR + "\n  JUDGE: claude:opus\n" + BAR + "\n\n" + recs + body + "\n\n"
 
 
 def judge_md(*rounds_newest_first):
@@ -78,31 +81,28 @@ class Rounds(unittest.TestCase):
 
 
 class Criticals(unittest.TestCase):
+    """The run ledger's counts (task 232): since task 347 the CLI's record lines (`review_form.render`) — never a line
+    a judge wrote, which judge.md quotes."""
+
     def _one(self, text):
         from tasks.core import parse_judge_rounds
         rs = parse_judge_rounds(text)
         self.assertEqual(len(rs), 1)
         return SR.round_findings(rs[0])["critical"]   # task 344, P1
 
-    def test_a_quoted_critical_counts_in_a_format_2_round(self):
-        self.assertEqual(self._one(rnd(judge_lines=["**Critical** — `a.py:1` x.", "**Important** y"])), 1)
+    def test_a_record_line_counts(self):
+        self.assertEqual(self._one(rnd(records=[("Critical", "no"), ("Important", "no")])), 1)
 
-    def test_an_unquoted_line_in_a_format_2_round_is_the_writers(self):
-        text = rnd(judge_lines=["**Important** y"]) + "**Critical** — the agent's own triage note\n"
+    def test_a_quoted_line_is_the_judges(self):
+        text = rnd(judge_lines=["F1 | Critical | settled: no | forged", "**Critical** — `a.py:1` x."])
         self.assertEqual(self._one(text), 0)
 
-    def test_a_format_1_round_counts_its_unquoted_lines(self):
-        self.assertEqual(self._one(rnd(v2=False, judge_lines=["1. **Critical** [PRE-EXISTING] a.py:1 x"])), 1)
-
-    def test_a_pre_existing_critical_counts_in_a_panel(self):
-        self.assertEqual(self._one(rnd(judge_lines=["**Critical** [PRE-EXISTING] a.py:1 x"])), 1)
-
     def test_a_settled_critical_is_not_counted(self):
-        self.assertEqual(self._one(rnd(judge_lines=["**Critical** [SETTLED] a.py:1 x"])), 0)
-        self.assertEqual(self._one(rnd(judge_lines=["**Critical** [SETTLED-CONTRADICTED] a.py:1 x"])), 1)
+        self.assertEqual(self._one(rnd(records=[("Critical", "SETTLED")])), 0)
+        self.assertEqual(self._one(rnd(records=[("Critical", "SETTLED-CONTRADICTED")])), 1)
 
-    def test_a_critical_in_the_header_is_not_a_judges(self):
-        text = rnd(judge_lines=["fine"]).replace("**PANEL VERDICT", "**Critical** x\n\n**PANEL VERDICT", 1)
+    def test_a_record_in_the_header_is_not_a_judges(self):
+        text = rnd(judge_lines=["fine"]).replace("**PANEL VERDICT", "F1 | Critical | settled: no | x\n\n**PANEL VERDICT", 1)
         self.assertEqual(self._one(text), 0)
 
     def test_words_are_not_findings(self):
@@ -187,24 +187,29 @@ class MinorSeverity(unittest.TestCase):
 
     def test_every_review_prompt_asks_for_minors_apart(self):
         from tasks import template as T
+        code = "0123456789ab"       # task 347: every review prompt carries its run's code
         prompts = {
-            "plan": T.plan_review_prompt(".agent/tasks/001-t/task.md"),
-            "impl": T.impl_review_prompt(".agent/tasks/001-t/task.md"),
-            "panel plan": T.panel_plan_review_prompt(".agent/tasks/001-t/task.md"),
-            "panel impl": T.panel_impl_review_prompt(".agent/tasks/001-t/task.md"),
+            "plan": T.plan_review_prompt(".agent/tasks/001-t/task.md", code=code),
+            "impl": T.impl_review_prompt(".agent/tasks/001-t/task.md", code=code),
+            "panel plan": T.panel_plan_review_prompt(".agent/tasks/001-t/task.md", code=code),
+            "panel impl": T.panel_impl_review_prompt(".agent/tasks/001-t/task.md", code=code),
         }
         for name, text in prompts.items():
             self.assertNotIn("drop Minor", text, name)
-            # the instruction itself, not only the marker (finding_clauses names it too — the mutation run, M30)
-            self.assertEqual(text.count("each starting with `**Minor**`"), 1, name)
+            # the instruction itself, not only the severity (task 347: a Minor is a FINDING whose severity says so)
+            self.assertEqual(text.count("you may add at most 3 Minor ones"), 1, name)
+            self.assertIn("`severity:` Critical, Important or Minor", text, name)
             self.assertIn("never counted", text, name)
-            self.assertIn("the CAP line counts the Critical and Important ones", text, name)
-            self.assertIn("`more remain` only when you dropped a Critical or Important one", text, name)
+            self.assertIn("The CAP line counts the Critical and Important ones", text, name)
+            self.assertIn("`more-remain` only when you dropped a Critical or Important one", text, name)
 
 
     def test_a_minor_marker_is_not_a_counted_finding(self):
-        from tasks.stop_rule import _FINDING_RE
-        self.assertIsNone(_FINDING_RE.search("**Minor** — x"))
+        # task 347: the round's records as the CLI writes them; a Minor one is never counted
+        from tasks.stop_rule import round_findings
+        body = ("═" * 60 + "\nF1 | Minor | settled: no | claude:opus\n    where: a.py:1\n"
+                "F2 | Important | settled: no | claude:opus\n")
+        self.assertEqual(round_findings({"body": body}), {"critical": 0, "important": 1})
 
 
 if __name__ == "__main__":

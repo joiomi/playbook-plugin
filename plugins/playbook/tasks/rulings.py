@@ -331,9 +331,9 @@ SETTLED_CAP = 8000
 SETTLED_HEADER = (
     "SETTLED — an owner ruling closes a design choice, never a correctness defect. "
     "Do not raise a settled item again. Report one only if the code contradicts a "
-    "ruling, or a ruling hides a correctness defect — and then tag that finding "
-    "[SETTLED-CONTRADICTED] (it counts against PASS). A finding that re-raises a "
-    "settled item without that must be tagged [SETTLED]; it does not count against PASS."
+    "ruling, or a ruling hides a correctness defect — and then give that finding "
+    "`settled: SETTLED-CONTRADICTED` (it is counted). A finding that re-raises a "
+    "settled item without that must have `settled: SETTLED`; it is not counted."
 )
 
 
