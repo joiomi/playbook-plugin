@@ -1489,9 +1489,16 @@ def _git_deletes(verb, args, git_cfg):
         # A4: an empty-source refspec set by `-c remote.<name>.push=:dst` deletes `dst` too
         delete_cfg = any(re.fullmatch(r"remote\..+\.push", k) and v is not None and v.lstrip("+").startswith(":")
                          and len(v.lstrip("+")) > 1 for k, v in git_cfg)
-        # impl round 2, C9: a push option's value (`-o :main`) is no refspec
-        refspecs = [p for k, p in enumerate(args) if not p.startswith("-")
-                    and not (k > 0 and args[k - 1] in ("-o", "--push-option"))]
+        # impl round 2, C9: a push option's value (`-o :main`) is no refspec; post-panel run 1, D4: read in order,
+        # each `-o` taking the next word (`-o -o :main` leaves `:main` a refspec)
+        refspecs, k = [], 0
+        while k < len(args):
+            if args[k] in ("-o", "--push-option"):
+                k += 2
+                continue
+            if not args[k].startswith("-"):
+                refspecs.append(args[k])
+            k += 1
         if mirror_cfg or delete_cfg or _long(args, "mirror", "delete", "prune") or "d" in letters \
                 or any(p.startswith(":") and len(p) > 1 for p in refspecs):
             return ("git-push-deletes-refs", "deletes or overwrites the remote's refs (--mirror, --delete, --prune, "
@@ -1545,7 +1552,8 @@ def _find_deletes_dangerously(args, kinds, raws):
             text = " ".join(shlex.quote(c) for c in words)
             # impl round 2, C6: find puts each path it walks in `{}`, its start point first (`-maxdepth 0 -exec git
             # restore {}` is `git restore .`), so the command is judged with `{}` as each start point too
-            roots = [args[s] for s in starts] or ["."]
+            # post-panel run 1, D2: each value a start point may take, the elided `.` of an empty `$D` among them
+            roots = [c for s in starts for c in _start_candidates(args[s], raws[s].startswith('"'))] or ["."]
             for t in [text] + ([" ".join(shlex.quote(c.replace("{}", r)) for c in words) for r in roots]
                                if any("{}" in c for c in words) else []):
                 v = classify_command(t)
@@ -1570,12 +1578,13 @@ def _find_deletes_dangerously(args, kinds, raws):
         root = args[s] if s is not None else "."
         if s is not None and _rm_is_dangerous(["rm", "-rf", root], ["", "", kinds[s]], raws=["rm", "-rf", raws[s]]):
             return ("find-delete-dangerous-root", "deletes everything find walks under a root you cannot afford to lose")
-        if s is not None and _find_root_held_in_a_variable(root, raws[s]):
-            return ("find-delete-dangerous-root", "an empty variable leaves find walking the working directory (`$D`) "
-                    "or the root (`$D/`) — quote it alone, or use `${D:?}`")
-        # impl round 2, C4: each brace alternative and the default word are start points too
-        alt = _param_word_target(root)
-        for c in [root] + _brace_alternatives(root) + ([alt] if alt is not None else []):
+        # impl round 2, C2 and C4; post-panel run 1, D1 and D3: every value the start point may take — each brace
+        # alternative and default word, followed to a bounded depth, and the value with a leading expansion empty
+        cands = _start_candidates(root, (raws[s] if s is not None else "").startswith('"'))
+        for c in cands:
+            if c != root and _rm_is_dangerous(["rm", "-rf", c]):
+                return ("find-delete-dangerous-root", "a value this start point may take is a root you cannot "
+                        "afford to lose (an empty `$D/` is `/`) — use `${D:?}`")
             n = posixpath.normpath(c)
             if n == ".":
                 return ("find-delete-dangerous-root", "deletes under the working directory, its .git and .agent "
@@ -1585,17 +1594,39 @@ def _find_deletes_dangerously(args, kinds, raws):
     return None
 
 
-def _find_root_held_in_a_variable(value, raw):
-    """Impl round 2, C2: a find start point that begins with a parameter expansion: empty and unquoted it vanishes, so
-    find walks `.` (`find $D -delete`), and with a `/` after it the walk starts at the root (`"$D/"`). find has no
-    `--preserve-root` and does not refuse an absent operand, as rm does. A quoted `"$D"` alone (empty: find refuses
-    `''`) and `${D:?}` (it aborts) pass."""
-    if re.match(r"\$\{\w+:\?", value):
-        return False
-    m = re.match(r"\$\{?\w+\}?", value)
-    if not m:
-        return False
-    return value[m.end():].startswith("/") or not (raw or "").startswith('"')
+def _start_candidates(value, quoted, depth=0):
+    """Post-panel run 1, D1 and D3: the values a find start point may take — itself, each brace alternative, each
+    default word, and the value with a leading parameter expansion empty (`$D/x` is `/x`, `"${D%/}/"` is `/`), each
+    followed to a bounded depth. An unquoted expansion that is the whole start point vanishes when empty, and find
+    then walks `.`; a quoted one stays as `''`, which find refuses. `${X:?…}` aborts when empty, so it adds nothing."""
+    out = [value]
+    if depth > 4:
+        return out
+    for a in _brace_alternatives(value):
+        out += _start_candidates(a, quoted, depth + 1)
+    alt = _param_word_target(value)
+    if alt is not None and alt != value:
+        out += _start_candidates(alt, quoted, depth + 1)
+    rest = _empty_leading_expansion(value)
+    if rest == "":
+        out += [] if quoted else ["."]
+    elif rest is not None:
+        out += _start_candidates(rest, quoted, depth + 1)
+    return out
+
+
+def _empty_leading_expansion(value):
+    """The rest of `value` after a leading `$NAME` or `${…}` that is empty when the variable is unset, or None: none
+    leads, or it is `${X:?…}` (it aborts), or a default / assign form (its word is the value: `_param_word_target`)."""
+    m = re.match(r"\$\w+", value)
+    if m and not value.startswith("${"):
+        return value[m.end():]
+    if not value.startswith("${"):
+        return None
+    j = _param_close(value, 0)
+    if j == -1 or re.match(r"\w+(?:\[[^]]*\])?:?[?=-]", value[2:j]):
+        return None
+    return value[j + 1:]
 
 
 # `git config`'s options as git 2.54 lists them (`git config <mode> -h`, and the modes it still takes as options):
