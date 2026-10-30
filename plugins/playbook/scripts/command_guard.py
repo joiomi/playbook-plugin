@@ -1409,7 +1409,7 @@ def _brace_alternatives(t):
 # Task 345 (G4; plan panel K5; impl rounds 1-2): the variables whose value is the project or the working directory.
 _PROJECT_NAMES = ("PWD", "OLDPWD", "CLAUDE_PROJECT_DIR")
 _PROJECT_BARE = re.compile(r"^\$(PWD|OLDPWD|CLAUDE_PROJECT_DIR)(?![A-Za-z0-9_])(.*)$", re.S)
-_PROJECT_BRACED = re.compile(r"^\$\{(PWD|OLDPWD|CLAUDE_PROJECT_DIR)([^}]*)\}(.*)$", re.S)
+_PROJECT_BRACED = re.compile(r"^\$\{(PWD|OLDPWD|CLAUDE_PROJECT_DIR)([:%#/^,@+\-=?][^}]*)?\}(.*)$", re.S)  # N5
 # `${NAME:?…}` aborts when NAME is empty or unset — the case G4 is about (K6): exempt only when it is the token's one
 # expansion (L8), its name is no project name (M1: `"${PWD:?}"/*` is the project's tree), and its tail climbs nowhere (M15).
 _ABORTS_IF_EMPTY = re.compile(r'^("?)\$\{([A-Za-z_][A-Za-z0-9_]*):\?[^}]*\}\1([^$`"\']*)$')
@@ -1418,20 +1418,26 @@ _RECORDS = (".git", ".agent")
 
 def _abort_guard_exempts(raw):
     m = _ABORTS_IF_EMPTY.match(raw)
-    return bool(m) and m.group(2) not in _PROJECT_NAMES and ".." not in m.group(3).split("/")
+    return bool(m) and m.group(2) not in _PROJECT_NAMES and not any(c.startswith("..") for c in m.group(3).split("/"))
 
 
-def _project_rest(cand):
-    """The text after a project name a target starts with, or None when it starts with none. `${NAME…}` with an
-    operator: `:+` / `+` expands to its word, not the project (M12: None); any other form — `:?`, `:-`, `:=`, a
-    substring `:0` (M11), a pattern — is read as the parameter, conservatively."""
+def _project_target(cand):
+    """What a target that starts with a project name is: ("param", the text after it) — the name itself, or any form
+    read as it (`:?`, `:-`, `:=`, a substring `:0` — M11 —, a pattern, a nested default `${X:-${PWD}}` — N10); or
+    ("word", the alternate word and the text after it) for `:+` / `+`, which expands to that word, a target to judge on
+    its own (impl round 3, N2: `"${PWD:+/}"` is `/`); or None when it starts with no project name."""
     m = _PROJECT_BARE.match(cand)
     if m:
-        return m.group(2)
+        return "param", m.group(2)
     m = _PROJECT_BRACED.match(cand)
-    if m:
-        return None if m.group(2).lstrip(":").startswith("+") else m.group(3)
-    return None
+    if not m:
+        return None
+    op = m.group(2) or ""
+    if "${" in op:
+        return "param", ""
+    if op.lstrip(":").startswith("+"):
+        return "word", op.lstrip(":")[1:] + m.group(3)
+    return "param", m.group(3)
 
 
 def _glob_outside_quotes(raw):
@@ -1456,6 +1462,12 @@ def _glob_outside_quotes(raw):
             continue
         if raw.startswith("${", i):
             j = raw.find("}", i + 2)
+            inner = raw[i + 2:n if j == -1 else j]
+            # impl round 3, N1: only a removal pattern's `*` (`${f%.*}`) is no glob; a default, assign or alternate
+            # word is expanded as a target (`${f:-*}` is `*`, `${f:-~}` is the home)
+            w = _PARAM_WORD.match(inner)
+            if w and ("*" in w.group(1) or w.group(1).startswith("~")):
+                return True
             i = n if j == -1 else j + 1
             continue
         if raw.startswith("$'", i):
@@ -1470,6 +1482,9 @@ def _glob_outside_quotes(raw):
             return True
         i += 1
     return False
+
+
+_PARAM_WORD = re.compile(r"(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-]):?[-=+?](.*)$", re.S)
 
 
 def _project_rest_is_dangerous(rest):
@@ -1523,10 +1538,13 @@ def _rm_is_dangerous(values, kinds=None, raws=None):
                 return True
             if ("*" in cand or cand.startswith("~")) and not kind:
                 return True
-            if kind != "'":                            # task 345 (K5): `'$PWD'` is a literal name
-                rest = _project_rest(cand)
-                if rest is not None and _project_rest_is_dangerous(rest):
+            # task 345 (K5): `'$PWD'` is a literal name — read where the `$` stands (impl round 3, N3: `$PWD'/'`)
+            if not (raw.startswith("'") if raw is not None else kind == "'"):
+                pt = _project_target(cand)
+                if pt is not None and pt[0] == "param" and _project_rest_is_dangerous(pt[1]):
                     return True
+                if pt is not None and pt[0] == "word" and pt[1] and _rm_is_dangerous(["rm", "-rf", pt[1]]):
+                    return True                        # N2: `"${PWD:+/}"` is `rm -rf /`
             if not cand.startswith(("/", "$", "~")):
                 rel = posixpath.normpath(cand)
                 if rel in _RECORDS or rel == ".." or rel.startswith("../"):
@@ -2607,7 +2625,7 @@ def _top_level_segments(line):
                 out.append(line[start:i])
                 start = i + 1
         elif "sub" not in stack and not bt:
-            hit = next((op for op in ("&&", "||", ";", "|", "&") if line.startswith(op, i)), None)
+            hit = next((op for op in ("&&", "||", ";", "|", "&", "\n") if line.startswith(op, i)), None)
             if hit and _is_redirection_char(line, i, hit):
                 hit = None
             if hit:
@@ -2650,8 +2668,8 @@ _INTERP_GRAMMAR = {
     "ruby": {"code": "e", "load": "r", "module": "", "value": "ICEF", "attached": "", "digits": "", "debug": "",
              "multi_code": True, "long_code": (), "long_load": (), "long_value": ()},
     "node": {"code": "ep", "load": "r", "module": "", "value": "C", "attached": "", "digits": "", "debug": "",
-             "multi_code": False, "long_code": ("--eval", "--print"), "long_load": ("--require", "--import"),
-             "long_value": ("--conditions", "--loader", "--input-type")},
+             "multi_code": False, "long_code": ("--eval", "--print"), "long_load": ("--require", "--import", "--loader", "--experimental-loader"),
+             "long_value": ("--conditions", "--input-type")},
 }
 _STDIO_REDIR = re.compile(r"^(\d*|&)(<<<|<>|<&|<|>>|>&|>\||&>>|&>|>)(.*)$", re.S)   # not `_REDIR` (that is the device rule's)
 _STDIN_NAMES = ("-", "/dev/stdin", "/dev/fd/0")                 # M14
@@ -2806,7 +2824,7 @@ def _interpreter_runs_a_download(seg, head=None):
             while k < len(letters):
                 ch = letters[k]
                 if ch in g["code"] or ch in g["load"]:
-                    if letters[k + 1:]:
+                    if letters[k + 1:] and not all(c in g["code"] for c in letters[k + 1:]):   # `-pe` (N4)
                         if holds(raw):
                             return True
                     else:
@@ -2839,8 +2857,10 @@ def _interpreter_runs_a_download(seg, head=None):
             i += 1
             continue
         if program is None:
-            if raw in bodies and holds(raw, ("<(",)):
-                return True                            # the script operand is `<(dl)` itself
+            for k, (o, b) in bodies.items():           # the script operand is `<(dl)` itself, a redirection glued (N7)
+                if raw.startswith(k) and (raw == k or _redirection(raw[len(k):]) is not None) and o == "<(" \
+                        and _is_downloader_body(b):
+                    return True
             program = "script"
         else:
             program = "args"                           # after the code: the program's arguments
@@ -2858,16 +2878,17 @@ def _shell_consumes_a_downloader(text):
     Task 345: read per top-level SEGMENT, each head with its own segment's substitutions (plan panel K1:
     `true; bash <(curl …)` passed, and `bash x.sh; diff <(curl …) b` blocked); a non-shell interpreter only when the
     download becomes its program (E125, K2)."""
-    for line in str(text).split("\n"):
-        for seg in _top_level_segments(line):
-            rest, _executes, _payloads = _walk_prefix(seg)
-            lexed = _lex(rest)
-            head = _command_name(lexed[0][2]) if lexed else None
-            if head in _SHELLS or head in _SOURCERS:
-                if any(_is_downloader_body(b) for b in _command_substitutions(seg) + _herestring_payloads(seg)):
-                    return True
-            elif _is_interpreter(head) and _interpreter_runs_a_download(rest, head):
+    # impl round 3, N6: a continued line is one line, and the text is cut as a whole, so a substitution that spans
+    # lines (`python3 <(⏎ curl …⏎ )`) stays with its command
+    for seg in _top_level_segments(str(text).replace("\\\n", " ")):
+        rest, _executes, _payloads = _walk_prefix(seg)
+        lexed = _lex(rest)
+        head = _command_name(lexed[0][2]) if lexed else None
+        if head in _SHELLS or head in _SOURCERS:
+            if any(_is_downloader_body(b) for b in _command_substitutions(seg) + _herestring_payloads(seg)):
                 return True
+        elif _is_interpreter(head) and _interpreter_runs_a_download(rest, head):
+            return True
     return False
 
 

