@@ -2945,13 +2945,19 @@ class G4Part2(_G4Asserts, unittest.TestCase):
                            'git checkout -- "$(git rev-parse --show-toplevel)"', "git checkout -- ':(top)'",
                            'git checkout -- "$PWD"', "git checkout -- foo/..", "git checkout -- /home/u/repo",
                            "git checkout --pathspec-from-file=paths", "git restore --pathspec-from-file=paths",
-                           "git restore -s HEAD .")
+                           "git restore -s HEAD .",
+                           # after `--` (and for restore anywhere) a computed pathspec is wide
+                           "git checkout -- $(git ls-files)", "git restore $(git ls-files)")
 
     def test_a_targeted_restore_and_a_branch_switch_pass(self):
         """Row 2 (A8, A10: a letter after `--` is a file, an attached value is no force)."""
         self.assert_passes("git checkout main", "git checkout -b feat", "git checkout -- src/a.py",
                            "git restore --staged .", "git restore src/a.py", "git switch main", "git switch -c feat",
-                           "git checkout -bfix-x", "git switch -cfeat", "git checkout -- -f", "git checkout -- src")
+                           "git checkout -bfix-x", "git switch -cfeat", "git checkout -- -f", "git checkout -- src",
+                           # the history probe (step 6): a commit given by a substitution before `--`, and a
+                           # bracket directory (Next.js), which git matches literally too
+                           'git checkout -q "$(git rev-parse HEAD)"', "git checkout -q $(git rev-parse HEAD)",
+                           "git restore src/app/[locale]/layout.tsx")
 
     def test_dropping_a_stash_blocks(self):
         """Row 3."""

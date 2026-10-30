@@ -1341,11 +1341,11 @@ def _short_letters(args, value_letters=""):
 
 
 def _paths(args):
-    """A git command's positional arguments: those that are no option, and every one after `--` / `--end-of-options`."""
+    """A git command's positional arguments, as (before `--` / `--end-of-options`, after it)."""
     for k, a in enumerate(args):
         if a in ("--", "--end-of-options"):
-            return [p for p in args[:k] if not p.startswith("-")] + args[k + 1:]
-    return [p for p in args if not p.startswith("-")]
+            return [p for p in args[:k] if not p.startswith("-")], args[k + 1:]
+    return [p for p in args if not p.startswith("-")], []
 
 
 def _wide_pathspec(p):
@@ -1355,7 +1355,7 @@ def _wide_pathspec(p):
     `$(…)`, a project name). A named file or directory does not."""
     if not p:
         return False
-    if p.startswith(":") or any(c in p for c in "*?["):
+    if p.startswith(":") or any(c in p for c in "*?"):    # a bracket alone narrows (`src/app/[locale]/x.tsx`)
         return True
     n = posixpath.normpath(p)
     return n in (".", "..") or n.startswith("../") or _rm_is_dangerous(["rm", "-rf", p])
@@ -1384,9 +1384,13 @@ def _git_deletes(verb, args, git_cfg):
     list's E023.5, E028, E057, E073, E074.1, E087, E125). New rules only: each adds a block, none replaces a reading.
     `args` are the subcommand's arguments, `git_cfg` its `-c` overrides; short options are read before `--` only
     (plan panel A8). → (name, why) or None."""
-    paths = _paths(args)
+    before, after = _paths(args)
+    paths = before + after
     letters = _short_letters(args, {"checkout": "bB", "switch": "cC"}.get(verb, ""))
-    wide = any(_wide_pathspec(p) for p in paths) or _long(args, "pathspec-from-file")
+    # checkout's arguments before `--` may name a commit, and a computed one (`"$(git rev-parse HEAD)"`) is a commit
+    # far more often than a path (the history probe): there it reads as one; after `--`, and for restore, it is a path
+    specs = [p for p in before if not re.search(r"[$`]", p)] + after if verb == "checkout" else paths
+    wide = any(_wide_pathspec(p) for p in specs) or _long(args, "pathspec-from-file")
     if verb in ("checkout", "restore", "switch"):
         if verb == "checkout":
             discards = "f" in letters or _long(args, "force") or wide
