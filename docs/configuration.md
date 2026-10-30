@@ -370,7 +370,10 @@ A `reversible` risk stays advisory (a console note and the receipt clause), as d
 not require a panel. The receipt of every close with an impl round says FRESH or STALE and the cause. The gate's risk
 is the stricter of `## Risk` and the risk recorded with the task's impl panels (their reservations in
 `post-panel-reviews.jsonl`): lowering `## Risk` after a panel frees nothing, and a run ledger that exists and cannot
-be read, or has a corrupt line, makes that recorded risk unknown — the close then takes `unclassified`.
+be read, or has a corrupt line, makes that recorded risk unknown — the close then takes `unclassified`, whatever
+judge.md holds (a panel that reserved and saved no round has recorded its risk there), and every block it causes
+names the ledger. Every single-judge run writes that ledger too, so a line torn by a crash holds even a
+`reversible` task until the line is repaired or the close is forced.
 
 Nothing reviews after the round on the close's behalf: the post-panel judge as close evidence, tail certification,
 `--stale-panel-ok`, `stale_panel_requires_post_d6` and `guard_paths` went with task 343. So write the docs and the

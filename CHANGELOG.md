@@ -10,7 +10,7 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   chat log, rulings) were committed since, and its tamper guard was not degraded — or it is STALE, with its cause in words (the code, a doc or the mind map changed; no
   tree stamp; git cannot fingerprint the tree; a degraded guard). A stale assertive, irreversible or unclassified close
   blocks and names its ways out: another impl round (past the round cap, one with the owner's word) or `--force
-  --reason`. A run ledger that cannot be read makes the gate's risk `unclassified` where an impl panel round stands.
+  --reason`. A run ledger that cannot be read makes the gate's risk `unclassified`, and the block names it.
   `tasks work done` refuses any other option, and a `--reason` with no value. `tasks impl-review` is a plain single
   judge — the whole task, no run cap, every run reserved so it never runs beside a panel — and refuses an option it does
   not read. The templates put `## Pre-review` (tests, debug artifacts, the mind map) before the implementation

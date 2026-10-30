@@ -283,30 +283,46 @@ class Stale(_Close):
         for gone in ("guard_paths", "post-panel", "single judge"):
             self.assertNotIn(gone, why)
 
-    def test_a_bad_ledger_without_a_panel_round_keeps_the_risk(self):
-        """Row 32 (impl round 1, I2): every single judge writes the run ledger now, so a torn line there must not hold
-        a reversible task that never had a panel to `unclassified`; where an impl panel round does hold it, the
-        block names the ledger, whichever check blocks."""
-        cfg = {"panel_required_for": ["assertive", "irreversible"]}
-        self.setup_task("reversible", cfg=cfg)
+    def _single_only(self, risk, ledger_text):
+        """A task with no saved panel round, one single-judge impl review, and the given run ledger."""
+        self.setup_task(risk, cfg={"panel_required_for": ["assertive", "irreversible"]})
         (self.td / "judge.md").unlink()
         (self.td / "judge-single.md").write_text("## Single-judge impl review — 2026-10-30 09:00\n\n> fine\n",
                                                  encoding="utf-8")
-        (self.td / "post-panel-reviews.jsonl").write_text(
-            json.dumps({"id": "s1", "kind": "single", "status": "reserved"}) + "\n" + '{"id": "s1", "sta\n',
-            encoding="utf-8")
-        r, out = self.close()
-        self.assertEqual(r.returncode, 0, out)
-        self.assertTrue(self.done(), out)
-        self.setup_task("reversible", cfg=cfg)
-        (self.td / "judge.md").write_text(self.td.joinpath("judge.md").read_text(encoding="utf-8").replace(
-            "**PANEL VERDICT: PASS**", "**PANEL VERDICT: FAIL**"), encoding="utf-8")
-        (self.td / "post-panel-reviews.jsonl").write_text('{"id": "p1", "kind": "pan\n', encoding="utf-8")
+        ledger = self.td / "post-panel-reviews.jsonl"
+        ledger.write_text(ledger_text, encoding="utf-8")
+        return ledger
+
+    def test_a_bad_ledger_holds_the_close_and_names_itself(self):
+        """Row 32 (impl round 1, I2, as the post-panel judge's run 1 corrected it): a run ledger that cannot be
+        trusted holds the close to `unclassified` whatever task.md says or judge.md holds — a panel that reserved but
+        saved no round has recorded its risk there too — and every block it causes names the ledger, never only
+        "set ## Risk"."""
+        self._single_only("reversible", json.dumps({"id": "s1", "kind": "single", "status": "reserved"}) + "\n"
+                          + '{"id": "s1", "sta\n')
         r, out = self.close()
         self.assertNotEqual(r.returncode, 0, out)
         self.assertIn("Blocked: cannot close task 001", out)
         self.assertIn("run ledger", out)
         self.assertFalse(self.done(), out)
+
+    def test_an_unsaved_panel_keeps_its_risk_through_a_bad_ledger(self):
+        """Row 32 (the post-panel judge's run 1, codex, reproduced twice): an assertive panel reserved — its risk
+        recorded — and saved no round; the ledger then spoiled and `## Risk` lowered to reversible. The close holds."""
+        for spoil in ("corrupt", "unreadable"):
+            with self.subTest(spoil=spoil):
+                ledger = self._single_only("reversible", json.dumps(
+                    {"id": "p1", "kind": "panel", "mode": "impl", "status": "reserved", "risk": "assertive"}) + "\n")
+                if spoil == "corrupt":
+                    with open(ledger, "a", encoding="utf-8") as fh:
+                        fh.write('{"id": "p1", "sta\n')
+                else:
+                    ledger.chmod(0)
+                    self.addCleanup(ledger.chmod, 0o644)
+                r, out = self.close()
+                self.assertNotEqual(r.returncode, 0, out)
+                self.assertIn("run ledger", out)
+                self.assertFalse(self.done(), out)
 
     def test_an_unreadable_ledger_keeps_the_gate(self):
         """Row 27: an assertive panel recorded in the run ledger, `## Risk` lowered to reversible, the ledger made
