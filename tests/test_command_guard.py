@@ -3063,7 +3063,8 @@ class G4Part2Round1(_G4Asserts, unittest.TestCase):
                            "find -- /tmp -name '*.tmp' -delete", "find / -exec env -S 'rm -rf' {} +",
                            "find . -exec env -S 'rm -rf' {} +", "git remote -v add --mirror=push r ../r.git",
                            "git remote --verbose add --mirror=fetch r ../r.git")
-        self.assert_passes("git prune --no-dry-run -n", "git push -odeploy origin main", "git restore -sHEAD src/a.py")
+        self.assert_passes("git prune --no-dry-run -n", "git push -odeploy origin main", "git restore -sHEAD src/a.py",
+                           "find -- src -name '*.o' -delete")      # B8's twin: after `--`, a named subdirectory
 
     def test_the_docs_name_the_git_and_find_forms(self):
         """Row 9: configuration.md names each form and the stated limits; `find -delete` is no longer called allowed."""

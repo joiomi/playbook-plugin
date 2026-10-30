@@ -1361,6 +1361,57 @@ def _wide_pathspec(p):
     return n in (".", "..") or n.startswith("../") or _rm_is_dangerous(["rm", "-rf", p])
 
 
+def _is_rev_substitution(p):
+    """Impl round 1, B1: is a checkout argument a `$(git … rev-parse <rev>)` substitution (or its backtick form) — a
+    commit, not a path? Not when it asks for a directory (`--show-toplevel`, `--git-dir`, `--path-format`), and not
+    when it holds a further expansion or a separator, whose result the guard cannot read."""
+    m = re.fullmatch(r"\$\((.*)\)|`(.*)`", p, re.S)
+    body = (m.group(1) if m and m.group(1) is not None else m.group(2) if m else "").strip()
+    return bool(re.match(r"git\b.*\brev-parse\b", body, re.S)) and not re.search(r"--(?:show|absolute|git-|path)", body) \
+        and not any(c in body for c in "$`;|&<>\n")
+
+
+def _rejoin_substitutions(tokens):
+    """The lexed words of an unquoted `$( … )` or backtick substitution, joined back into one argument (the lexer splits
+    `$(git rev-parse HEAD)` into three words); an unclosed one runs to the end."""
+    out, i = [], 0
+    while i < len(tokens):
+        t = tokens[i]
+        if t.startswith(("$(", "`")):
+            j = i
+            while j < len(tokens):
+                joined = " ".join(tokens[i:j + 1])
+                if (joined.count("`") >= 2) if t.startswith("`") else joined.count("(") <= joined.count(")"):
+                    break
+                j += 1
+            out.append(" ".join(tokens[i:j + 1]))
+            i = j + 1
+            continue
+        out.append(t)
+        i += 1
+    return out
+
+
+def _dry_run_last(args):
+    """Impl round 1, B7: is a `git prune` a dry run when its options are read in order, as git reads them — the last of
+    `-n` / `--dry-run` and `--no-dry-run` (each cut as `_long` reads it) wins (`prune -n --no-dry-run` prunes)?"""
+    dry = False
+    for a in args:
+        if a in ("--", "--end-of-options"):
+            break
+        if a.startswith("--no-"):
+            n = a[5:].split("=", 1)[0]
+            if n and "dry-run".startswith(n):
+                dry = False
+        elif a.startswith("--"):
+            n = a[2:].split("=", 1)[0]
+            if n and "dry-run".startswith(n):
+                dry = True
+        elif a.startswith("-") and "n" in a[1:]:
+            dry = True
+    return dry
+
+
 def _stash_subcommand(args):
     """`git stash`'s subcommand: its first positional argument, a `-m` / `--message` value skipped (`git stash -m
     drop` pushes a stash named "drop")."""
@@ -1386,10 +1437,17 @@ def _git_deletes(verb, args, git_cfg):
     (plan panel A8). → (name, why) or None."""
     before, after = _paths(args)
     paths = before + after
-    letters = _short_letters(args, {"checkout": "bB", "switch": "cC"}.get(verb, ""))
-    # checkout's arguments before `--` may name a commit, and a computed one (`"$(git rev-parse HEAD)"`) is a commit
-    # far more often than a path (the history probe): there it reads as one; after `--`, and for restore, it is a path
-    specs = [p for p in before if not re.search(r"[$`]", p)] + after if verb == "checkout" else paths
+    # the short letters that take a value, whose rest is that value (A10; impl round 1, B2: `restore -sRELEASE`, B12:
+    # `push -odeploy`)
+    letters = _short_letters(args, {"checkout": "bB", "switch": "cC", "restore": "s", "push": "o"}.get(verb, ""))
+    # checkout's arguments before `--` may name a commit: a `$(git rev-parse <rev>)` substitution reads as one (the
+    # history probe); any other computed argument is read as a path (impl round 1, B1: `git checkout "$PWD"`)
+    if verb == "checkout":
+        # the lexer splits an unquoted substitution into words (`$(git`, `rev-parse`, `HEAD)`): join them first
+        c_before, c_after = _paths(_rejoin_substitutions(args))
+        specs = [p for p in c_before if not _is_rev_substitution(p)] + c_after
+    else:
+        specs = paths
     wide = any(_wide_pathspec(p) for p in specs) or _long(args, "pathspec-from-file")
     if verb in ("checkout", "restore", "switch"):
         if verb == "checkout":
@@ -1417,44 +1475,44 @@ def _git_deletes(verb, args, git_cfg):
                 or any(p.startswith(":") and len(p) > 1 for p in paths):
             return ("git-push-deletes-refs", "deletes or overwrites the remote's refs (--mirror, --delete, --prune, "
                     ":<ref>) — they cannot be restored from here")
-    if verb == "remote" and args and args[0] == "add" and _long(args, "mirror"):
+    # impl round 1, B10: remote's subcommand is its first positional argument (`git remote -v add --mirror=push …`)
+    if verb == "remote" and before[:1] == ["add"] and _long(args, "mirror"):
         return ("git-config-dangerous", "this git config makes a later git command force-push or delete, which "
                 "the guard cannot see")           # A13: it writes `remote.<name>.mirror`, as `git config` would
     gc_cfg = any((k == "gc.pruneexpire" or k.startswith("gc.reflogexpire")) and v is not None
                  and v.lower() in ("now", "all") for k, v in git_cfg)
     if (verb == "reflog" and args and args[0] in ("expire", "delete", "drop")) \
             or (verb == "gc" and (gc_cfg or any(v.lower() in ("now", "all") for v in _long_values(args, "prune")))) \
-            or (verb == "prune" and not ("n" in letters or _long(args, "dry-run"))):
+            or (verb == "prune" and not _dry_run_last(args)):
         return ("git-recovery-points", "destroys the reflog entries or unreachable objects that let lost commits be "
                 "recovered (only `git prune -n` passes)")
     return None
 
 
-# find's options before its start points; the tests that narrow what it walks to named entries (plan panel A2: a
-# pattern test counts only with a letter or digit outside brackets, and a time, size or owner test narrows nothing
-# that keeps `.git` out); what widens an expression; the actions that run a command
+# find's options before its start points, the actions that run a command, and the commands that delete
 _FIND_GLOBAL = frozenset(("-H", "-L", "-P"))
-_FIND_PATTERN = frozenset(("-name", "-iname", "-path", "-ipath", "-wholename", "-iwholename", "-regex", "-iregex",
-                           "-lname", "-ilname"))
-_FIND_NARROW = frozenset(("-samefile", "-inum", "-empty"))
-_FIND_WIDEN = frozenset(("-o", "-or", "!", "-not", ","))
 _FIND_EXEC = frozenset(("-exec", "-execdir", "-ok", "-okdir"))
+_FIND_DELETERS = frozenset(("rm", "unlink"))           # impl round 1, B6: `-exec unlink {} \;`
 
 
 def _find_deletes_dangerously(args, kinds, raws):
-    """Task 346: a `find` that deletes (`-delete`, or an `-exec` family action running `rm`, read through wrappers:
-    `env rm`, `/bin/rm` — A6) under a start point the rm rule calls dangerous, or under the working directory (a start
-    point that normalises to `.`, or none — A9) unless a narrowing test comes BEFORE the first deleting action (find
-    runs left to right: `find . -delete -name x` deletes everything — A1) and nothing widens the expression; and the
-    command each `-exec` runs, judged as a command of its own (A6). → (name, why) or None."""
+    """Task 346: a `find` that deletes — `-delete`, or an `-exec` family action running `rm` / `unlink`, read through
+    wrappers (`env rm`, `sudo rm`, `/bin/rm`, and a payload such as `env -S 'rm -rf'`: impl round 1, B9) — under a
+    start point the rm rule calls dangerous, or under the working directory (a start point that normalises to `.`, or
+    none). No name or time test narrows the working directory (impl round 1, B4): `-name config` breaks the repository,
+    `-name '*.md'` deletes the task records and `-empty` its empty refs, so a cleanup names its subdirectory
+    (`find src -name '*.pyc' -delete`). The command each `-exec` runs is judged as a command of its own (plan panel A6).
+    → (name, why) or None."""
     i = 0
     while i < len(args) and (args[i] in _FIND_GLOBAL or args[i] == "-D" or args[i].startswith("-O")):
         i += 2 if args[i] == "-D" else 1
+    if i < len(args) and args[i] == "--":
+        i += 1                                         # impl round 1, B8: `find -- /tmp …`
     starts = []
     while i < len(args) and not (args[i].startswith("-") or args[i] in ("(", ")", "!", ",")):
         starts.append(i)
         i += 1
-    deletes = narrowed = widened = False
+    deletes = False
     while i < len(args):
         a = args[i]
         if a in _FIND_EXEC:
@@ -1465,20 +1523,14 @@ def _find_deletes_dangerously(args, kinds, raws):
             v = classify_command(text)
             if v[0] == "block":
                 return (v[1], v[2])                    # `find . -exec rm -rf / \;` is `rm -rf /`
-            rest, _executes, _payloads = _walk_prefix(text)
-            lexed = _lex(rest)
-            deletes = deletes or (bool(lexed) and _command_name(lexed[0][2]) == "rm")
+            rest, _executes, payloads = _walk_prefix(text)
+            for cmd in [rest] + list(payloads):
+                lexed = _lex(cmd)
+                deletes = deletes or (bool(lexed) and _command_name(lexed[0][2]) in _FIND_DELETERS)
             i = k + 1
             continue
         if a == "-delete":
             deletes = True
-        elif not deletes and a in _FIND_PATTERN and i + 1 < len(args) and not re.search(r"[$`]", args[i + 1]) \
-                and re.search(r"[A-Za-z0-9]", re.sub(r"\[[^]]*\]", "", args[i + 1])):
-            narrowed = True                            # a pattern held in a variable proves nothing (own search)
-        elif not deletes and a in _FIND_NARROW:
-            narrowed = True
-        elif a in _FIND_WIDEN:
-            widened = True
         i += 1
     if not deletes:
         return None
@@ -1486,9 +1538,9 @@ def _find_deletes_dangerously(args, kinds, raws):
         root = args[s] if s is not None else "."
         if s is not None and _rm_is_dangerous(["rm", "-rf", root], ["", "", kinds[s]], raws=["rm", "-rf", raws[s]]):
             return ("find-delete-dangerous-root", "deletes everything find walks under a root you cannot afford to lose")
-        if posixpath.normpath(root) == "." and not (narrowed and not widened):
-            return ("find-delete-dangerous-root", "deletes everything find walks under the working directory (narrow "
-                    "it with -name / -path before -delete, or name the subdirectory)")
+        if posixpath.normpath(root) == ".":
+            return ("find-delete-dangerous-root", "deletes under the working directory, its .git and .agent included "
+                    "— name the subdirectory instead (`find src -name '*.pyc' -delete`)")
     return None
 
 
