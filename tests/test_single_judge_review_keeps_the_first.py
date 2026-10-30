@@ -191,7 +191,7 @@ class EndToEnd(unittest.TestCase):
 
     def test_the_judge_log_keeps_every_run_newest_first(self):
         # row 17 (impl round 2): the judge's log keeps every run, the newest first — its header (the tamper guard's
-        # line, which `single_review_tamper_degraded` reads from the top) is the newest run's
+        # line, read from the top; `single_review_tamper_degraded`'s until task 343) is the newest run's
         self.assertEqual(self.impl_review(RUN1), 0)
         self.assertEqual(self.impl_review(RUN2), 0)
         log = (self.tdir / "judge-agy.log").read_text(encoding="utf-8")

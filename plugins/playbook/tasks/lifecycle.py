@@ -780,6 +780,22 @@ def _carry_stub_text(stub: str, full: str, stub_type: str, taken: str) -> str:
                          "the Risk heading, and the class on the line under it")
     return out
 
+def _has_impl_round(task_dir: Path) -> bool:
+    """Does judge.md or judge-archive.md hold an impl panel round, whatever its verdict? A file that cannot be read
+    says yes — the escalation it guards fails closed (impl round 1, I2)."""
+    from tasks.core import JUDGE_ARCHIVE_NAME, parse_judge_rounds
+    for name in ("judge.md", JUDGE_ARCHIVE_NAME):
+        f = Path(task_dir) / name
+        try:
+            if not f.exists():
+                continue
+            if any(r["mode"] == "impl" for r in parse_judge_rounds(f.read_text(encoding="utf-8", errors="replace"))):
+                return True
+        except (OSError, ValueError):
+            return True
+    return False
+
+
 def done_option_problem(rest: "list[str]") -> "str | None":
     """What is wrong with `tasks work done`'s options, or None: `--force` / `-f` and `--reason <why>` are its only
     ones, and a forced close needs its reason (task 116). Task 343 (PLAN-PLAYBOOK-2.md 4.1 a; plan panel P3, P15):
@@ -794,6 +810,8 @@ def done_option_problem(rest: "list[str]") -> "str | None":
             if i + 1 < len(rest) and not rest[i + 1].startswith("-"):
                 reason = rest[i + 1]
                 i += 1
+            else:                   # impl round 1, I1: a `--reason` with no value is refused, never ignored
+                return '--reason needs its value — `tasks work done --force --reason "why"`'
         elif a.startswith("-"):
             return f'unknown option {a!r} — `tasks work done` takes only `--force --reason "why"`'
         else:
@@ -1021,6 +1039,10 @@ def cmd_work(cmd_args):
                     _bad_ledger343 = _sr209.ledger_untrusted(task_file.parent)
                 except Exception as _e343:          # noqa: BLE001
                     _bad_ledger343 = f"the run ledger cannot be checked ({_e343.__class__.__name__})"
+                # impl round 1, I2: every single judge writes the ledger too, so a bad one escalates only where an impl
+                # panel round stands in judge.md or judge-archive.md — only a panel's reservation records a risk
+                if _bad_ledger343 and not _has_impl_round(task_file.parent):
+                    _bad_ledger343 = None
                 if _bad_ledger343:
                     _rec_risk209 = "unclassified"
                 _gate_risk = _sr209.stricter(_rec_risk209, risk)
@@ -1101,7 +1123,9 @@ def cmd_work(cmd_args):
                     panel_required=_panel_req,
                 )
                 if not allowed:
-                    print(f"\nBlocked: cannot close task {prev_task} — {block_reason}",
+                    print(f"\nBlocked: cannot close task {prev_task} — {block_reason}"
+                          + (f"\n  ({_bad_ledger343} — the risk the panels ran under is unknown, so the close "
+                             "takes `unclassified`)" if _bad_ledger343 else ""),
                           file=sys.stderr, flush=True)
                     sys.exit(1)
 
@@ -1290,9 +1314,8 @@ def cmd_work(cmd_args):
                 # close happened. Uses the already-computed freshness —
                 # re-parsing here could disagree with what the receipt says.
                 if _freshness and _freshness.get("verdict") == "STALE":
-                    print("note: the code state changed after the newest "
-                          f"impl panel (tree-state mismatch: {_freshness.get('cause')}) — if code was "
-                          "edited post-review, consider re-running "
+                    print(f"note: the newest impl round is STALE — {_freshness.get('cause')}; if code was "
+                          "edited after it, consider re-running "
                           f"`tasks panel-review {prev_task} --mode impl`.",
                           flush=True)
             # Remove session dirs that reference this task.

@@ -283,6 +283,31 @@ class Stale(_Close):
         for gone in ("guard_paths", "post-panel", "single judge"):
             self.assertNotIn(gone, why)
 
+    def test_a_bad_ledger_without_a_panel_round_keeps_the_risk(self):
+        """Row 32 (impl round 1, I2): every single judge writes the run ledger now, so a torn line there must not hold
+        a reversible task that never had a panel to `unclassified`; where an impl panel round does hold it, the
+        block names the ledger, whichever check blocks."""
+        cfg = {"panel_required_for": ["assertive", "irreversible"]}
+        self.setup_task("reversible", cfg=cfg)
+        (self.td / "judge.md").unlink()
+        (self.td / "judge-single.md").write_text("## Single-judge impl review — 2026-10-30 09:00\n\n> fine\n",
+                                                 encoding="utf-8")
+        (self.td / "post-panel-reviews.jsonl").write_text(
+            json.dumps({"id": "s1", "kind": "single", "status": "reserved"}) + "\n" + '{"id": "s1", "sta\n',
+            encoding="utf-8")
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+        self.assertTrue(self.done(), out)
+        self.setup_task("reversible", cfg=cfg)
+        (self.td / "judge.md").write_text(self.td.joinpath("judge.md").read_text(encoding="utf-8").replace(
+            "**PANEL VERDICT: PASS**", "**PANEL VERDICT: FAIL**"), encoding="utf-8")
+        (self.td / "post-panel-reviews.jsonl").write_text('{"id": "p1", "kind": "pan\n', encoding="utf-8")
+        r, out = self.close()
+        self.assertNotEqual(r.returncode, 0, out)
+        self.assertIn("Blocked: cannot close task 001", out)
+        self.assertIn("run ledger", out)
+        self.assertFalse(self.done(), out)
+
     def test_an_unreadable_ledger_keeps_the_gate(self):
         """Row 27: an assertive panel recorded in the run ledger, `## Risk` lowered to reversible, the ledger made
         untrustworthy — the recorded risk is unknown, so the stale close still blocks."""
@@ -330,7 +355,23 @@ class Stale(_Close):
         self.g("commit", "-qm", "the task's records")
         r, out = self.close()
         self.assertEqual(r.returncode, 0, out)
-        self.assertIn("only the task's own records changed since the round", self.task())
+        self.assertIn("only workflow records changed since the round", self.task())
+
+    def test_the_note_and_the_receipt_name_the_cause(self):
+        """Row 34 (impl round 1, I7, I9): a STALE close that goes on prints its own cause, never "the code changed"
+        for a round with no stamp; the records-only receipt names workflow records, not the task's own."""
+        self.setup_task(stamp=False)
+        r, out = self.close("--force", "--reason", "no stamp, read by hand")
+        self.assertEqual(r.returncode, 0, out)
+        self.assertIn("the round has no tree stamp", out)
+        self.assertNotIn("code state changed", out)
+        self.setup_task()
+        self.g("add", "-A", ".agent/tasks")
+        self.g("commit", "-qm", "the task's records")
+        r, out = self.close()
+        self.assertEqual(r.returncode, 0, out)
+        self.assertIn(".agent tasks, sessions, journal, chat log, rulings", self.task())
+        self.assertNotIn("task's own records", self.task())
 
 
 class Flags(_Close):
@@ -350,6 +391,20 @@ class Flags(_Close):
         from tasks import cli
         self.assertNotIn("--stale-panel-ok", cli._USAGE.get("work", ""))
         self.assertNotIn("--owner-ok", cli._USAGE.get("work", ""))
+
+
+    def test_a_reason_without_its_value_is_refused(self):
+        """Row 31 (impl round 1, I1): `--reason` with no value — last, or before another option — is refused before
+        anything runs, forced or not; nothing is written."""
+        for flags in (("--reason",), ("--reason", "--force"), ("--force", "--reason")):
+            with self.subTest(flags=flags):
+                self.setup_task()
+                before = self.task()
+                r, out = self.close(*flags)
+                self.assertNotEqual(r.returncode, 0, out)
+                self.assertIn("--reason", out)
+                self.assertEqual(self.task(), before)
+                self.assertFalse(self.done(), out)
 
 
 class Commit(_Close):

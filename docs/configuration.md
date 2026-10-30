@@ -347,8 +347,8 @@ is a gate checklist, not the classification field, and does not trigger this.
 The gate fires only when policy requires a panel for the close (`panel_required_for`). The close asks one question
 (task 343, PLAN-PLAYBOOK-2.md 4.1 a): does judge.md's newest impl round still describe the code being closed?
 
-- **FRESH** — the round's `**Tree-state:**` stamp equals the tree's fingerprint now, or only the task's own records were
-  committed since (below), and the round's tamper guard was not degraded.
+- **FRESH** — the round's `**Tree-state:**` stamp equals the tree's fingerprint now, or only workflow records (`.agent` tasks, sessions, journal, chat log, rulings)
+  were committed since (below), and the round's tamper guard was not degraded.
 - **STALE** — otherwise, with its cause in words: the code (a doc, a test or the mind map too) changed since the round;
   the round has no tree stamp; git cannot fingerprint the tree now (a corrupt index, a missing `HEAD`, an
   unresolvable toplevel, a failed `status`/`diff` — never read as FRESH); or the round's tamper guard was degraded
@@ -389,9 +389,9 @@ never falls back to the post-review tree.
 
 **Committing the task's own record does not stale the panel** (task 085). The fingerprint already ignores `.agent/`,
 but a commit moves the outer `HEAD`, which the fingerprint does include — so committing the task record after its
-panel used to read STALE with nothing to review. The close accepts that case as FRESH, and the receipt says "only the
-task's own records changed since the round", when all of these hold: every path the commits touch is a task record
-(`.agent[/<lane>]/tasks/`, session pointers, the journal, the chat log — NOT `.agent/config.json` or `models.json`),
+panel used to read STALE with nothing to review. The close accepts that case as FRESH, and the receipt says "only workflow
+records changed since the round", when all of these hold: every path the commits touch is a workflow record
+(`.agent[/<lane>]/tasks/` — any task's —, session pointers, the journal, the chat log, `.agent/rulings.md` — NOT `.agent/config.json` or `models.json`),
 the round's snapshot matches its stamp, `git diff <panel commit> HEAD` outside `.agent` is empty, and the fingerprint
 recomputed with `HEAD` set back to the panel's commit equals the stamp (so the working tree and every `code_roots`
 repo are exactly what the panel saw). Any other difference — the mind map and every other doc included — or any git

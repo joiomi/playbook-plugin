@@ -7102,7 +7102,7 @@
     {
       "id": "PB-PANEL-FRESHNESS",
       "category": "judges-and-reviews",
-      "statement": "Panel evidence is stamped to the reviewed tree — the tree fingerprinted BEFORE the judges spawn; when the tree moves during the review the round keeps that pre-review stamp and says so in its header, and when git cannot fingerprint it before the review the round carries NO stamp rather than the post-review one (task 085). At the close (task 343, PLAN-PLAYBOOK-2.md 4.1 a) judge.md's newest impl round is FRESH — its stamp equals the tree's fingerprint now, or only the task's own records were committed since (every path the commits touch is a task record, and the fingerprint with the outer HEAD set back to the panel's commit equals the stamp), and its tamper guard was not degraded — or STALE with its cause in words (the code, a doc or the mind map changed since; the round has no stamp; git cannot fingerprint the tree now; the tamper guard was degraded); an unstamped round outside a git repository is not judged and holds nothing. When policy requires a panel (panel_required_for), a close held to the high-consequence bar (assertive, irreversible, or an unset/unclassified risk) on a carrying STALE round blocks, naming its cause and its ways out — another impl round, past the round cap one with the owner's word, or `--force --reason` — while a reversible close stays advisory; the gate's risk is the stricter of `## Risk` and the risk the task's panels recorded, and `unclassified` when the run ledger cannot be read or has a corrupt line; the receipt says FRESH or STALE and the cause; the tree fingerprinted for the verdict must be the tree at the commit (not under `--force`); `tasks work done` refuses every option but `--force` / `-f` and `--reason <why>`; no judge runs at the close; and every fingerprint leaves out `.agent` only, the same pathspecs for every caller (the owner's `fingerprint_exclude` is read nowhere).",
+      "statement": "Panel evidence is stamped to the reviewed tree — the tree fingerprinted BEFORE the judges spawn; when the tree moves during the review the round keeps that pre-review stamp and says so in its header, and when git cannot fingerprint it before the review the round carries NO stamp rather than the post-review one (task 085). At the close (task 343, PLAN-PLAYBOOK-2.md 4.1 a) judge.md's newest impl round is FRESH — its stamp equals the tree's fingerprint now, or only workflow records were committed since (every path the commits touch is a workflow record — any task's folder, the session pointers, the journal, the chat log, rulings.md — and the fingerprint with the outer HEAD set back to the panel's commit equals the stamp), and its tamper guard was not degraded — or STALE with its cause in words (the code, a doc or the mind map changed since; the round has no stamp; git cannot fingerprint the tree now; the tamper guard was degraded); an unstamped round outside a git repository is not judged and holds nothing. When policy requires a panel (panel_required_for), a close held to the high-consequence bar (assertive, irreversible, or an unset/unclassified risk) on a carrying STALE round blocks, naming its cause and its ways out — another impl round, past the round cap one with the owner's word, or `--force --reason` — while a reversible close stays advisory; the gate's risk is the stricter of `## Risk` and the risk the task's panels recorded, and `unclassified` when the run ledger cannot be read or has a corrupt line; the receipt says FRESH or STALE and the cause; the tree fingerprinted for the verdict must be the tree at the commit (not under `--force`); `tasks work done` refuses every option but `--force` / `-f` and `--reason <why>`; no judge runs at the close; and every fingerprint leaves out `.agent` only, the same pathspecs for every caller (the owner's `fingerprint_exclude` is read nowhere).",
       "owner": [
         {
           "path": "plugins/playbook/tasks/core.py",
@@ -7226,7 +7226,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Task 060 (superseding the R2/1.5.39 contract): pins that a `-z` enumeration NONZERO-RETURN failure makes the material UNAVAILABLE — an empty fingerprint that the close blocks as UNREADABLE — instead of the removed quote-blind legacy-parse fallback (which existed only because an empty fingerprint was fail-open before 060)."
+            "Task 060 (superseding the R2/1.5.39 contract): pins that a `-z` enumeration NONZERO-RETURN failure makes the material UNAVAILABLE — an empty fingerprint that the close blocks as STALE (UNREADABLE until task 343) — instead of the removed quote-blind legacy-parse fallback (which existed only because an empty fingerprint was fail-open before 060)."
           ]
         },
         {
@@ -7236,7 +7236,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Task 060: pins that a `-z` enumeration EXCEPTION (OSError) is caught and likewise yields unavailable material (empty fingerprint → UNREADABLE block), never a crash and never a weaker parse."
+            "Task 060: pins that a `-z` enumeration EXCEPTION (OSError) is caught and likewise yields unavailable material (empty fingerprint → a STALE block, \"git cannot fingerprint the tree now\"; UNREADABLE until task 343), never a crash and never a weaker parse."
           ]
         },
         {
@@ -7337,7 +7337,7 @@
             "reference": "FingerprintRobustness060.test_truncated_index_yields_empty_fingerprint_not_a_clean_tree"
           },
           "limitations": [
-            "Task 060 item 3: a corrupt index at close yields no fingerprint (rc read) and the carrying high-consequence close blocks UNREADABLE with a git-naming message; `--stale-panel-ok --reason` records the acceptance in the receipt."
+            "Task 060 item 3: a corrupt index at close yields no fingerprint (rc read) and the carrying high-consequence close blocks as STALE with a git-naming cause (UNREADABLE until task 343); `--force --reason` records the override in the receipt (`--stale-panel-ok` until then)."
           ]
         },
         {
@@ -7373,7 +7373,7 @@
           "boundary": "unit",
           "negative_control": null,
           "limitations": [
-            "Task 060 item 6: each `code_roots` scope's resolved identity is bound into the material and the tail-cert descriptor (root + clones gitignored so only identity can catch the repoint); symlink fixtures skip where os.symlink is unavailable/unprivileged."
+            "Task 060 item 6: each `code_roots` scope's resolved identity is bound into the material and the panel's snapshot descriptor (tail certification read it until task 343) (root + clones gitignored so only identity can catch the repoint); symlink fixtures skip where os.symlink is unavailable/unprivileged."
           ]
         },
         {
@@ -22558,7 +22558,7 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "What git ignores is shown live, not frozen — as before the copy, the seal does not cover ignored files.",
-        "Tail certification still reads the live tree: the close certifies the current tree and discards a PASS if it moved.",
+        "The close starts no judge (task 343; tail certification read the live tree until then): a round whose tree moved since reads STALE.",
         "No copy (the review reads the live tree, said first): inside a sandbox, without bubblewrap, a project in a subdirectory of its repository, a linked worktree, a linked `.agent`/lane/code root, a submodule or untracked nested repository, a special file, an unignored journal, over 50,000 listed files / 1 GiB / 2,000 ignored entries.",
         "That the agent does not edit the reviewed task's task.md/judge.md during its review is stated (the ready line, the template, the skill), not enforced (PLAN.md Phase B inputs, task 231 P10).",
         "Two reviews at once are allowed; nothing limits the memory or the seats' credit they use together.",

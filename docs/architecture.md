@@ -114,8 +114,7 @@ Since v1.4.3 the judge runs write-denied: the project is mounted no-write, so a 
 review start, the CLI copies what git lists — the outer repository and each `code_roots` repository, each a
 `git clone --local --mirror` with the live config, index and listed files (`tasks/review_view.py`) — into
 `<lane>/journal/review-views/`, and keeps the copy only when it is sealed by content: its fingerprint equals the
-stamp taken from the live tree, each scope's working-tree object equals the snapshot's base (for the post-panel
-judge, its delta's tree) and HEAD is the same. bubblewrap then mounts the copy read-only AT the project path
+stamp taken from the live tree, each scope's working-tree object equals the snapshot's base and HEAD is the same. bubblewrap then mounts the copy read-only AT the project path
 (`sandbox.ProjectView`), so the judges see the same paths as task.md while the agent writes the live tree; what git
 ignores is bound from the live tree at its own path, as the judges always saw it, and `.agent`'s record masks are
 built from the live `.agent`, its other entries bound back from the copy (tracked) or the live tree (ignored). The
@@ -132,8 +131,7 @@ repository, a listed special file, a scope with no commit yet or with unmerged e
 overlaps a code root, task records git ignores, an unignored journal, or
 more than 50,000 listed files / 1 GiB / 2,000 ignored entries — the review then says so first and reads
 the live tree under the guard below. A tree that keeps changing while its copy is made (three times) refuses the
-review before anything is spent. Tail certification still reads the live tree: the close certifies the current
-tree and discards a PASS if it moved.
+review before anything is spent. The close starts no judge (task 343): a round whose tree moved since is STALE.
 
 **What the guard sees, and what a degraded guard means (v1.5.45).** Its scope is
 the outer tree's porcelain state, the content hash of every dirty/untracked file,

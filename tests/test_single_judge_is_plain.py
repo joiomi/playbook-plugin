@@ -66,7 +66,7 @@ class Plain(unittest.TestCase):
         review._PB_JOURNAL_MOD = None
         review._PB_JOURNAL_LOADED = False
 
-    def impl_review(self):
+    def impl_review(self, *extra):
         prompts = []
 
         def run(agent, args, **kw):
@@ -77,7 +77,8 @@ class Plain(unittest.TestCase):
         with mock.patch.object(sandbox, "run", run), mock.patch.object(shutil, "which", lambda n: "/usr/bin/" + n), \
                 _chdir(self.d), contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
             try:
-                review.cmd_single_review("impl-review", ["042", "--backend", "agy", "--model", "gemini-3.8-flash-high"])
+                review.cmd_single_review("impl-review", ["042", "--backend", "agy", "--model", "gemini-3.8-flash-high",
+                                                         *extra])
             except SystemExit as e:
                 code = e.code or 0
         return code, out.getvalue(), prompts
@@ -98,6 +99,20 @@ class Plain(unittest.TestCase):
             self.assertNotIn("post-panel delta", prompts[0].lower())
             self.assertNotIn("POST-D6", out)
             self.assertNotIn("post-D6", out)
+
+    def test_an_option_it_does_not_read_is_refused(self):
+        """Row 33 (impl round 1, I5): `--owner-ok` and any other option the single judge does not read is refused
+        before a judge runs — never dropped in silence — and the usage line names no removed option."""
+        for extra in (("--owner-ok", "--reason", "x"), ("--bogus",)):
+            with self.subTest(extra=extra):
+                code, out, prompts = self.impl_review(*extra)
+                self.assertNotEqual(code, 0, out)
+                self.assertEqual(prompts, [], out)
+                self.assertIn("unknown option", out)
+        out = io.StringIO()
+        with contextlib.redirect_stderr(out), self.assertRaises(SystemExit):
+            review.cmd_single_review("impl-review", [])
+        self.assertNotIn("--owner-ok", out.getvalue())
 
 
 if __name__ == "__main__":

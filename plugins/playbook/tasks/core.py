@@ -3399,10 +3399,6 @@ def judge_log_names() -> "set[str]":
         n.removesuffix(".log") + ".partial.log" for n in JUDGE_LOG_BASENAMES}
 
 
-_SINGLE_TAMPER_RE = re.compile(r"^\[tamper guard\]\s+(clean|degraded)(?:\s*[—-]+\s*(.*))?$",
-                               re.MULTILINE)
-
-
 def has_review_evidence(task_file, impl_only: bool = False) -> bool:
     """True when a task carries evidence that a review actually ran: a judge.md
     or a judge-single.md (task 117/138) in its directory — the records the CLI
@@ -3623,7 +3619,8 @@ def format_verify_receipt(entries, head_sha, risk, *, reason=None, timestamp=Non
             line = (f"- **Panel tree-state:** {freshness.get('round_fp', '?')} "
                     f"vs close {freshness.get('now_fp', '?')} — {v}")
             if v == "FRESH" and freshness.get("records_only"):
-                line += " (only the task's own records changed since the round)"
+                line += (" (only workflow records changed since the round: .agent tasks, sessions, journal, "
+                         "chat log, rulings)")
             if v == "STALE":
                 line += ": " + " ".join(str(freshness.get("cause") or "").split())
             out.append(line)

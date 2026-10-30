@@ -223,8 +223,8 @@ class BackstopsForInProcessCallers(_Project):
     def test_cmd_work_refuses_each_hatch_without_its_reason(self):
         from tasks.lifecycle import cmd_work
         self.assertIn("requires --reason", self._in_process(cmd_work, ["done", "--force"]))
-        # task 138 G1-6: a flag is not a reason
-        self.assertIn("requires --reason", self._in_process(cmd_work, ["done", "--force", "--reason", "-f"]))
+        # task 138 G1-6: a flag is not a reason (task 343, impl round 1 I1: refused as a `--reason` with no value)
+        self.assertIn("--reason needs its value", self._in_process(cmd_work, ["done", "--force", "--reason", "-f"]))
         # task 343: `--stale-panel-ok` and `--owner-ok` went with the post-panel judge — refused, never ignored
         for gone in ("--stale-panel-ok", "--owner-ok"):
             self.assertIn("unknown option", self._in_process(cmd_work, ["done", gone, "--reason", "r"]), gone)

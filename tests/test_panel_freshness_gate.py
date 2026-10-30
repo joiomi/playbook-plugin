@@ -861,7 +861,7 @@ class ClosePathMatrix(unittest.TestCase):
         r = self._close(d, env)
         self.assertIn("Task 001 done.", r.stdout, r.stderr)
         self.assertIn("STALE", self._receipt(td))
-        self.assertIn("tree-state mismatch", r.stdout)  # console note kept
+        self.assertIn("the newest impl round is STALE — the code changed since the round", r.stdout)  # the note
 
     def test_assertive_stale_blocks(self):
         # T1: the real close path blocks an assertive stale close, same as

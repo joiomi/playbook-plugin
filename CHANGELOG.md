@@ -6,13 +6,14 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ### Changed
 - **The close's review evidence is FRESH or STALE** (task 343, PLAN-PLAYBOOK-2.md 4.1 a). judge.md's newest impl round
-  still describes the code — its stamp is the tree now, or only the task's own records were committed since, and its
-  tamper guard was not degraded — or it is STALE, with its cause in words (the code, a doc or the mind map changed; no
+  still describes the code — its stamp is the tree now, or only workflow records (`.agent` tasks, sessions, journal,
+  chat log, rulings) were committed since, and its tamper guard was not degraded — or it is STALE, with its cause in words (the code, a doc or the mind map changed; no
   tree stamp; git cannot fingerprint the tree; a degraded guard). A stale assertive, irreversible or unclassified close
   blocks and names its ways out: another impl round (past the round cap, one with the owner's word) or `--force
-  --reason`. A run ledger that cannot be read makes the gate's risk `unclassified`. `tasks work done` refuses any other
-  option. `tasks impl-review` is a plain single judge — the whole task, no run cap, every run reserved so it never runs
-  beside a panel. The templates put `## Pre-review` (tests, debug artifacts, the mind map) before the implementation
+  --reason`. A run ledger that cannot be read makes the gate's risk `unclassified` where an impl panel round stands.
+  `tasks work done` refuses any other option, and a `--reason` with no value. `tasks impl-review` is a plain single
+  judge — the whole task, no run cap, every run reserved so it never runs beside a panel — and refuses an option it does
+  not read. The templates put `## Pre-review` (tests, debug artifacts, the mind map) before the implementation
   review. The fingerprint leaves out `.agent` only: what tests or gates write belongs in `.gitignore`.
 - **The red receipt is simple** (task 342, PLAN-PLAYBOOK-2.md 4.1 d). `tasks red` runs each `## Test contract` row in
   the project as it is now and records it with the tree it ran on and the digest of the test files, both read for each

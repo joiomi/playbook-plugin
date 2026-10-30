@@ -34,7 +34,7 @@ sys.path.insert(0, str(PLUGIN))
 
 from tasks.core import tree_state_fingerprint  # noqa: E402
 
-ADVISORY_MARKER = "tree-state mismatch"
+ADVISORY_MARKER = "the newest impl round is STALE"     # task 343, impl round 1 I9: the note names its cause
 
 
 def impl_round(fp: str) -> str:

@@ -2759,7 +2759,7 @@ def _cmd_single_review(cmd, cmd_args):
     review_cmd = cmd
     if not cmd_args:
         print(f"Error: '{review_cmd}' requires a task number", file=sys.stderr)
-        print(f"Usage: tasks {review_cmd} <number> [--backend claude|codex|agy|grok|pi] [--model <variant>] [--prompt \"...\"] [--timeout SECONDS] [--budget USD] [--owner-ok --reason \"...\"]  (default backend: models.json default_judge, ships \"opus\" (claude); --budget is claude-only)", file=sys.stderr)
+        print(f"Usage: tasks {review_cmd} <number> [--backend claude|codex|agy|grok|pi] [--model <variant>] [--prompt \"...\"] [--timeout SECONDS] [--budget USD]  (default backend: models.json default_judge, ships \"opus\" (claude); --budget is claude-only)", file=sys.stderr)
         sys.exit(1)
 
     import subprocess
@@ -2792,6 +2792,13 @@ def _cmd_single_review(cmd, cmd_args):
         elif cmd_args[i] == "--budget" and i + 1 < len(cmd_args):
             budget_flag = cmd_args[i + 1]
             i += 2
+        elif cmd_args[i].startswith("-"):
+            # impl round 1, I5: an option this review does not read (`--owner-ok` among them, gone with the
+            # post-panel judge) is refused before anything runs, never dropped in silence
+            print(f"Error: tasks {review_cmd}: unknown option {cmd_args[i]!r} (or its value is missing) — it takes "
+                  "--backend, --model, --prompt, --timeout, --soft-timeout and --budget. Nothing ran.",
+                  file=sys.stderr)
+            sys.exit(1)
         else:
             remaining_args.append(cmd_args[i])
             i += 1

@@ -1483,7 +1483,7 @@ def render_template(num: int, title: str, task_type: str | None = None) -> str:
 
     parts = common_start + middle + common_end
     # Task 343 (plan panel P6): `## Pre-review` — the tests, the debug artifacts, the mind map — comes before the
-    # implementation review, so the round reads them: after the round a close admits only the task's own records.
+    # implementation review, so the round reads them: after the round a close admits only workflow records.
     _impl = judge_impl_section()
     if _impl in parts:
         parts.remove(pre_review())
