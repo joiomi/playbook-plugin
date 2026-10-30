@@ -1406,12 +1406,66 @@ def _brace_alternatives(t):
     return out
 
 
-def _rm_is_dangerous(values, kinds=None):
+# Task 345 (G4; plan panel K5): a variable whose value is the project or the working directory — dangerous as the
+# target itself, its `.git` / `.agent`, or a climb out of it; a subpath (`"$PWD/build"`) is not.
+_PROJECT_NAME = re.compile(r"^\$(?:\{(?:PWD|OLDPWD|CLAUDE_PROJECT_DIR)\}|(?:PWD|OLDPWD|CLAUDE_PROJECT_DIR)(?![A-Za-z0-9_]))(.*)$",
+                           re.S)
+# `${NAME:?…}` aborts when NAME is empty or unset — the case G4 is about (plan panel K6).
+_ABORTS_IF_EMPTY = re.compile(r'^"?\$\{[A-Za-z_][A-Za-z0-9_]*:\?[^}]*\}')
+_RECORDS = (".git", ".agent")
+
+
+def _glob_outside_quotes(raw):
+    """Does a token's RAW text hold a `*` outside quotes and not escaped, or start with an unquoted `~`? The shell
+    expands those wherever they stand, so `"$DEST"/*` with DEST empty is `/*` (task 345, G4). Quote rules as the
+    lexer's: `'…'`, `"…"` (a backslash escapes inside), `$'…'`, and a backslash outside quotes."""
+    if raw.startswith("~"):
+        return True
+    i, n, q = 0, len(raw), ""
+    while i < n:
+        c = raw[i]
+        if q:
+            if q == '"' and c == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if c == q:
+                q = ""
+            i += 1
+            continue
+        if c == "\\":
+            i += 2
+            continue
+        if raw.startswith("$'", i):
+            j = _quote_end(raw, i)
+            i = n if j is None else j
+            continue
+        if c in "\"'":
+            q = c
+            i += 1
+            continue
+        if c == "*":
+            return True
+        i += 1
+    return False
+
+
+def _project_rest_is_dangerous(rest):
+    """After a project name: the name itself, its `.git` / `.agent`, or a climb out with `..` (task 345, K5)."""
+    if ".." in rest.split("/"):
+        return True
+    rel = posixpath.normpath("./" + rest.lstrip("/")) if rest.strip("/") else "."
+    return rel in (".",) + _RECORDS
+
+
+def _rm_is_dangerous(values, kinds=None, raws=None):
     """`rm` recursive+force against a DANGEROUS target, decided on DEQUOTED
     tokens. A relative subdir (`./build`, `node_modules`) is NOT dangerous; `/`,
     `~`, `$HOME`, `*`, `..` or any absolute path is. Round 2 of the impl panel
     found this reading raw text, so a quoted root target — the single most
-    catastrophic command, trivially quoted — walked through every check."""
+    catastrophic command, trivially quoted — walked through every check.
+
+    Task 345 (G4): `raws` (each token's raw text, when the caller has it) adds a glob read where it stands, quoted
+    parts and all — an OR on today's reading, never in its place (plan panel K3: `rm -rf \\*` keeps blocking)."""
     if not values or _command_name(values[0]) != "rm":
         return False
     kinds = kinds or [""] * len(values)
@@ -1425,6 +1479,9 @@ def _rm_is_dangerous(values, kinds=None):
         if t.startswith("-"):
             continue
         kind = kinds[idx] if idx < len(kinds) else ""
+        raw = raws[idx] if raws is not None and idx < len(raws) else None
+        if raw is not None and not _ABORTS_IF_EMPTY.match(raw) and _glob_outside_quotes(raw):
+            return True                                # G4: `"$DEST"/*`, `'a b'/*`, `$'$D'/*`, `~"/build"`
         for cand in [t] + _brace_alternatives(t):
             if cand in ("/", "/*", "..") or cand.startswith("/") \
                     or cand.startswith(".."):
@@ -1442,6 +1499,12 @@ def _rm_is_dangerous(values, kinds=None):
                 return True
             if ("*" in cand or cand.startswith("~")) and not kind:
                 return True
+            if kind != "'":                            # task 345 (K5): `'$PWD'` is a literal name
+                m = _PROJECT_NAME.match(cand)
+                if m and _project_rest_is_dangerous(m.group(1)):
+                    return True
+            if not cand.startswith(("/", "$", "~")) and posixpath.normpath(cand) in _RECORDS:
+                return True                            # the repository and the records (E023.5, E074.1, E087)
     return False
 
 
@@ -1465,7 +1528,7 @@ def _segment_checks(seg):
         git_cfg = _git_config_overrides(values[1:])
         values = ["git"] + _git_after_globals(values[1:])
     kinds = [t[3] for t in toks]
-    if _rm_is_dangerous([head or values[0]] + values[1:], kinds):
+    if _rm_is_dangerous([head or values[0]] + values[1:], kinds, raws=[t[0] for t in toks]):
         return ("rm-rf-dangerous-target", "recursive force-delete of a dangerous path")
     if head == "git" and len(values) > 1:
         verb, args = values[1], values[2:]
@@ -2477,21 +2540,175 @@ _SHELL_VALUE_LONG = {"--rcfile", "--init-file"}
 _SOURCERS = {".", "source"}
 
 
+def _top_level_segments(line):
+    """`line` cut at `&&`, `||`, `;`, `|` and `&` outside quotes, backticks and every parenthesis, so a substitution
+    stays whole (`bash <(curl x | tr a b)`) — task 345, plan panel K1."""
+    out, start, i, n, depth, q, bt = [], 0, 0, len(line), 0, "", False
+    while i < n:
+        c = line[i]
+        if q:
+            if q == '"' and c == "\\" and i + 1 < n:
+                i += 2
+                continue
+            if c == q:
+                q = ""
+            i += 1
+            continue
+        if c == "\\":
+            i += 2
+            continue
+        if line.startswith("$'", i):
+            j = _quote_end(line, i)
+            i = n if j is None else j
+            continue
+        if c in "\"'":
+            q = c
+            i += 1
+            continue
+        if c == "`":
+            bt = not bt
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth = max(0, depth - 1)
+        elif depth == 0 and not bt:
+            hit = next((op for op in ("&&", "||", ";", "|", "&") if line.startswith(op, i)), None)
+            if hit and _is_redirection_char(line, i, hit):
+                hit = None
+            if hit:
+                out.append(line[start:i])
+                i += len(hit)
+                start = i
+                continue
+        i += 1
+    out.append(line[start:])
+    return out
+
+
+def _is_downloader_body(body):
+    b = _lex(body)
+    name = _command_name(b[0][2]) if b else None
+    return bool(name and _DOWNLOADER.match(name))
+
+
+def _is_interpreter(name):
+    """A listed interpreter, or a versioned name of one (`python3.12`, `perl5.36`) — task 345, plan panel K8."""
+    return bool(name) and (name in _INTERPRETERS or _VERSIONED_INTERPRETER.fullmatch(name) is not None)
+
+
+_VERSIONED_INTERPRETER = re.compile(r"(?:python[23]?|perl|ruby|node)[0-9][0-9.]*")
+_CODE_OPTS = frozenset(("-c", "-e", "-E", "--eval", "-p", "--print"))
+_VALUE_OPTS = frozenset(("-W", "-X", "-r", "--require", "-I", "-C"))
+
+
+def _masked_substitutions(text):
+    """(`text` with each `$( … )`, `<( … )`, `>( … )` and backtick span replaced by one placeholder word, {placeholder:
+    (its opener, its body)}) — so the lexer keeps a substitution as one token (it splits `<(curl -s url)` at its spaces). Single
+    quotes are literal; the span ends at its balancing parenthesis (task 345, K2)."""
+    out, bodies, i, n, q = [], {}, 0, len(text), ""
+    while i < n:
+        c = text[i]
+        if q == "'":
+            out.append(c)
+            if c == "'":
+                q = ""
+            i += 1
+            continue
+        if c == "\\" and i + 1 < n:
+            out.append(text[i:i + 2])
+            i += 2
+            continue
+        if not q and text.startswith("$'", i):
+            j = _quote_end(text, i)
+            j = n if j is None else j
+            out.append(text[i:j])
+            i = j
+            continue
+        if c == "'" and not q:
+            q = "'"
+            out.append(c)
+            i += 1
+            continue
+        if c == '"':
+            q = "" if q == '"' else '"'
+            out.append(c)
+            i += 1
+            continue
+        if text.startswith("$(", i) or (not q and text.startswith(("<(", ">("), i)) or c == "`":
+            opener = "`" if c == "`" else text[i:i + 2]
+            if c == "`":
+                j = text.find("`", i + 1)
+                j = n if j == -1 else j + 1
+                body = text[i + 1:j - 1]
+            else:
+                j, depth = i + 2, 1
+                while j < n and depth:
+                    depth += {"(": 1, ")": -1}.get(text[j], 0)
+                    j += 1
+                body = text[i + 2:j - 1] if depth == 0 else text[i + 2:]
+            key = f"\x01S{len(bodies)}\x01"
+            bodies[key] = (opener, body)
+            out.append(key)
+            i = j
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out), bodies
+
+
+def _interpreter_runs_a_download(seg):
+    """A non-shell interpreter whose PROGRAM is a download (task 345, E125; plan panel K2): `<(dl)` as its script
+    operand (the first word that is not an option, with no `-m` or code option before it), a code option (`-c`, `-e`,
+    `--eval`, `-p`) whose operand holds a downloader substitution, or — when the program is stdin (no script operand,
+    or `-`) — a herestring or `< <(dl)` that holds one. A download read as DATA passes: `python3 -m json.tool <(curl …)`,
+    `python3 x.py --ver "$(curl …)"`, `python3 -c 'print(1)' "$(curl …)"`."""
+    masked, bodies = _masked_substitutions(seg)
+    toks = _lex(masked)
+
+    def holds_download(raw, openers=None):
+        return any(k in raw and (openers is None or o in openers) and _is_downloader_body(b)
+                   for k, (o, b) in bodies.items())
+
+    i, n = 1, len(toks)
+    while i < n:
+        raw, value = toks[i][0], toks[i][2]
+        if raw in ("<<<", "<"):
+            i += 2
+            continue
+        if value in _CODE_OPTS:
+            return i + 1 < n and holds_download(toks[i + 1][0])
+        if value == "-m":
+            return False                               # the module is the program; what follows is its data
+        if value in _VALUE_OPTS:
+            i += 2
+            continue
+        if value == "-":
+            break                                      # the program is stdin
+        if value.startswith("-"):
+            i += 1
+            continue
+        return raw in bodies and holds_download(raw, ("<(",))     # the script operand is `<(dl)` itself
+    return any(toks[j][0] in ("<<<", "<") and holds_download(toks[j + 1][0]) for j in range(1, n - 1))
+
+
 def _shell_consumes_a_downloader(text):
     """`bash <(curl …)`, `. <(curl …)`, `bash <<< "$(curl …)"`: the syntax was
     handled by the substitution scan, but a bare downloader body classifies as
     ALLOW on its own, so the download-execute SEMANTICS slipped through while
-    `curl … | bash` blocked (impl panel round 5, opus #3)."""
+    `curl … | bash` blocked (impl panel round 5, opus #3).
+
+    Task 345: read per top-level SEGMENT, each head with its own segment's substitutions (plan panel K1:
+    `true; bash <(curl …)` passed, and `bash x.sh; diff <(curl …) b` blocked); a non-shell interpreter only when the
+    download becomes its program (E125, K2)."""
     for line in str(text).split("\n"):
-        rest, _executes, _payloads = _walk_prefix(line)
-        lexed = _lex(rest)
-        head = _command_name(lexed[0][2]) if lexed else None
-        if head not in _SHELLS and head not in _SOURCERS:
-            continue
-        for body in _command_substitutions(line) + _herestring_payloads(line):
-            b = _lex(body)
-            name = _command_name(b[0][2]) if b else None
-            if name and _DOWNLOADER.match(name):
+        for seg in _top_level_segments(line):
+            rest, _executes, _payloads = _walk_prefix(seg)
+            lexed = _lex(rest)
+            head = _command_name(lexed[0][2]) if lexed else None
+            if head in _SHELLS or head in _SOURCERS:
+                if any(_is_downloader_body(b) for b in _command_substitutions(seg) + _herestring_payloads(seg)):
+                    return True
+            elif _is_interpreter(head) and _interpreter_runs_a_download(rest):
                 return True
     return False
 
