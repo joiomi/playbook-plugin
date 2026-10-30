@@ -1408,10 +1408,11 @@ def _brace_alternatives(t):
 
 # Task 345 (G4; plan panel K5): a variable whose value is the project or the working directory — dangerous as the
 # target itself, its `.git` / `.agent`, or a climb out of it; a subpath (`"$PWD/build"`) is not.
-_PROJECT_NAME = re.compile(r"^\$(?:\{(?:PWD|OLDPWD|CLAUDE_PROJECT_DIR)\}|(?:PWD|OLDPWD|CLAUDE_PROJECT_DIR)(?![A-Za-z0-9_]))(.*)$",
+_PROJECT_NAME = re.compile(r"^\$(?:\{(?:PWD|OLDPWD|CLAUDE_PROJECT_DIR)(?::?[-=?+][^}]*)?\}"   # `${PWD:?}` (L5)
+                           r"|(?:PWD|OLDPWD|CLAUDE_PROJECT_DIR)(?![A-Za-z0-9_]))(.*)$",
                            re.S)
 # `${NAME:?…}` aborts when NAME is empty or unset — the case G4 is about (plan panel K6).
-_ABORTS_IF_EMPTY = re.compile(r'^"?\$\{[A-Za-z_][A-Za-z0-9_]*:\?[^}]*\}')
+_ABORTS_IF_EMPTY = re.compile(r'^("?)\$\{[A-Za-z_][A-Za-z0-9_]*:\?[^}]*\}\1[^$`"\']*$')   # alone (impl round 1, L8)
 _RECORDS = (".git", ".agent")
 
 
@@ -1450,11 +1451,12 @@ def _glob_outside_quotes(raw):
 
 
 def _project_rest_is_dangerous(rest):
-    """After a project name: the name itself, its `.git` / `.agent`, or a climb out with `..` (task 345, K5)."""
-    if ".." in rest.split("/"):
-        return True
+    """After a project name: the name itself, its `.git` / `.agent`, or a climb out of it (task 345, K5) — decided on
+    the normalised path, so `"$PWD/a/../b"` passes; text glued on with no `/` (`"$PWD.git"`) is another name (L6)."""
+    if rest and not rest.startswith("/"):
+        return False
     rel = posixpath.normpath("./" + rest.lstrip("/")) if rest.strip("/") else "."
-    return rel in (".",) + _RECORDS
+    return rel == ".." or rel.startswith("../") or rel in (".",) + _RECORDS
 
 
 def _rm_is_dangerous(values, kinds=None, raws=None):
@@ -1503,8 +1505,10 @@ def _rm_is_dangerous(values, kinds=None, raws=None):
                 m = _PROJECT_NAME.match(cand)
                 if m and _project_rest_is_dangerous(m.group(1)):
                     return True
-            if not cand.startswith(("/", "$", "~")) and posixpath.normpath(cand) in _RECORDS:
-                return True                            # the repository and the records (E023.5, E074.1, E087)
+            if not cand.startswith(("/", "$", "~")):
+                rel = posixpath.normpath(cand)
+                if rel in _RECORDS or rel == ".." or rel.startswith("../"):
+                    return True                        # the repository, the records, or a climb out (E023.5; L7)
     return False
 
 
@@ -1777,9 +1781,9 @@ def _pipes_downloader_into_shell(text):
             # VALUE (impl panel round 1, grok #3).
             for payload in payloads:
                 p = _lex(payload)
-                if p and _command_name(p[0][2]) in _INTERPRETERS:
+                if p and _is_interpreter(_command_name(p[0][2])):    # task 345, impl round 1 L4
                     return True
-            if head in _INTERPRETERS:
+            if _is_interpreter(head):
                 return True
         if head and _DOWNLOADER.match(head):
             seen_downloader = True
@@ -2543,7 +2547,7 @@ _SOURCERS = {".", "source"}
 def _top_level_segments(line):
     """`line` cut at `&&`, `||`, `;`, `|` and `&` outside quotes, backticks and every parenthesis, so a substitution
     stays whole (`bash <(curl x | tr a b)`) — task 345, plan panel K1."""
-    out, start, i, n, depth, q, bt = [], 0, 0, len(line), 0, "", False
+    out, start, i, n, stack, q, bt = [], 0, 0, len(line), [], "", False
     while i < n:
         c = line[i]
         if q:
@@ -2568,10 +2572,19 @@ def _top_level_segments(line):
         if c == "`":
             bt = not bt
         elif c == "(":
-            depth += 1
+            # impl round 1, L3: a substitution (`$(`, `<(`, `>(`) stays whole; a bare `( … )` group is cut like the
+            # rest of the line, so `(true; bash <(curl …))` is read segment by segment
+            inside = "sub" in stack
+            stack.append("sub" if i > 0 and line[i - 1] in "$<>" else "group")
+            if stack[-1] == "group" and not inside and not bt:
+                out.append(line[start:i])
+                start = i + 1
         elif c == ")":
-            depth = max(0, depth - 1)
-        elif depth == 0 and not bt:
+            kind = stack.pop() if stack else "group"
+            if kind == "group" and "sub" not in stack and not bt:
+                out.append(line[start:i])
+                start = i + 1
+        elif "sub" not in stack and not bt:
             hit = next((op for op in ("&&", "||", ";", "|", "&") if line.startswith(op, i)), None)
             if hit and _is_redirection_char(line, i, hit):
                 hit = None
@@ -2597,8 +2610,39 @@ def _is_interpreter(name):
 
 
 _VERSIONED_INTERPRETER = re.compile(r"(?:python[23]?|perl|ruby|node)[0-9][0-9.]*")
-_CODE_OPTS = frozenset(("-c", "-e", "-E", "--eval", "-p", "--print"))
-_VALUE_OPTS = frozenset(("-W", "-X", "-r", "--require", "-I", "-C"))
+# Each interpreter family's options (task 345, impl round 1 L1): those whose operand is CODE, a MODULE (the program is
+# then the module), or a value; a short option may be a cluster (`-Ic`) and its operand attached (`-cCODE`, `-rjson`).
+# Perl's `IMm` take only an attached value, `l0` only attached digits; anything not listed is a flag.
+_INTERP_GRAMMAR = {
+    "python": {"code": "c", "module": "m", "value": "WX", "attached": "", "digits": "",
+               "long_code": (), "long_value": ("--check-hash-based-pycs",)},
+    "perl": {"code": "eE", "module": "", "value": "", "attached": "IMmdDxiC", "digits": "l0",
+             "long_code": (), "long_value": ()},
+    "ruby": {"code": "e", "module": "", "value": "rICEF", "attached": "", "digits": "",
+             "long_code": (), "long_value": ()},
+    "node": {"code": "ep", "module": "", "value": "rC", "attached": "", "digits": "",
+             "long_code": ("--eval", "--print"),
+             "long_value": ("--require", "--conditions", "--loader", "--import", "--input-type")},
+}
+_FD_REDIR = re.compile(r"^(?:\d*|&)(?:>>|>&|>\||>|<&|<>)(.*)$", re.S)
+
+
+def _family(name):
+    for fam in ("python", "perl", "ruby", "node"):
+        if name.startswith(fam):
+            return fam
+    return None
+
+
+def _redirection(raw):
+    """(the kind, the operand glued to it) when a token is a redirection: `<<<…`, `<…` (stdin) or a descriptor one
+    (`2>/dev/null`, `>&2`, `2>&1`) — impl round 1, L2. None otherwise."""
+    if raw.startswith("<<<"):
+        return "<<<", raw[3:]
+    if raw.startswith("<") and not raw.startswith(("<&", "<>")):
+        return "<", raw[1:]
+    m = _FD_REDIR.match(raw)
+    return ("fd", m.group(1)) if m else None
 
 
 def _masked_substitutions(text):
@@ -2641,9 +2685,18 @@ def _masked_substitutions(text):
                 j = n if j == -1 else j + 1
                 body = text[i + 1:j - 1]
             else:
-                j, depth = i + 2, 1
-                while j < n and depth:
-                    depth += {"(": 1, ")": -1}.get(text[j], 0)
+                j, depth, qq = i + 2, 1, ""
+                while j < n and depth:                 # quotes kept, so a quoted `)` ends nothing (L12)
+                    ch = text[j]
+                    if qq:
+                        if ch == "\\" and qq == '"' and j + 1 < n:
+                            j += 1
+                        elif ch == qq:
+                            qq = ""
+                    elif ch in "\"'":
+                        qq = ch
+                    else:
+                        depth += {"(": 1, ")": -1}.get(ch, 0)
                     j += 1
                 body = text[i + 2:j - 1] if depth == 0 else text[i + 2:]
             key = f"\x01S{len(bodies)}\x01"
@@ -2656,7 +2709,7 @@ def _masked_substitutions(text):
     return "".join(out), bodies
 
 
-def _interpreter_runs_a_download(seg):
+def _interpreter_runs_a_download(seg, head=None):
     """A non-shell interpreter whose PROGRAM is a download (task 345, E125; plan panel K2): `<(dl)` as its script
     operand (the first word that is not an option, with no `-m` or code option before it), a code option (`-c`, `-e`,
     `--eval`, `-p`) whose operand holds a downloader substitution, or — when the program is stdin (no script operand,
@@ -2664,31 +2717,62 @@ def _interpreter_runs_a_download(seg):
     `python3 x.py --ver "$(curl …)"`, `python3 -c 'print(1)' "$(curl …)"`."""
     masked, bodies = _masked_substitutions(seg)
     toks = _lex(masked)
+    g = _INTERP_GRAMMAR.get(_family(head or (_command_name(toks[0][2]) if toks else "") or ""), None)
+    if g is None:
+        return False
 
     def holds_download(raw, openers=None):
         return any(k in raw and (openers is None or o in openers) and _is_downloader_body(b)
                    for k, (o, b) in bodies.items())
 
-    i, n = 1, len(toks)
+    i, n, stdin_download = 1, len(toks), False
     while i < n:
         raw, value = toks[i][0], toks[i][2]
-        if raw in ("<<<", "<"):
-            i += 2
+        red = _redirection(raw)
+        if red is not None:
+            kind, glued = red
+            operand = glued if glued else (toks[i + 1][0] if i + 1 < n else "")
+            if kind in ("<<<", "<") and holds_download(operand):
+                stdin_download = True
+            i += 1 if glued else 2
             continue
-        if value in _CODE_OPTS:
-            return i + 1 < n and holds_download(toks[i + 1][0])
-        if value == "-m":
-            return False                               # the module is the program; what follows is its data
-        if value in _VALUE_OPTS:
-            i += 2
+        if value.startswith("--") and value != "--":
+            name, eq, _val = value.partition("=")
+            if name in g["long_code"]:
+                return holds_download(raw) if eq else (i + 1 < n and holds_download(toks[i + 1][0]))
+            i += 2 if (name in g["long_value"] and not eq) else 1
             continue
-        if value == "-":
-            break                                      # the program is stdin
-        if value.startswith("-"):
+        if value.startswith("-") and value not in ("-", "--"):
+            letters, k, skip = value[1:], 0, 1
+            while k < len(letters):
+                ch = letters[k]
+                if ch in g["code"]:
+                    return holds_download(raw) if letters[k + 1:] else (i + 1 < n and holds_download(toks[i + 1][0]))
+                if ch in g["module"]:
+                    return False                       # the module is the program; what follows is its data
+                if ch in g["value"]:
+                    skip = 1 if letters[k + 1:] else 2
+                    break
+                if ch in g["attached"]:
+                    break                              # the rest of the cluster is its value
+                if ch in g["digits"]:
+                    k += 1
+                    while k < len(letters) and letters[k].isdigit():
+                        k += 1
+                    continue
+                k += 1
+            i += skip
+            continue
+        if value == "--":
             i += 1
+            if i < n:
+                return toks[i][0] in bodies and holds_download(toks[i][0], ("<(",))
+            break
+        if value == "-":
+            i += 1                                     # the program is stdin, named
             continue
         return raw in bodies and holds_download(raw, ("<(",))     # the script operand is `<(dl)` itself
-    return any(toks[j][0] in ("<<<", "<") and holds_download(toks[j + 1][0]) for j in range(1, n - 1))
+    return stdin_download
 
 
 def _shell_consumes_a_downloader(text):
@@ -2708,7 +2792,7 @@ def _shell_consumes_a_downloader(text):
             if head in _SHELLS or head in _SOURCERS:
                 if any(_is_downloader_body(b) for b in _command_substitutions(seg) + _herestring_payloads(seg)):
                     return True
-            elif _is_interpreter(head) and _interpreter_runs_a_download(rest):
+            elif _is_interpreter(head) and _interpreter_runs_a_download(rest, head):
                 return True
     return False
 

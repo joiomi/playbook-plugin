@@ -348,11 +348,8 @@ class HookBehavior(unittest.TestCase):
 
 
 
-class G4(unittest.TestCase):
-    """Task 345 (PLAN-PLAYBOOK-2.md 4.2 part 1, G4 — the owner's 10-27 decision): a glob outside quotes is dangerous
-    wherever it stands; the names that hold the project and the repository's own `.git` / `.agent` are dangerous
-    targets; a downloader that becomes an interpreter's PROGRAM is refused, per segment; the docs say what the code
-    does. Every benign twin is pinned beside its rule."""
+class _G4Asserts:
+    """The verdict helpers task 345's classes share."""
 
     def _v(self, cmd):
         return cg.classify_command(cmd)[0]
@@ -366,6 +363,13 @@ class G4(unittest.TestCase):
         for c in cmds:
             with self.subTest(cmd=c):
                 self.assertEqual(self._v(c), "allow", c)
+
+
+class G4(_G4Asserts, unittest.TestCase):
+    """Task 345 (PLAN-PLAYBOOK-2.md 4.2 part 1, G4 — the owner's 10-27 decision): a glob outside quotes is dangerous
+    wherever it stands; the names that hold the project and the repository's own `.git` / `.agent` are dangerous
+    targets; a downloader that becomes an interpreter's PROGRAM is refused, per segment; the docs say what the code
+    does. Every benign twin is pinned beside its rule."""
 
     def test_a_glob_outside_quotes_is_dangerous_wherever_it_stands(self):
         """Row 1 (G4; plan panel K3, K4): `"$DEST"/*` with DEST empty is `/*`."""
@@ -431,7 +435,7 @@ class G4(unittest.TestCase):
         self.assertNotIn("COMPUTED (`$(pwd)`, `$DEST`", ledger)
 
 
-class G4Round1(G4):
+class G4Round1(_G4Asserts, unittest.TestCase):
     """Task 345, impl round 1 (40a19b4be414): the spellings the first form let through (L1-L13)."""
 
     def test_each_interpreter_reads_its_own_options(self):
