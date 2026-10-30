@@ -1062,9 +1062,9 @@ class TheExitCodesTheReferenceStates(unittest.TestCase):
         "the command exits 1, names them and creates nothing": "test_a_second_bare_retro_exits_1_and_creates_nothing",
         'are refused before anything runs (exit 2, "Nothing changed.")':
             "test_each_listed_command_refuses_an_unknown_option_with_exit_2",
-        # task 209: an impl panel round past the D6 cap of the task's `## Risk`
-        "a round past the D6 cap of the task's `## Risk` is refused, exit 2, nothing spent":
-            ("tests/test_stop_rule_cli.py", "PanelCap", "test_q1_a_third_round_without_a_critical_in_round_2_is_refused"),
+        # task 344: one cap of 2 impl panel rounds, whatever the risk (task 209's per-risk cap until then)
+        "a third impl round is refused, whatever the risk, exit 2, nothing spent":
+            ("tests/test_stop_rule_cli.py", "PanelCap", "test_a_third_round_is_refused_even_after_a_critical"),
         # task 213 (impl round 1, m6): an audit whose receipt could not be recorded
         "a later section) the command exits non-zero":
             ("tests/test_audit_receipt_move.py", "ThroughTheCli", "test_a_refused_receipt_fails_the_audit"),

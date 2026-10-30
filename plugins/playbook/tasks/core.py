@@ -3064,8 +3064,8 @@ def parse_judge_rounds(text: str) -> "list[dict]":
     disease; this parser exists so verdicts are read per-round, never per-file.
 
     Task 200 (#3): every heading opens a round, as 1.6.1 reads them — a judge's lines are quoted since 1.6.2, so
-    none of them is a heading, and the rounds 1.6.1 wrote below the 1.6.2 ones stay rounds (its impl panel is still
-    the post-D6 cap's round, the impl panel round 1's I-4). A round is format 2 only in the LEADING run of marked
+    none of them is a heading, and the rounds 1.6.1 wrote below the 1.6.2 ones stay rounds (its impl panel still
+    counts as a round, the impl panel round 1's I-4). A round is format 2 only in the LEADING run of marked
     heads (`_leading_v2_heads`). Every fact of a round is read from its HEADER (the writer's lines before the first
     `═` bar; the whole round when there is none), each pattern at a line start, never from what a judge wrote."""
     heads = list(_ROUND_HEAD_RE.finditer(text))

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""The review stop rule's round cap (PHASE-B.md item 1, task 209) through the CLI: `tasks panel-review --mode impl`
-refuses a round past the D6 cap (`tasks.stop_rule`). Task 343 (PLAN-PLAYBOOK-2.md 4.1 a) took out its close half — the
+"""The review round cap (task 209; task 344: 2, whatever the risk) through the CLI: `tasks panel-review --mode impl`
+refuses a third impl round (`tasks.stop_rule`). Task 343 (PLAN-PLAYBOOK-2.md 4.1 a) took out its close half — the
 close's FRESH / STALE rule is tests/test_close_fresh_or_stale.py. The pure half is tests/test_stop_rule.py.
 
 Run: python3 -m unittest tests.test_stop_rule_cli

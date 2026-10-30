@@ -408,33 +408,25 @@ fingerprint and would read silently FRESH — declare those repos in
 A submodule (gitlink) move is listed whatever a local `diff.ignoreSubmodules` or `.gitmodules` `ignore=` says
 (`--ignore-submodules=none`), by the freshness fingerprint and the records-only check alike (task 202).
 
-### The review round cap (`review_rounds`)
+### The review round cap
 
-The owner's rule D6 (2026-09-25), made the plugin's default by his answers of 2026-10-15 (task 209, PHASE-B.md item 1).
-On in every project; the key only changes it:
+Before the close a task gets at most **2 impl panel rounds**, whatever its `## Risk` (DESIGN-PLAYBOOK-2.md §3.3
+point 12, the owner's approval of 2026-10-28; task 344). No key changes it.
 
-```json
-{
-  "review_rounds": {"reversible": 1, "assertive": 2, "irreversible": 2}
-}
-```
-
-- **Panel rounds stop by `## Risk`.** `tasks panel-review <N> --mode impl` counts the task's impl panel rounds that
-  met their quorum (`PANEL VERDICT: PASS` in the round's header, in `judge.md` and `judge-archive.md`; a
-  below-quorum round and a plan round are not rounds) and refuses one past the cap of the task's risk — exit 2,
-  before any judge is called or anything is written. The defaults are D6's; an unset or unknown risk takes the
-  larger of the assertive and irreversible caps. Where the cap is 2 or more, one round more is allowed when the
-  cap's last round counted a Critical — a `**Critical**` finding a judge wrote that is not tagged `[SETTLED]`; a cap
-  of 1 has no extension (the owner's words). Past that only `--owner-ok --reason "…"`, recorded in the panel's
-  reservation. `review_rounds` sets a cap per risk (a positive integer; anything else keeps the default, with a
-  warning). Plan panels are not capped.
-- What each impl panel ran under — the risk and the caps — is recorded with its reservation; the close takes the
-  stricter risk of them all and today's, so lowering `## Risk` after the panel frees nothing.
+- `tasks panel-review <N> --mode impl` counts the task's impl panel rounds that met their quorum (`PANEL VERDICT:
+  PASS` in the round's header, in `judge.md` and `judge-archive.md`; a round in both files once; a below-quorum round
+  and a plan round are not rounds) and refuses a third — exit 2, before any judge is called, with nothing written to
+  the task's records or the run ledger. A Critical in the second round adds no round. A record that cannot be read
+  refuses the round too. Past the cap only the owner's `--owner-ok --reason "…"`, recorded in the panel's reservation.
+  Plan panels are not capped.
+- Each impl panel's reservation records the task's risk; the close takes the stricter of them all and today's, so
+  lowering `## Risk` after the panel frees nothing (the freshness gate above).
 - Judges have a third severity: at most three `**Minor**` findings below the counted ones, never counted and stopping
   nothing; the `CAP:` line counts the Critical and Important ones only.
-- Limits: the CLI sees a Critical a judge wrote, not one the agent accepted (D6's word); `--owner-ok` is a marker an
-  agent can type, not an authentication; a task with no impl panel is out of the rule's reach (nothing to be stale
-  against).
+- Gone (task 344): the caps per risk (reversible 1, assertive 2, irreversible 2), the round more after a Critical, and
+  the `review_rounds` key — a config that still holds it is not read.
+- Limits: `--owner-ok` is a marker an agent can type, not an authentication; a task with no impl panel is out of the
+  rule's reach.
 
 ### The verify-contract guard (a change to `verify` is made visible)
 

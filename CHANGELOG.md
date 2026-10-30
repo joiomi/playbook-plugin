@@ -5,6 +5,11 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 ## [Unreleased]
 
 ### Changed
+- **One review round cap: 2** (task 344, PLAN-PLAYBOOK-2.md 4.1 a; DESIGN-PLAYBOOK-2.md §3.3 point 12). Before the
+  close a task gets at most 2 impl panel rounds, whatever its `## Risk`; a third only with the owner's `tasks
+  panel-review <N> --mode impl --owner-ok --reason "…"`. Gone: the caps per risk (reversible 1, assertive and
+  irreversible 2), the round more after a Critical and the `review_rounds` key. The close's block and `panel-review`
+  read the same cap, so a `## Risk` lowered after a panel no longer makes them disagree.
 - **The close's review evidence is FRESH or STALE** (task 343, PLAN-PLAYBOOK-2.md 4.1 a). judge.md's newest impl round
   still describes the code — its stamp is the tree now, or only workflow records (`.agent` tasks, sessions, journal,
   chat log, rulings) were committed since, and its tamper guard was not degraded — or it is STALE, with its cause in words (the code, a doc or the mind map changed; no

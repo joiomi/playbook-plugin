@@ -129,7 +129,7 @@ def _owner_fields() -> dict:
 
 
 class PanelRefused(Exception):
-    """The `gate` passed to `reserve_panel` refused the panel (task 209: the D6 round cap); the text says why."""
+    """The `gate` passed to `reserve_panel` refused the panel (task 209: the round cap — 2 since task 344); the text says why."""
 
 
 def reserve_panel(task_file, stale_after: float = 7200, *, mode: "str | None" = None,

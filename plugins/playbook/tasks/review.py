@@ -1802,7 +1802,7 @@ def _cmd_panel_review(cmd_args):
     no_mind_map = False
     bare = False
     models_flag = None  # --models CSV → explicit judge set for this run
-    owner_ok_flag = False  # --owner-ok --reason "…" (task 209: an impl round past the D6 cap)
+    owner_ok_flag = False  # --owner-ok --reason "…" (task 209; task 344: a third impl round, past the cap of 2)
     owner_ok_reason = None
     remaining_args = []
     i = 0

@@ -21715,7 +21715,7 @@
     {
       "id": "PB-REVIEW-STOP-RULE",
       "category": "risk-and-close",
-      "statement": "The review round cap (task 209, PHASE-B.md item 1; the owner's answers of 2026-10-15; task 343 left it the panel's side): `tasks panel-review <N> --mode impl` counts the task's impl panel rounds that met their quorum (`PANEL VERDICT: PASS` in the round's header, in judge.md and judge-archive.md, a round in both counted once; a below-quorum or a plan round is not one) and refuses — under the reservation's task lock, before any judge is spawned or anything written, exit 2, in its own words — a round past the cap of the task's `## Risk` (`review_rounds` in `.agent/config.json`; by default reversible 1, assertive 2, irreversible 2; an unset or unknown risk takes the larger high cap), one more where the cap is 2 or more and its last round counted a Critical a judge wrote that is not tagged `[SETTLED]`; `--owner-ok --reason` passes it and is recorded in the reservation; plan panels are not capped. The reservation records the task's risk and the caps; the close reads the stricter risk (PB-PANEL-FRESHNESS). A `**Minor**` finding is never counted.",
+      "statement": "The review round cap (task 209; task 343 left it the panel's side; task 344, PLAN-PLAYBOOK-2.md 4.1 a part 2 and DESIGN-PLAYBOOK-2.md §3.3 point 12, made it one number): `tasks panel-review <N> --mode impl` counts the task's impl panel rounds that met their quorum (`PANEL VERDICT: PASS` in the round's header, in judge.md and judge-archive.md, a round in both counted once; a below-quorum or a plan round is not one) and refuses a third — under the reservation's task lock, before any judge is called, with nothing written to the task's records or the run ledger, exit 2, in its own words — whatever the task's `## Risk` and whatever the rounds counted (no round more after a Critical); a record that cannot be read refuses too; `--owner-ok --reason` passes it and is recorded in the reservation; plan panels are not capped. No key changes the cap (`review_rounds` is read nowhere). The reservation records the task's risk, and no caps; the close reads the stricter risk (PB-PANEL-FRESHNESS) and the same cap, so its block and `panel-review` agree. A `**Minor**` finding is never counted.",
       "owner": [
         {
           "path": "plugins/playbook/tasks/stop_rule.py",
@@ -21723,11 +21723,7 @@
         },
         {
           "path": "plugins/playbook/tasks/stop_rule.py",
-          "reference": "symbol:round_criticals"
-        },
-        {
-          "path": "plugins/playbook/tasks/stop_rule.py",
-          "reference": "symbol:allowed_rounds"
+          "reference": "symbol:round_findings"
         },
         {
           "path": "plugins/playbook/tasks/stop_rule.py",
@@ -21760,31 +21756,29 @@
         {
           "type": "executable integration",
           "path": "tests/test_stop_rule_cli.py",
-          "reference": "PanelCap.test_q1_a_third_round_without_a_critical_in_round_2_is_refused",
+          "reference": "PanelCap.test_a_third_round_is_refused_even_after_a_critical",
           "boundary": "subprocess",
           "negative_control": {
             "path": "tests/test_stop_rule_cli.py",
             "reference": "PanelCap.test_q1_the_second_round_runs"
           },
-          "limitations": [
-            "Through `cmd_panel_review` with the claude adapter faked: the adapter is never called, the run ledger is byte-identical, the text says the cap and `--owner-ok`, never 'in progress'."
-          ]
+          "limitations": []
         },
         {
           "type": "executable integration",
-          "path": "tests/test_stop_rule_cli.py",
-          "reference": "PanelCap.test_q2_a_quoted_critical_in_round_2_allows_a_third",
+          "path": "tests/test_stop_rule.py",
+          "reference": "OneCap.test_a_third_round_is_refused_whatever_the_risk_or_the_criticals",
           "boundary": "subprocess",
           "negative_control": {
-            "path": "tests/test_stop_rule_cli.py",
-            "reference": "PanelCap.test_q2_a_settled_critical_does_not"
+            "path": "tests/test_stop_rule.py",
+            "reference": "OneCap.test_two_rounds_for_every_risk"
           },
           "limitations": []
         },
         {
           "type": "executable integration",
           "path": "tests/test_stop_rule_cli.py",
-          "reference": "PanelCap.test_q2_an_unquoted_critical_in_a_format_1_round_2_allows_a_third",
+          "reference": "PanelCap.test_review_rounds_changes_nothing",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
@@ -21840,7 +21834,7 @@
         {
           "type": "executable integration",
           "path": "tests/test_stop_rule_cli.py",
-          "reference": "PanelCap.test_a_reversible_task_takes_one_round",
+          "reference": "PanelCap.test_a_reversible_task_takes_two_rounds",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
@@ -21848,7 +21842,7 @@
         {
           "type": "executable integration",
           "path": "tests/test_stop_rule_cli.py",
-          "reference": "PanelCap.test_the_project_changes_the_cap",
+          "reference": "PanelCap.test_the_reservation_records_the_risk_and_no_caps",
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
@@ -21888,7 +21882,7 @@
         {
           "type": "executable unit",
           "path": "tests/test_stop_rule.py",
-          "reference": "PanelDecision.test_a_larger_cap_never_refuses_what_a_smaller_allows",
+          "reference": "Keys.test_no_code_names_the_gone_keys",
           "boundary": "unit",
           "negative_control": null,
           "limitations": []
@@ -21910,6 +21904,38 @@
           "limitations": [
             "Outside a git repository an untrusted verdict stays advisory where the freshness gate does not hold (task 209's full verify found the first form refused this close; mutant M48)."
           ]
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "PanelCap.test_a_risk_lowered_after_one_round_still_gets_the_second",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule_cli.py",
+          "reference": "PanelCap.test_an_old_rounds_cap_changes_nothing",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_stop_rule.py",
+          "reference": "OneCap.test_the_refusal_names_the_ways_out",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_close_fresh_or_stale.py",
+          "reference": "Stale.test_the_block_and_panel_review_agree_on_the_cap",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
         }
       ],
       "applicable_platforms": [
@@ -21923,14 +21949,15 @@
       "status": "verified_by_current_executable_evidence",
       "missing_evidence_or_limitation": [
         "Added by task 209 (PHASE-B.md item 1), on the nested branch `phase-b`, not released.",
-        "D6 says a Critical that was ACCEPTED; the CLI sees one a judge wrote (as task 108's run cap did).",
+        "Task 344: no round depends on a Critical any more, so D6's limit (it counted a Critical a judge wrote, not one the agent accepted) no longer applies to the cap.",
         "`--owner-ok` is an accountability marker an agent can type, not an authentication.",
         "A task with no impl panel round is out of the rule's reach (nothing to be stale against); plan panels are not capped.",
-        "What the panel recorded lives in the run ledger, an agent-writable record; a deleted ledger leaves the current config and risk only.",
-        "Measured on this workspace's records (task 209 `evidence/rounds_control.out`): the five tasks with a third impl round (164, 182, 194, 195, 199) each had a Critical in round 2; no task from 093 on exceeds what the cap allows.",
+        "What the panel recorded lives in the run ledger, an agent-writable record; a deleted ledger leaves the current risk only.",
+        "Measured on this workspace's records (task 209 `evidence/rounds_control.out`): the five tasks with a third impl round (164, 182, 194, 195, 199) each had a Critical in round 2; no task from 093 on exceeds what the cap allows. (The extension it measured went with task 344.)",
         "Impl panel round 1 (task 209) found ten ways the first form let a close through or misread the owner's words (R1-R10 in the task record); each has a test above that failed on nested b136443.",
         "Impl panel round 2 (task 209) found nine more (S1-S9); four were grave (guards that failed open: a non-STALE verdict at the cap, the newest reservation instead of all, an unstamped round outside the panel bar, the reviewed round archived); S7 was a Phase B input (not grave); the close side these findings were on went with task 343.",
-        "Impl panel round 3 (task 209, the last D6 allows) found T1-T4, fixed (T1: a reviewed round that is not judge.md's newest impl round refuses every stale close until a quorum panel or the owner; T2-T4 above); T5 — a non-guard file changed during a `--force` close that began on a FRESH panel — is a Phase B input (not grave). T1 and T5 were on the close side, which went with task 343."
+        "Impl panel round 3 (task 209, the last D6 allows) found T1-T4, fixed (T1: a reviewed round that is not judge.md's newest impl round refuses every stale close until a quorum panel or the owner; T2-T4 above); T5 — a non-guard file changed during a `--force` close that began on a FRESH panel — is a Phase B input (not grave). T1 and T5 were on the close side, which went with task 343.",
+        "Task 344 (PLAN-PLAYBOOK-2.md 4.1 a part 2): one cap of 2 replaced the caps per risk (reversible 1, assertive 2, irreversible 2), the round more after a Critical and the `review_rounds` key. A project config that still holds the key is not read and not warned about (the owner's rule of 2026-10-16: no accommodation for old projects); an old reservation's `rounds_cap` is ignored."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],
