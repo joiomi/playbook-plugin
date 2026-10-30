@@ -3086,7 +3086,9 @@ class G4Part2Round2(_G4Asserts, unittest.TestCase):
         self.assert_blocks("find $D -name '*.o' -delete", 'find "$D/" -delete', "find $D/ -delete",
                            'find "$D"/build -delete', "find ${D} -delete", "find $D -exec rm {} +")
         self.assert_passes('find "$D" -name \'*.o\' -delete', 'find "${D:?}" -name \'*.o\' -delete',
-                           'find "${D:?}"/build -delete', 'find "$D" -name x -print')
+                           'find "${D:?}"/build -delete', 'find "$D" -name x -print',
+                           # unquoted, only `${D:?}` (it aborts when empty) passes
+                           "find ${D:?} -name x -delete", "find ${D:?}/build -delete")
 
     def test_only_a_listed_rev_parse_reads_as_a_commit(self):
         """Row 16 (C3, C11): rev-parse echoes a path (`rev-parse .` prints `.`), so its options are an allow-list."""

@@ -1355,6 +1355,13 @@ def _wide_pathspec(p):
     `$(…)`, a project name). A named file or directory does not."""
     if not p:
         return False
+    # impl round 2, C4: bash expands a brace list and a parameter's default word first (`{f,.}`, `"${P:-.}"`)
+    alts = _brace_alternatives(p)
+    if alts:
+        return any(_wide_pathspec(a) for a in alts)
+    alt = _param_word_target(p)
+    if alt is not None and alt != p and _wide_pathspec(alt):
+        return True
     if p.startswith(":") or any(c in p for c in "*?"):    # a bracket alone narrows (`src/app/[locale]/x.tsx`)
         return True
     n = posixpath.normpath(p)
@@ -1367,8 +1374,19 @@ def _is_rev_substitution(p):
     when it holds a further expansion or a separator, whose result the guard cannot read."""
     m = re.fullmatch(r"\$\((.*)\)|`(.*)`", p, re.S)
     body = (m.group(1) if m and m.group(1) is not None else m.group(2) if m else "").strip()
-    return bool(re.match(r"git\b.*\brev-parse\b", body, re.S)) and not re.search(r"--(?:show|absolute|git-|path)", body) \
-        and not any(c in body for c in "$`;|&<>\n")
+    if not body or any(c in body for c in "$`;|&<>\n\"'\\"):
+        return False
+    # impl round 2, C3: an allow-list, since rev-parse echoes what is no revision (`git rev-parse .` prints `.`)
+    words = body.split()
+    i = 1
+    while i < len(words) and words[i] in ("-C", "-c"):
+        i += 2
+    if words[0] != "git" or i >= len(words) or words[i] != "rev-parse" or not words[i + 1:]:
+        return False
+    return all(_REV_PARSE_OPTS.fullmatch(w) if w.startswith("-") else not _wide_pathspec(w) for w in words[i + 1:])
+
+
+_REV_PARSE_OPTS = re.compile(r"--verify|--short(?:=\d+)?|-q|--quiet|--abbrev-ref|--symbolic-full-name")
 
 
 def _rejoin_substitutions(tokens):
@@ -1471,8 +1489,11 @@ def _git_deletes(verb, args, git_cfg):
         # A4: an empty-source refspec set by `-c remote.<name>.push=:dst` deletes `dst` too
         delete_cfg = any(re.fullmatch(r"remote\..+\.push", k) and v is not None and v.lstrip("+").startswith(":")
                          and len(v.lstrip("+")) > 1 for k, v in git_cfg)
+        # impl round 2, C9: a push option's value (`-o :main`) is no refspec
+        refspecs = [p for k, p in enumerate(args) if not p.startswith("-")
+                    and not (k > 0 and args[k - 1] in ("-o", "--push-option"))]
         if mirror_cfg or delete_cfg or _long(args, "mirror", "delete", "prune") or "d" in letters \
-                or any(p.startswith(":") and len(p) > 1 for p in paths):
+                or any(p.startswith(":") and len(p) > 1 for p in refspecs):
             return ("git-push-deletes-refs", "deletes or overwrites the remote's refs (--mirror, --delete, --prune, "
                     ":<ref>) — they cannot be restored from here")
     # impl round 1, B10: remote's subcommand is its first positional argument (`git remote -v add --mirror=push …`)
@@ -1483,6 +1504,7 @@ def _git_deletes(verb, args, git_cfg):
                  and v.lower() in ("now", "all") for k, v in git_cfg)
     if (verb == "reflog" and args and args[0] in ("expire", "delete", "drop")) \
             or (verb == "gc" and (gc_cfg or any(v.lower() in ("now", "all") for v in _long_values(args, "prune")))) \
+            or (verb == "maintenance" and gc_cfg) \
             or (verb == "prune" and not _dry_run_last(args)):
         return ("git-recovery-points", "destroys the reflog entries or unreachable objects that let lost commits be "
                 "recovered (only `git prune -n` passes)")
@@ -1519,14 +1541,24 @@ def _find_deletes_dangerously(args, kinds, raws):
             k = i + 1
             while k < len(args) and args[k] not in (";", "+"):
                 k += 1
-            text = " ".join(shlex.quote(c) for c in args[i + 1:k])
-            v = classify_command(text)
-            if v[0] == "block":
-                return (v[1], v[2])                    # `find . -exec rm -rf / \;` is `rm -rf /`
-            rest, _executes, payloads = _walk_prefix(text)
-            for cmd in [rest] + list(payloads):
-                lexed = _lex(cmd)
+            words = args[i + 1:k]
+            text = " ".join(shlex.quote(c) for c in words)
+            # impl round 2, C6: find puts each path it walks in `{}`, its start point first (`-maxdepth 0 -exec git
+            # restore {}` is `git restore .`), so the command is judged with `{}` as each start point too
+            roots = [args[s] for s in starts] or ["."]
+            for t in [text] + ([" ".join(shlex.quote(c.replace("{}", r)) for c in words) for r in roots]
+                               if any("{}" in c for c in words) else []):
+                v = classify_command(t)
+                if v[0] == "block":
+                    return (v[1], v[2])                # `find . -exec rm -rf / \;` is `rm -rf /`
+            # the deleting command read through wrappers, a payload's own wrappers too (impl round 2, C5)
+            queue, seen = [text], 0
+            while queue and seen < 8:
+                rest, _executes, payloads = _walk_prefix(queue.pop())
+                seen += 1
+                lexed = _lex(rest)
                 deletes = deletes or (bool(lexed) and _command_name(lexed[0][2]) in _FIND_DELETERS)
+                queue.extend(payloads)
             i = k + 1
             continue
         if a == "-delete":
@@ -1538,10 +1570,32 @@ def _find_deletes_dangerously(args, kinds, raws):
         root = args[s] if s is not None else "."
         if s is not None and _rm_is_dangerous(["rm", "-rf", root], ["", "", kinds[s]], raws=["rm", "-rf", raws[s]]):
             return ("find-delete-dangerous-root", "deletes everything find walks under a root you cannot afford to lose")
-        if posixpath.normpath(root) == ".":
-            return ("find-delete-dangerous-root", "deletes under the working directory, its .git and .agent included "
-                    "— name the subdirectory instead (`find src -name '*.pyc' -delete`)")
+        if s is not None and _find_root_held_in_a_variable(root, raws[s]):
+            return ("find-delete-dangerous-root", "an empty variable leaves find walking the working directory (`$D`) "
+                    "or the root (`$D/`) — quote it alone, or use `${D:?}`")
+        # impl round 2, C4: each brace alternative and the default word are start points too
+        alt = _param_word_target(root)
+        for c in [root] + _brace_alternatives(root) + ([alt] if alt is not None else []):
+            n = posixpath.normpath(c)
+            if n == ".":
+                return ("find-delete-dangerous-root", "deletes under the working directory, its .git and .agent "
+                        "included — name the subdirectory instead (`find src -name '*.pyc' -delete`)")
+            if n in _RECORDS or n.startswith(tuple(r + "/" for r in _RECORDS)):     # impl round 2, C7
+                return ("find-delete-dangerous-root", "deletes under the repository or the task records")
     return None
+
+
+def _find_root_held_in_a_variable(value, raw):
+    """Impl round 2, C2: a find start point that begins with a parameter expansion: empty and unquoted it vanishes, so
+    find walks `.` (`find $D -delete`), and with a `/` after it the walk starts at the root (`"$D/"`). find has no
+    `--preserve-root` and does not refuse an absent operand, as rm does. A quoted `"$D"` alone (empty: find refuses
+    `''`) and `${D:?}` (it aborts) pass."""
+    if re.match(r"\$\{\w+:\?", value):
+        return False
+    m = re.match(r"\$\{?\w+\}?", value)
+    if not m:
+        return False
+    return value[m.end():].startswith("/") or not (raw or "").startswith('"')
 
 
 # `git config`'s options as git 2.54 lists them (`git config <mode> -h`, and the modes it still takes as options):
