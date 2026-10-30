@@ -278,7 +278,7 @@ class Stale(_Close):
         self.assertIn('tasks panel-review 001 --mode impl --owner-ok --reason "', out)
         from tasks import stop_rule
         rounds = stop_rule.impl_rounds(self.td)
-        ok, why = stop_rule.panel_decision("assertive", rounds, stop_rule.resolve_rounds({}), task="001")
+        ok, why = stop_rule.panel_decision(rounds, task="001")          # task 344 (P3): one cap, no risk
         self.assertFalse(ok)
         for gone in ("guard_paths", "post-panel", "single judge"):
             self.assertNotIn(gone, why)

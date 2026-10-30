@@ -117,29 +117,11 @@ class PanelCap(unittest.TestCase):
         self.assertEqual(len(self.calls), 2, err + out)
         return err + out
 
-    def test_q1_a_third_round_without_a_critical_in_round_2_is_refused(self):
-        self._judge_md(rnd(rid="bbbbbbbbbbbb"), rnd(rid="aaaaaaaaaaaa"))
-        err = self._refused()
-        self.assertIn("D6 round cap", err)
-        self.assertIn("round 2 counted no Critical", err)
-        self.assertIn('tasks panel-review 001 --mode impl --owner-ok --reason "…"', err)
 
     def test_q1_the_second_round_runs(self):
         self._judge_md(rnd(rid="aaaaaaaaaaaa"))
         self._ran()
 
-    def test_q2_a_quoted_critical_in_round_2_allows_a_third(self):
-        self._judge_md(rnd(rid="bbbbbbbbbbbb", judge_lines=["**Critical** — `code.py:1` x."]), rnd(rid="aaaaaaaaaaaa"))
-        self._ran()
-
-    def test_q2_an_unquoted_critical_in_a_format_1_round_2_allows_a_third(self):
-        self._judge_md(rnd(v2=False, judge_lines=["1. **Critical** code.py:1 x"]), rnd(v2=False))
-        self._ran()
-
-    def test_q2_a_settled_critical_does_not(self):
-        self._judge_md(rnd(rid="bbbbbbbbbbbb", judge_lines=["**Critical** [SETTLED] code.py:1 x"]),
-                       rnd(rid="aaaaaaaaaaaa"))
-        self._refused()
 
     def test_q2_a_below_quorum_round_and_a_plan_round_are_not_rounds(self):
         self._judge_md(rnd(verdict="FAIL", rid="cccccccccccc"), rnd("Plan", rid="bbbbbbbbbbbb"),
@@ -179,19 +161,6 @@ class PanelCap(unittest.TestCase):
     def test_a_plan_panel_is_never_capped(self):
         self._judge_md(rnd(rid="bbbbbbbbbbbb"), rnd(rid="aaaaaaaaaaaa"))
         self._ran(mode="plan")
-
-    def test_a_reversible_task_takes_one_round(self):
-        self._task("reversible")
-        self._judge_md(rnd(rid="aaaaaaaaaaaa"))
-        self.assertIn("cap 1 for a reversible task", self._refused())
-
-    def test_the_project_changes_the_cap(self):
-        (self.d / ".agent" / "config.json").write_text(json.dumps({"review_rounds": {"assertive": 3}}),
-                                                       encoding="utf-8")
-        self._judge_md(rnd(rid="bbbbbbbbbbbb"), rnd(rid="aaaaaaaaaaaa"))
-        self._ran()
-        res = [r for r in review_ledger.read_runs(self.td) if r.get("kind") == "panel"]
-        self.assertEqual(res[0].get("rounds_cap", {}).get("assertive"), 3)
 
 
     # ── task 344: one cap of 2, whatever the risk ───────────────────────────────────────────────────────────

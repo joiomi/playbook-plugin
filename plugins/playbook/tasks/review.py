@@ -2246,17 +2246,14 @@ def _cmd_panel_review(cmd_args):
     _prid = None
     if task_file:
         from tasks import review_ledger as _pd6p
-        from tasks.core import load_config as _lc149
-        # Task 209 (PHASE-B.md item 1): an impl round past the D6 cap is refused under the reservation's lock,
-        # before anything is spent; the reservation records what the close decides by (the risk; the caps).
+        # Task 209: an impl round past the cap (task 344: 2, whatever the risk) is refused under the reservation's
+        # lock, before any judge is called; the reservation records what the close decides by (the risk).
         _gate209, _rec209 = None, None
         if review_mode == "impl":
             from tasks import stop_rule as _sr
             from tasks.core import extract_risk as _er209
-            _cfg209 = _lc149(project_path)
             _risk209 = _er209(task_file)
-            _caps209 = _sr.resolve_rounds(_cfg209)
-            _rec209 = {"risk": _risk209, "rounds_cap": _caps209}
+            _rec209 = {"risk": _risk209}
             if owner_ok_flag:
                 _rec209["owner_ok"] = " ".join(owner_ok_reason.split())
 
@@ -2266,13 +2263,13 @@ def _cmd_panel_review(cmd_args):
                 except _sr.RoundsUnreadable as _e:
                     if owner_ok_flag:
                         return ""
-                    return (f"D6 round cap: the impl rounds cannot be counted — {_e}. Nothing was spent.\n"
+                    return (f"Round cap: the impl rounds cannot be counted — {_e}. Nothing was spent.\n"
                             f'  Repair it, or let the owner decide:  tasks panel-review {task_num} --mode impl '
                             '--owner-ok --reason "…"')
-                _allowed, _msg = _sr.panel_decision(_risk209, _rs, _caps209, task=task_num)
+                _allowed, _msg = _sr.panel_decision(_rs, task=task_num)
                 if _allowed or owner_ok_flag:
                     if not _allowed:
-                        print(f"  D6 round cap passed by the owner: impl round {len(_rs) + 1} "
+                        print(f"  Round cap passed by the owner: impl round {len(_rs) + 1} "
                               f'(owner-ok: "{_rec209["owner_ok"]}")', file=sys.stderr, flush=True)
                     return ""
                 return _msg

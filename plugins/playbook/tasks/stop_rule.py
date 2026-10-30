@@ -1,21 +1,18 @@
-"""The review stop rule's round cap (PHASE-B.md item 1, task 209; task 343 left it the panel's side).
+"""The review round cap (task 209; task 343 left it the panel's side; task 344 made it one number).
 
-The owner's rule D6 (2026-09-25), made the plugin's by his answers of 2026-10-15: impl panel rounds are capped by the
-task's `## Risk` — reversible 1, assertive 2, irreversible 2 (an unset risk takes the larger of the two high caps); one
-round more only when the cap's last round counted a Critical; past that only `tasks panel-review <N> --mode impl
---owner-ok --reason "…"`. A project changes the caps with `.agent/config.json` `review_rounds`. (Task 343,
-PLAN-PLAYBOOK-2.md 4.1 a: the close side — the post-panel judge after the last round, its guard list and its
-opt-in key — is gone; the close reads only `panel_record`'s risk and the cap's state.)
+DESIGN-PLAYBOOK-2.md §3.3 point 12, approved by the owner (R17): before the close a task gets at most 2 impl panel
+rounds, whatever its risk and whatever the rounds counted; a third only with `tasks panel-review <N> --mode impl
+--owner-ok --reason "…"`. (Task 344, PLAN-PLAYBOOK-2.md 4.1 a part 2: the caps per `## Risk`, the round more after a
+Critical and the project's key for them are gone. Task 343: the close reads only `panel_record`'s risk and the cap's
+state.)
 
 A round is an impl panel round that met its quorum (`PANEL VERDICT: PASS` in its header) in judge.md or
 judge-archive.md; a below-quorum round and a plan round are not rounds. A Critical is a `**Critical**` finding
 marker (`_FINDING_RE`, matched after one leading `> ` is stripped) in a judge's text — after the round's
 first `═` bar, and in a round 1.6.2 wrote (format 2) only on a quoted line, the judges' lines being the quoted
-ones — that is not tagged `[SETTLED]`.
-LIMIT (as task 108's run cap): D6 says a Critical that was ACCEPTED; the CLI sees one a judge wrote."""
+ones — that is not tagged `[SETTLED]`; `round_findings` counts them for the run ledger."""
 import os
 import re
-import sys
 from pathlib import Path
 
 # A finding starts at the line start or right after a sentence end on the same
@@ -32,45 +29,13 @@ _TAG_AFTER_RE = re.compile(
     r"\]?\s*(?:\*\*)?\s*(?:\[file:[^\]\n]*\]\s*(?:\*\*)?\s*)?"
     r"\[(SETTLED-CONTRADICTED|SETTLED|PRE-EXISTING)\]", re.IGNORECASE)
 
-ROUNDS_KEY = "review_rounds"
-DEFAULT_ROUNDS = {"reversible": 1, "assertive": 2, "irreversible": 2}
+
+# At most this many impl panel rounds before the close (DESIGN §3.3 point 12); past it, the owner's word.
+ROUND_CAP = 2
 
 
 class RoundsUnreadable(Exception):
     """judge.md or judge-archive.md exists but cannot be read: the rounds cannot be counted."""
-
-
-def _warn(msg: str) -> None:
-    print(f"  ⚠ .agent/config.json: {msg}", file=sys.stderr, flush=True)
-
-
-def resolve_rounds(cfg: "dict | None", warn: bool = True) -> "dict[str, int]":
-    """The caps per risk: the defaults, each replaced by a positive integer the config gives."""
-    out = dict(DEFAULT_ROUNDS)
-    raw = (cfg or {}).get(ROUNDS_KEY)
-    if raw is None:
-        return out
-    if not isinstance(raw, dict):
-        if warn:
-            _warn(f"`{ROUNDS_KEY}` is not an object — the defaults apply {DEFAULT_ROUNDS}")
-        return out
-    for k in DEFAULT_ROUNDS:
-        v = raw.get(k)
-        if v is None:
-            continue
-        if isinstance(v, bool) or not isinstance(v, int) or v < 1:
-            if warn:
-                _warn(f"`{ROUNDS_KEY}.{k}` = {v!r} is not a positive integer — the default {out[k]} applies")
-            continue
-        out[k] = v
-    return out
-
-
-def cap_for(risk: str, caps: "dict[str, int]") -> int:
-    """A risk's cap; an unset or unknown risk is held to the higher of the two high-consequence caps."""
-    if risk in ("reversible", "assertive", "irreversible"):
-        return int(caps[risk])
-    return max(int(caps["assertive"]), int(caps["irreversible"]))
 
 
 def _read_rounds(task_dir: Path) -> "list[dict]":
@@ -107,7 +72,7 @@ _QUOTE = re.compile(r"^>[ \t]?")
 
 def round_findings(rnd: dict) -> "dict[str, int]":
     """The Critical and Important findings the judges of one panel round wrote (not `[SETTLED]`), each judge's line
-    counted as written — the stop rule's count (`round_criticals`) and the run ledger's (task 232) from one reading."""
+    counted as written — the run ledger's measures (task 232)."""
     counts = {"critical": 0, "important": 0}
     body = rnd.get("body") or ""
     bar = _BAR.search(body)
@@ -126,36 +91,18 @@ def round_findings(rnd: dict) -> "dict[str, int]":
     return counts
 
 
-def round_criticals(rnd: dict) -> int:
-    """The Critical findings the judges of one panel round wrote (not `[SETTLED]`)."""
-    return round_findings(rnd)["critical"]
-
-
-def allowed_rounds(risk: str, rounds: "list[dict]", caps: "dict[str, int]") -> "tuple[int, int, bool]":
-    """(cap, rounds allowed, extended): the cap, plus one when the cap's last round counted a Critical."""
-    cap = cap_for(risk, caps)
-    # the owner's words give the extension to the two-round risks only — "a 3-a doar dacă runda 2 a găsit o
-    # problemă Critical" (impl round 1, R7): a cap of 1 has none
-    extended = cap >= 2 and len(rounds) >= cap and round_criticals(rounds[cap - 1]) > 0
-    return cap, cap + (1 if extended else 0), extended
-
-
-def panel_decision(risk: str, rounds: "list[dict]", caps: "dict[str, int]", task: str = "<N>"
-                   ) -> "tuple[bool, str]":
-    """(allowed, refusal text) for one more impl panel round."""
-    cap, allowed, extended = allowed_rounds(risk, rounds, caps)
+def panel_decision(rounds: "list[dict]", task: str = "<N>") -> "tuple[bool, str]":
+    """(allowed, refusal text) for one more impl panel round: allowed while fewer than `ROUND_CAP` rounds met their
+    quorum — no risk is asked and no Critical extends it (task 344)."""
     n = len(rounds)
-    if n < allowed:
+    if n < ROUND_CAP:
         return True, ""
-    how = (f"cap {cap} for a {risk} task, plus one because round {cap} counted a Critical" if extended
-           else f"cap {cap} for a {risk} task" + (
-               "" if n < cap else f"; round {cap} counted no Critical, so no round {cap + 1}"))
     return False, (
-        f"D6 round cap: task {task} has had {n} impl panel round(s) ({how}). Nothing was spent.\n"
+        f"Round cap: task {task} has had {n} impl panel round(s); at most {ROUND_CAP} come before the close. "
+        "Nothing was spent.\n"
         "  Close on the last round (a change after it closes with `tasks work done --force --reason \"…\"`), or let "
         "the owner decide:\n"
-        f'  tasks panel-review {task} --mode impl --owner-ok --reason "…"\n'
-        f"  (the caps are `{ROUNDS_KEY}` in .agent/config.json)")
+        f'  tasks panel-review {task} --mode impl --owner-ok --reason "…"')
 
 
 _RANK = {"reversible": 0, "assertive": 1, "irreversible": 2}
@@ -175,24 +122,19 @@ def stricter(a: "str | None", b: "str | None") -> str:
 def panel_record(task_dir: Path) -> "dict | None":
     """What the task's impl panels ran under, from EVERY impl panel reservation in the run ledger (task 209's impl
     round 2, S2: the newest one alone let a below-quorum round, or a second panel after `## Risk` was lowered, replace
-    what the reviewed one recorded): the stricter risk of them all and the larger cap per risk. None when no
-    reservation recorded either (panels from before task 209). A ledger that cannot be trusted is `ledger_untrusted`'s
-    to say (the close then takes `unclassified` — task 343, plan panel P17)."""
+    what the reviewed one recorded): the stricter risk of them all. None when no reservation recorded a risk (panels
+    from before task 209). Any other field of a reservation is not read (task 344, plan panel P4). A ledger that
+    cannot be trusted is `ledger_untrusted`'s to say (the close then takes `unclassified` — task 343, P17)."""
     from tasks import review_ledger
     recs = [r for r in review_ledger.read_runs(Path(task_dir))
-            if r.get("kind") == "panel" and r.get("mode") in (None, "impl")
-            and any(k in r for k in ("risk", "rounds_cap"))]
+            if r.get("kind") == "panel" and r.get("mode") in (None, "impl") and "risk" in r]
     if not recs:
         return None
     risks = [r.get("risk") for r in recs if isinstance(r.get("risk"), str) and r.get("risk")]
     risk = None
     for x in risks:
         risk = stricter(risk, x) if risk else x
-    caps = dict(DEFAULT_ROUNDS)
-    seen = [_recorded_caps(r) for r in recs if isinstance(r.get("rounds_cap"), dict)]
-    if seen:
-        caps = {k: max(c[k] for c in seen) for k in DEFAULT_ROUNDS}
-    return {"risk": risk, "rounds_cap": caps if seen else None}
+    return {"risk": risk}
 
 
 def ledger_untrusted(task_dir: Path) -> str:
@@ -212,10 +154,5 @@ def ledger_untrusted(task_dir: Path) -> str:
     if bad:
         return f"the run ledger {review_ledger.RUNS_NAME} has {bad} corrupt line(s)"
     return ""
-
-
-def _recorded_caps(rec: "dict | None") -> "dict[str, int]":
-    raw = (rec or {}).get("rounds_cap")
-    return resolve_rounds({ROUNDS_KEY: raw} if isinstance(raw, dict) else {}, warn=False)
 
 

@@ -1078,11 +1078,9 @@ def cmd_work(cmd_args):
                 # instead (plan panel P7)
                 _cap_reached = False
                 if _freshness and _freshness.get("verdict") == "STALE":
-                    try:
-                        from tasks.core import load_config as _lc343
-                        _cap_reached = not _sr209.panel_decision(
-                            _gate_risk, _sr209.impl_rounds(task_file.parent),
-                            _sr209.resolve_rounds(_lc343(Path(project_path)), warn=False), task=prev_task)[0]
+                    try:                            # task 344: the rounds alone decide — no risk, no config
+                        _cap_reached = not _sr209.panel_decision(_sr209.impl_rounds(task_file.parent),
+                                                                 task=prev_task)[0]
                     except Exception:               # noqa: BLE001 — rounds that cannot be counted: the owner's
                         _cap_reached = True
                 _f_allowed, _f_reason = freshness_gate_decision(

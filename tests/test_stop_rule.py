@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""The review stop rule as the plugin's default (PHASE-B.md item 1, task 209): its pure half — the caps, the round
-and Critical counts, the guard list, and the two decisions (`tasks/stop_rule.py`). The CLI halves (the panel cap,
-the close) are tested in tests/test_stop_rule_cli.py.
+"""The review round cap (task 209; task 344: one cap of 2): its pure half — the round and finding counts, the cap's
+decision, the stricter risk (`tasks/stop_rule.py`). The CLI halves (the panel's gate, the close) are tested in
+tests/test_stop_rule_cli.py and tests/test_close_fresh_or_stale.py.
 
 Run: python3 -m unittest tests.test_stop_rule
 """
@@ -37,37 +37,6 @@ def rnd(mode="Impl", verdict="PASS", judge_lines=(), v2=True, rid=""):
 
 def judge_md(*rounds_newest_first):
     return "".join(rounds_newest_first)
-
-
-class Caps(unittest.TestCase):
-    def _quiet(self, fn):
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            out = fn()
-        return out, err.getvalue()
-
-    def test_the_defaults_are_the_owners_D6(self):
-        self.assertEqual(SR.resolve_rounds({}), {"reversible": 1, "assertive": 2, "irreversible": 2})
-        self.assertEqual(SR.resolve_rounds(None), {"reversible": 1, "assertive": 2, "irreversible": 2})
-
-    def test_a_project_changes_a_cap(self):
-        self.assertEqual(SR.resolve_rounds({"review_rounds": {"assertive": 3}})["assertive"], 3)
-        self.assertEqual(SR.resolve_rounds({"review_rounds": {"assertive": 3}})["irreversible"], 2)
-
-    def test_a_value_that_is_not_a_positive_integer_keeps_the_default_and_says_so(self):
-        for bad in (0, -1, "2", 2.0, True, None.__class__):
-            caps, err = self._quiet(lambda: SR.resolve_rounds({"review_rounds": {"assertive": bad}}))
-            self.assertEqual(caps["assertive"], 2, bad)
-            self.assertIn("review_rounds.assertive", err, bad)
-        caps, err = self._quiet(lambda: SR.resolve_rounds({"review_rounds": [1, 2]}))
-        self.assertEqual(caps, SR.DEFAULT_ROUNDS)
-        self.assertIn("not an object", err)
-
-    def test_an_unset_risk_takes_the_higher_high_cap(self):
-        caps = {"reversible": 1, "assertive": 2, "irreversible": 4}
-        for risk in ("unclassified", "", "bogus"):
-            self.assertEqual(SR.cap_for(risk, caps), 4, risk)
-        self.assertEqual(SR.cap_for("reversible", caps), 1)
 
 
 class Rounds(unittest.TestCase):
@@ -138,50 +107,6 @@ class Criticals(unittest.TestCase):
 
     def test_words_are_not_findings(self):
         self.assertEqual(self._one(rnd(judge_lines=["No Critical found.", "0 Critical, 2 Important"])), 0)
-
-
-class PanelDecision(unittest.TestCase):
-    def _rounds(self, *crits):
-        from tasks.core import parse_judge_rounds
-        return [parse_judge_rounds(rnd(judge_lines=(["**Critical** a.py:1 x"] * c) or ["fine"]))[0] for c in crits]
-
-    def test_assertive_takes_two_rounds(self):
-        self.assertTrue(SR.panel_decision("assertive", self._rounds(), SR.DEFAULT_ROUNDS)[0])
-        self.assertTrue(SR.panel_decision("assertive", self._rounds(0), SR.DEFAULT_ROUNDS)[0])
-        ok, text = SR.panel_decision("assertive", self._rounds(0, 0), SR.DEFAULT_ROUNDS, task="007")
-        self.assertFalse(ok)
-        self.assertIn("--owner-ok", text)
-        self.assertIn("tasks panel-review 007 --mode impl", text)
-        self.assertIn("round 2 counted no Critical", text)
-
-    def test_a_critical_in_the_caps_last_round_allows_one_more(self):
-        self.assertTrue(SR.panel_decision("assertive", self._rounds(0, 1), SR.DEFAULT_ROUNDS)[0])
-        ok, text = SR.panel_decision("assertive", self._rounds(0, 1, 3), SR.DEFAULT_ROUNDS)
-        self.assertFalse(ok)                                   # past the one extension: the owner only
-        self.assertIn("plus one because round 2 counted a Critical", text)
-
-    def test_a_critical_in_an_earlier_round_does_not_extend(self):
-        self.assertFalse(SR.panel_decision("assertive", self._rounds(1, 0), SR.DEFAULT_ROUNDS)[0])
-
-    def test_reversible_takes_one(self):
-        # impl round 1, R7 (sonnet): the owner's words give the extension only to the two-round risks
-        self.assertFalse(SR.panel_decision("reversible", self._rounds(0), SR.DEFAULT_ROUNDS)[0])
-        self.assertFalse(SR.panel_decision("reversible", self._rounds(1), SR.DEFAULT_ROUNDS)[0])
-        caps = {**SR.DEFAULT_ROUNDS, "reversible": 2}
-        self.assertTrue(SR.panel_decision("reversible", self._rounds(0, 1), caps)[0])
-
-    def test_unclassified_is_the_high_bar(self):
-        self.assertTrue(SR.panel_decision("unclassified", self._rounds(0), SR.DEFAULT_ROUNDS)[0])
-        self.assertFalse(SR.panel_decision("unclassified", self._rounds(0, 0), SR.DEFAULT_ROUNDS)[0])
-
-    def test_a_larger_cap_never_refuses_what_a_smaller_allows(self):
-        for crits in ((), (0,), (0, 0), (0, 1), (1, 1, 0), (0, 0, 0, 0)):
-            rs = self._rounds(*crits)
-            for small in (1, 2, 3):
-                for big in range(small, 5):
-                    a = SR.panel_decision("assertive", rs, {**SR.DEFAULT_ROUNDS, "assertive": small})[0]
-                    b = SR.panel_decision("assertive", rs, {**SR.DEFAULT_ROUNDS, "assertive": big})[0]
-                    self.assertTrue(b or not a, (crits, small, big))
 
 
 class OneCap(unittest.TestCase):

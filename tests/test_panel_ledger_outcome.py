@@ -5,7 +5,7 @@ a tamper void, a crash, a judge.md that could not be written — so the run ledg
 from an aborted one, and kept none of what the judges found. Now the record carries `outcome` (completed / void /
 unsaved / incomplete) and, for a completed round only, `measures`: the round id, the verdict, how many judges
 succeeded of how many seated, the quorum, and the Critical / Important findings the judges wrote — counted by the
-stop rule's own reading (`stop_rule.round_findings`, which `round_criticals` now delegates to). No reader of the
+stop rule's own reading (`stop_rule.round_findings`; `round_criticals` delegated to it until task 344). No reader of the
 ledger changes: `status` stays `done` and the new keys collide with none a reader takes. Stdlib unittest.
 """
 import contextlib
@@ -104,14 +104,14 @@ class CompletedRound(_Panel):
         self._run()
         m = self._done()["measures"]
         rounds = stop_rule._read_rounds(self.tdir)
-        self.assertEqual(stop_rule.round_criticals(rounds[0]), m["critical"])
+        self.assertEqual(stop_rule.round_findings(rounds[0])["critical"], m["critical"])   # task 344, P1
         self.assertEqual(stop_rule.round_findings(rounds[0]), {"critical": m["critical"], "important": m["important"]})
 
     def test_words_outside_the_judges_quotes_are_not_counted(self):
         # the writer's own triage frame and headings are unquoted; only a judge's quoted lines count (format 2)
         rnd = {"format": 2, "body": "═══════\n**Critical** in the writer's frame\n> 1. **Important** — a judge's\n"}
         self.assertEqual(stop_rule.round_findings(rnd), {"critical": 0, "important": 1})
-        self.assertEqual(stop_rule.round_criticals(rnd), 0)
+        self.assertEqual(stop_rule.round_findings(rnd)["critical"], 0)                   # task 344, P1
 
     def test_a_count_that_fails_keeps_the_verdict_and_says_so(self):
         """Impl round 1 (sonnet, Minor): the counts' failure must not erase the verdict fields, nor pass silently."""
