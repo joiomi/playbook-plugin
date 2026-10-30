@@ -113,7 +113,7 @@ class Criticals(unittest.TestCase):
         from tasks.core import parse_judge_rounds
         rs = parse_judge_rounds(text)
         self.assertEqual(len(rs), 1)
-        return SR.round_criticals(rs[0])
+        return SR.round_findings(rs[0])["critical"]   # task 344, P1
 
     def test_a_quoted_critical_counts_in_a_format_2_round(self):
         self.assertEqual(self._one(rnd(judge_lines=["**Critical** — `a.py:1` x.", "**Important** y"])), 1)
@@ -182,6 +182,55 @@ class PanelDecision(unittest.TestCase):
                     a = SR.panel_decision("assertive", rs, {**SR.DEFAULT_ROUNDS, "assertive": small})[0]
                     b = SR.panel_decision("assertive", rs, {**SR.DEFAULT_ROUNDS, "assertive": big})[0]
                     self.assertTrue(b or not a, (crits, small, big))
+
+
+class OneCap(unittest.TestCase):
+    """Task 344 (PLAN-PLAYBOOK-2.md 4.1 a part 2; DESIGN §3.3 point 12): at most 2 impl rounds before the close,
+    whatever the risk and whatever the rounds counted; a third only with the owner's word."""
+
+    def _rounds(self, *crits):
+        from tasks.core import parse_judge_rounds
+        return [parse_judge_rounds(rnd(judge_lines=(["**Critical** a.py:1 x"] * c) or ["fine"]))[0] for c in crits]
+
+    def test_two_rounds_for_every_risk(self):
+        """Row 1: no risk is asked — 0 and 1 rounds allow another."""
+        self.assertEqual(SR.ROUND_CAP, 2)
+        for crits in ((), (0,), (3,)):
+            self.assertTrue(SR.panel_decision(self._rounds(*crits), task="007")[0], crits)
+
+    def test_a_third_round_is_refused_whatever_the_risk_or_the_criticals(self):
+        """Row 2: two rounds — a Critical in round 2 extends nothing — and three refuse."""
+        for crits in ((0, 0), (0, 1), (1, 1), (0, 0, 0), (0, 1, 2)):
+            self.assertFalse(SR.panel_decision(self._rounds(*crits), task="007")[0], crits)
+
+    def test_the_refusal_names_the_ways_out(self):
+        """Row 11: the cap of 2, the last round's close, the owner's round — and no config key."""
+        ok, text = SR.panel_decision(self._rounds(0, 1), task="007")
+        self.assertFalse(ok)
+        self.assertIn("2 impl panel round(s)", text)
+        self.assertIn('tasks work done --force --reason "…"', text)
+        self.assertIn('tasks panel-review 007 --mode impl --owner-ok --reason "…"', text)
+        for gone in ("review_rounds", "config.json", "Critical", "reversible", "assertive"):
+            self.assertNotIn(gone, text)
+
+
+class Keys(unittest.TestCase):
+
+    def test_no_code_names_the_gone_keys(self):
+        """Row 5 (plan panel P7): no file under plugins/playbook but `.md`, `.json` and `.txt` — code, hooks, scripts
+        with no extension, `.template`, the provider mirror — names `review_rounds` or `rounds_cap`. No exemption."""
+        import re
+        gone = re.compile(r"review_rounds|rounds_cap")
+        hits = []
+        for p in sorted(PLUGIN.rglob("*")):
+            if not p.is_file() or "__pycache__" in p.parts or p.suffix in (".md", ".json", ".txt"):
+                continue
+            try:
+                text = p.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+            hits += [f"{p.relative_to(PLUGIN)}:{i}" for i, ln in enumerate(text.splitlines(), 1) if gone.search(ln)]
+        self.assertEqual(hits, [])
 
 
 class Stricter(unittest.TestCase):

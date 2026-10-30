@@ -164,7 +164,7 @@ class PanelCap(unittest.TestCase):
         self.assertEqual(len(res), 1)
         self.assertEqual(res[0].get("owner_ok"), "one more, the code changed")
         self.assertEqual(res[0].get("risk"), "assertive")
-        self.assertEqual(res[0].get("rounds_cap"), {"reversible": 1, "assertive": 2, "irreversible": 2})
+        self.assertNotIn("rounds_cap", res[0])         # task 344 (P2): the reservation records no caps
         self.assertNotIn("guard_paths", res[0])        # task 343 (plan panel P12): no guard list is recorded
 
     def test_q3_owner_ok_without_a_reason_is_refused_before_anything(self):
@@ -193,6 +193,76 @@ class PanelCap(unittest.TestCase):
         res = [r for r in review_ledger.read_runs(self.td) if r.get("kind") == "panel"]
         self.assertEqual(res[0].get("rounds_cap", {}).get("assertive"), 3)
 
+
+    # ── task 344: one cap of 2, whatever the risk ───────────────────────────────────────────────────────────
+
+    def test_a_reversible_task_takes_two_rounds(self):
+        """Row 1: the second round of a reversible task runs (it was refused: cap 1)."""
+        self._task("reversible")
+        self._judge_md(rnd(rid="aaaaaaaaaaaa"))
+        self._ran()
+
+    def test_a_third_round_is_refused_even_after_a_critical(self):
+        """Row 2 (P11): two rounds, the second with a Critical, refuse a third for every risk; three rounds with no
+        flag refuse too — exit 2, no judge, the ledger untouched."""
+        crit = ["**Critical** — `code.py:1` x."]
+        for risk in ("reversible", "assertive", "irreversible", "unclassified"):
+            with self.subTest(risk=risk):
+                self.calls.clear()
+                self._task(risk)
+                self._judge_md(rnd(rid="bbbbbbbbbbbb", judge_lines=crit), rnd(rid="aaaaaaaaaaaa"))
+                err = self._refused()
+                self.assertIn('tasks panel-review 001 --mode impl --owner-ok --reason "…"', err)
+        self.calls.clear()
+        (self.td / review_ledger.RUNS_NAME).unlink(missing_ok=True)
+        self._task("assertive")
+        self._judge_md(rnd(rid="cccccccccccc", judge_lines=crit), rnd(rid="bbbbbbbbbbbb", judge_lines=crit),
+                       rnd(rid="aaaaaaaaaaaa"))
+        self._refused()
+
+    def test_review_rounds_changes_nothing(self):
+        """Row 4: a config that raises every cap still has the third round refused, and nothing names the key."""
+        (self.d / ".agent" / "config.json").write_text(json.dumps(
+            {"review_rounds": {"reversible": 5, "assertive": 5, "irreversible": 5}}), encoding="utf-8")
+        self._judge_md(rnd(rid="bbbbbbbbbbbb"), rnd(rid="aaaaaaaaaaaa"))
+        err = self._refused()
+        self.assertNotIn("review_rounds", err)
+
+    def test_the_reservation_records_the_risk_and_no_caps(self):
+        """Row 6: the panel's reservation keeps what the close reads — the risk — and no caps."""
+        self._judge_md(rnd(rid="aaaaaaaaaaaa"))
+        self._ran()
+        res = [r for r in review_ledger.read_runs(self.td) if r.get("kind") == "panel"]
+        self.assertEqual(len(res), 1)
+        self.assertEqual(res[0].get("risk"), "assertive")
+        self.assertNotIn("rounds_cap", res[0])
+
+    def test_a_risk_lowered_after_one_round_still_gets_the_second(self):
+        """Row 7, the panel's half (P8; 343's I6): an assertive task's round, then `## Risk` lowered to reversible —
+        the close offers another impl round (its gate risk stays assertive), and `panel-review` must run it."""
+        review_ledger.append_run(self.td, {"id": "p0", "kind": "panel", "mode": "impl", "status": "done",
+                                           "risk": "assertive"})
+        self._judge_md(rnd(rid="aaaaaaaaaaaa"))
+        self._task("reversible")
+        self._ran()
+
+    def test_an_old_rounds_cap_changes_nothing(self):
+        """Row 10 (P4): a 1.6.x reservation's `rounds_cap` decides nothing — one and two rounds give the same answer
+        with `{reversible: 1}`, `{assertive: 5}` or no field."""
+        for cap in (None, {"reversible": 1}, {"assertive": 5}):
+            for n, runs in ((1, True), (2, False)):
+                with self.subTest(cap=cap, rounds=n):
+                    (self.td / review_ledger.RUNS_NAME).unlink(missing_ok=True)
+                    self.calls.clear()
+                    rec: dict = {"id": "p0", "kind": "panel", "mode": "impl", "status": "done", "risk": "assertive"}
+                    if cap is not None:
+                        rec["rounds_cap"] = cap
+                    review_ledger.append_run(self.td, rec)
+                    self._judge_md(*[rnd(rid=c * 12) for c in "ba"[2 - n:]])
+                    if runs:
+                        self._ran()
+                    else:
+                        self._refused()
 
 
 if __name__ == "__main__":

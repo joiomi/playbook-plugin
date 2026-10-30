@@ -283,6 +283,29 @@ class Stale(_Close):
         for gone in ("guard_paths", "post-panel", "single judge"):
             self.assertNotIn(gone, why)
 
+    def test_the_block_and_panel_review_agree_on_the_cap(self):
+        """Row 7, the close's half (P8; 343's I6): an assertive round, `## Risk` lowered to reversible, the code
+        changed — the block offers another impl round, which the panel's own decision allows; with two rounds both
+        name the owner's round."""
+        from tasks import review_ledger, stop_rule
+        for n in (1, 2):
+            with self.subTest(rounds=n):
+                self.setup_task(rounds=n)
+                review_ledger.append_run(self.td, {"id": "p0", "kind": "panel", "mode": "impl", "status": "done",
+                                                   "risk": "assertive"})
+                t = self.task().replace("## Risk\nassertive", "## Risk\nreversible")
+                (self.td / "task.md").write_text(t, encoding="utf-8")
+                (self.d / "code.py").write_text("x = 2\n", encoding="utf-8")
+                r, out = self.close()
+                self.assertIn("Blocked: cannot close task 001", out)
+                ok, why = stop_rule.panel_decision(stop_rule.impl_rounds(self.td), task="001")
+                if n == 1:
+                    self.assertIn("another impl round: tasks panel-review 001 --mode impl", out)
+                    self.assertTrue(ok, why)
+                else:
+                    self.assertIn('tasks panel-review 001 --mode impl --owner-ok --reason "', out)
+                    self.assertFalse(ok)
+
     def _single_only(self, risk, ledger_text):
         """A task with no saved panel round, one single-judge impl review, and the given run ledger."""
         self.setup_task(risk, cfg={"panel_required_for": ["assertive", "irreversible"]})
