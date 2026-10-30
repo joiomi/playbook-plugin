@@ -1538,8 +1538,9 @@ def _rm_is_dangerous(values, kinds=None, raws=None):
                 return True
             if ("*" in cand or cand.startswith("~")) and not kind:
                 return True
-            # task 345 (K5): `'$PWD'` is a literal name — read where the `$` stands (impl round 3, N3: `$PWD'/'`)
-            if not (raw.startswith("'") if raw is not None else kind == "'"):
+            # task 345 (K5): `'$PWD'` is a literal name — only when its `$` stands in single quotes, the token starting
+            # with `'$` (impl round 3, N3: `$PWD'/'`; post-panel run 1, P2: `''"$PWD"`); any other spelling expands
+            if not (raw.startswith("'$") if raw is not None else kind == "'"):
                 pt = _project_target(cand)
                 if pt is not None and pt[0] == "param" and _project_rest_is_dangerous(pt[1]):
                     return True
@@ -2659,16 +2660,19 @@ _VERSIONED_INTERPRETER = re.compile(r"(?:python[23]?|perl|ruby|node)[0-9][0-9.]*
 # Each interpreter family's options (task 345, impl rounds 1-2): those whose operand is CODE, one that LOADS a file as
 # code (node / ruby `-r`, node `--import`: M9), a MODULE (the program is then the module), or a value; perl's `IMmDxiC`
 # take an attached value (perl's `I` a separate one too: M4) and its `d` only with `:` (M10); `l0` attached digits;
-# anything not listed is a flag. A family that runs every code option (perl, ruby: M7) is read past the first.
+# anything not listed is a flag. A family that runs every code option (perl, ruby: M7) is read past the first; one
+# whose code letters take no attached code (node: `-pe`) has `code_cluster`.
 _INTERP_GRAMMAR = {
     "python": {"code": "c", "load": "", "module": "m", "value": "WX", "attached": "", "digits": "", "debug": "",
-               "multi_code": False, "long_code": (), "long_load": (), "long_value": ("--check-hash-based-pycs",)},
+               "multi_code": False, "code_cluster": False, "long_code": (), "long_load": (),
+               "long_value": ("--check-hash-based-pycs",)},
     "perl": {"code": "eE", "load": "", "module": "", "value": "I", "attached": "MmDxiC", "digits": "l0", "debug": "d",
-             "multi_code": True, "long_code": (), "long_load": (), "long_value": ()},
+             "multi_code": True, "code_cluster": False, "long_code": (), "long_load": (), "long_value": ()},
     "ruby": {"code": "e", "load": "r", "module": "", "value": "ICEF", "attached": "", "digits": "", "debug": "",
-             "multi_code": True, "long_code": (), "long_load": (), "long_value": ()},
+             "multi_code": True, "code_cluster": False, "long_code": (), "long_load": (), "long_value": ()},
     "node": {"code": "ep", "load": "r", "module": "", "value": "C", "attached": "", "digits": "", "debug": "",
-             "multi_code": False, "long_code": ("--eval", "--print"), "long_load": ("--require", "--import", "--loader", "--experimental-loader"),
+             "multi_code": False, "code_cluster": True, "long_code": ("--eval", "--print"),
+             "long_load": ("--require", "--import", "--loader", "--experimental-loader"),
              "long_value": ("--conditions", "--input-type")},
 }
 _STDIO_REDIR = re.compile(r"^(\d*|&)(<<<|<>|<&|<|>>|>&|>\||&>>|&>|>)(.*)$", re.S)   # not `_REDIR` (that is the device rule's)
@@ -2824,7 +2828,9 @@ def _interpreter_runs_a_download(seg, head=None):
             while k < len(letters):
                 ch = letters[k]
                 if ch in g["code"] or ch in g["load"]:
-                    if letters[k + 1:] and not all(c in g["code"] for c in letters[k + 1:]):   # `-pe` (N4)
+                    # node's `-pe` (N4): its code letters take no attached code, so the operand is the next word; perl
+                    # and ruby take the cluster's rest as the code (post-panel run 1, P3: `perl -ee -e …`)
+                    if letters[k + 1:] and not (g["code_cluster"] and all(c in g["code"] for c in letters[k + 1:])):
                         if holds(raw):
                             return True
                     else:
@@ -2878,9 +2884,15 @@ def _shell_consumes_a_downloader(text):
     Task 345: read per top-level SEGMENT, each head with its own segment's substitutions (plan panel K1:
     `true; bash <(curl …)` passed, and `bash x.sh; diff <(curl …) b` blocked); a non-shell interpreter only when the
     download becomes its program (E125, K2)."""
-    # impl round 3, N6: a continued line is one line, and the text is cut as a whole, so a substitution that spans
-    # lines (`python3 <(⏎ curl …⏎ )`) stays with its command
-    for seg in _top_level_segments(str(text).replace("\\\n", " ")):
+    # impl round 3, N6: the text is cut as a whole, so a substitution that spans lines (`python3 <(⏎ curl …⏎ )`) stays
+    # with its command. It is read twice, and either reading blocks (post-panel run 1, P1): as it stands, where an
+    # escaped backslash ends no line (`printf x \\⏎python3 <(curl …)`), and with each continuation removed as bash
+    # removes it, with no space (`python3 \⏎<(curl …)`, `pyth\⏎on3`)
+    text = str(text)
+    segs = _top_level_segments(text)
+    if "\\\n" in text:
+        segs += _top_level_segments(text.replace("\\\n", ""))
+    for seg in segs:
         rest, _executes, _payloads = _walk_prefix(seg)
         lexed = _lex(rest)
         head = _command_name(lexed[0][2]) if lexed else None
