@@ -4269,6 +4269,78 @@
           "boundary": "subprocess",
           "negative_control": null,
           "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4Part2.test_a_whole_tree_discard_blocks",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4Part2.test_a_targeted_restore_and_a_branch_switch_pass",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4Part2.test_dropping_a_stash_blocks",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4Part2.test_a_forced_branch_delete_blocks",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4Part2.test_a_push_that_deletes_remote_refs_blocks",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4Part2.test_destroying_recovery_points_blocks",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4Part2.test_find_deleting_under_a_dangerous_root_blocks",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4Part2.test_a_shortened_long_option_is_read",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
+        },
+        {
+          "type": "executable integration",
+          "path": "tests/test_command_guard.py",
+          "reference": "G4Part2.test_a_wrapper_reaches_the_new_rules",
+          "boundary": "subprocess",
+          "negative_control": null,
+          "limitations": []
         }
       ],
       "applicable_platforms": [
@@ -4293,7 +4365,7 @@
         "Task 077 impl panel round 3 produced 31 more defects on the round-2 implementation (25 under-blocks, 6 over-blocks), all confirmed by execution and all fixed. Two of the five seats reported they could not construct any under-block while three others found twelve between them — that disagreement is the honest description of this layer: the shell surface is large, and 'no judge found one' is not evidence that none exists. The interlock is a heuristic that fails toward caution, not a shell parser; the OS sandbox remains the only deterministic layer.",
         "Task 077 impl panel round 4 produced 22 more defects (16 under-blocks, 6 over-blocks), all confirmed by execution and all fixed. STOPPING RULE, stated rather than assumed: rounds 1-3 each invalidated an ARCHITECTURAL assumption (the command position was unlexed; the rules were unlexed; the separators were unlexed). Round 4 found one architectural regression of mine (the argv early-return) and otherwise INSTANCES - one more wrapper's arity, one more escape form. The task stops when a round returns only instances, with the residual surface disclosed here rather than implied to be empty: this is a heuristic interlock over shell text, not a shell parser, and the OS sandbox remains the only deterministic layer.",
         "Task 077 ARCHITECTURAL BOUND, pinned by `TheArchitecturalBound.test_a_computed_command_name_is_not_resolvable`: a command NAME that only exists after the shell evaluates something is out of reach for a static classifier — `alias x='<cmd>'; x`, `${X:-rm} …`, `$(echo rm) …`. These need the alias table, the variable environment, or the result of running an inner command. No amount of further parsing closes them; the OS sandbox is the layer that does.",
-        "Task 077 SCOPE BOUND, pinned by `TheArchitecturalBound.test_a_different_RULE_FAMILY_is_out_of_scope_not_covered`: the interlock answers 'where is the command and is it one of the enumerated dangerous forms', not 'is this act destructive'. Measured as ALLOWED and disclosed rather than implied: an interpreter running a destructive command inside its own language (`perl -e 'system(…)'`, `python3 -c 'os.system(…)'`), a remote command (`ssh host …`), a container bind mount, and other deletion tools (`find -delete`, `rsync --delete`, `shred`). Each would be a NEW rule family with its own false-positive profile, and adding one is a scope decision for the owner, not a bug fix.",
+        "Task 077 SCOPE BOUND, pinned by `TheArchitecturalBound.test_a_different_RULE_FAMILY_is_out_of_scope_not_covered`: the interlock answers 'where is the command and is it one of the enumerated dangerous forms', not 'is this act destructive'. Measured as ALLOWED and disclosed rather than implied: an interpreter running a destructive command inside its own language (`perl -e 'system(…)'`, `python3 -c 'os.system(…)'`), a remote command (`ssh host …`), a container bind mount, and other deletion tools (`rsync --delete`, `shred`; `find … -delete` joined the rules in task 346). Each would be a NEW rule family with its own false-positive profile, and adding one is a scope decision for the owner, not a bug fix.",
         "Task 077 impl panel round 5 produced 14 defects, all confirmed and fixed. The signal CHANGED in this round and that is what ended the task: rounds 1-3 each showed the DESIGN was wrong; rounds 4 and 5 found regressions introduced by my own earlier fixes (the argv early-return, the echo mask, the computed-target rule) plus instances. That is an argument for fewer edits to this module, not for more review rounds — each further round of edits to the masking engine and the target rule has itself produced a regression. The residual surface is disclosed in the bounds above rather than implied to be empty.",
         "Task 085 (measured), narrowed by task 110: a target that only arrives at run time is not seen — on stdin to `xargs` (`echo / | xargs rm -rf`), or read by `parallel` from a FILE (`::::`, `-a FILE`; pinned by `ParallelInputArgumentsReachThePayload.test_the_bound_input_from_a_file_is_not_known`). Literal `:::` arguments are now composed into each job (task 110), so `parallel 'rm -rf {}' ::: /` blocks.",
         "Task 085 round 3 (U8): a globbed command name that matches a binary on disk is resolved only at run time, like the computed names already pinned in TheArchitecturalBound — added there.",
@@ -4312,7 +4384,8 @@
         "Task 199, the single judge after the last round (run 1, codex, FAIL — 2 Critical, 3 Important), each run in bash or git with GIT_EDITOR unset: `printf '…' >s.sh; eval 'bash s.sh'` (eval after a written file), `>&s.sh` (bash's `>word 2>&1` form), `git commit -qe` (an editor option inside a cluster), `git --namespace commit -c core.editor=… commit` (the first `commit` word was a value) — regressions, fixed; and `echo 'BASH_CMDS is …'` read as a rebinding (an over-block), fixed: `git commit` now passes only with an allowlist of options, the subcommand found by its position, `BASH_CMDS`/`BASH_ALIASES`/`PATH` only as assignments.",
         "Task 199, the single judge after the last round (run 2, codex, FAIL — 2 Critical, 2 Important), each run in bash with a harmless command: a line continuation inside an assignment's name (`PA\\⏎TH=…`, refused by 1.6.1), a quoted write target (`>'s.sh' /dev/null` was read as a write to /dev/null), a `$'E\\qOF'` delimiter (bash keeps `\\q`) — regressions — and `bash <<< '…' 2>/dev/null`, `bash <<< $'…'` (older); and, by my own probe after it, a variable set without an `=` word (`read PATH`, `printf -v PATH`, `getopts`, `eval 'read …'`) and a file python writes run on a LATER line (`sh s.sh`) or by a background job beside it — regressions, refused by 1.6.1. Fixed by the owner's ruling of 19:07, prudence over precision: no body is removed from a command that sets a variable, writes a file another command may run or quotes its delimiter in `$'…'`/`$\"…\"`; the write targets are read as written; the herestring's operand is its first word, decoded. The ruling of 19:38 narrowed the write clause after the corpus showed it refused a file only written (`cat > $S/f <<'EOF'` holding a backticked dangerous command; 1.6.1 allows it). Cost, accepted: an assignment anywhere in the command (`export X=…; python3 - <<'PY'`, `PYTHONPATH=. python3 - …`) keeps the body, the 1.6.1 behaviour. No judge read these fixes (the ruling of 19:07: close without another run).",
         "2026-10-16 (task 221): the parked local-time item above is moot — no reader compares the shell log's stamps with UTC any more; the task windows come from the CLI's journal records, stamped UTC.",
-        "Task 345 (G4, PLAN-PLAYBOOK-2.md 4.2): a glob outside quotes is read wherever it stands (`\"$DEST\"/*`), the project's names (`$PWD`, `$OLDPWD`, `$CLAUDE_PROJECT_DIR`) and its `.git` / `.agent` are dangerous targets, read normalised, and a download a shell reads by substitution is judged per top-level segment, an interpreter's only when it becomes the program. Stated limits: a plain variable's value; a wrapper that re-quotes its payload (`env -S`); `\"$X\"/.git` for another variable; `bun`, `deno`, `php`; a download in an unquoted heredoc's body that an interpreter runs as its program (`python3 - <<EOF`). Measured on 81,231 real commands (3,661 the rules can touch): 7 verdicts changed — 1 false alarm removed, 3 intended blocks, 2 texts quoting G4's form in an unquoted heredoc (an existing fail-safe class), 1 quoted heredoc's text in a compound line holding an unbalanced substitution opener (stated in configuration.md)."
+        "Task 345 (G4, PLAN-PLAYBOOK-2.md 4.2): a glob outside quotes is read wherever it stands (`\"$DEST\"/*`), the project's names (`$PWD`, `$OLDPWD`, `$CLAUDE_PROJECT_DIR`) and its `.git` / `.agent` are dangerous targets, read normalised, and a download a shell reads by substitution is judged per top-level segment, an interpreter's only when it becomes the program. Stated limits: a plain variable's value; a wrapper that re-quotes its payload (`env -S`); `\"$X\"/.git` for another variable; `bun`, `deno`, `php`; a download in an unquoted heredoc's body that an interpreter runs as its program (`python3 - <<EOF`). Measured on 81,231 real commands (3,661 the rules can touch): 7 verdicts changed — 1 false alarm removed, 3 intended blocks, 2 texts quoting G4's form in an unquoted heredoc (an existing fail-safe class), 1 quoted heredoc's text in a compound line holding an unbalanced substitution opener (stated in configuration.md).",
+        "Task 346 (G4 part 2, PLAN-PLAYBOOK-2.md 4.2): the git and find forms that delete what this machine cannot bring back block — a whole-tree discard (`git checkout -- .`, a wide pathspec, `checkout -f`, `restore .` unless `--staged` alone, `switch --discard-changes`), `git stash drop` / `clear`, `git branch -D`, a push that deletes the remote's refs (`--mirror`, `--delete`, `:ref`, `--prune`, their `-c` overrides) and `git remote add --mirror`, a lost recovery point (`reflog expire` / `delete` / `drop`, `gc --prune=now`, `prune`), and a `find` that deletes under a dangerous root or the working directory unless narrowed before it deletes; git's and rm's long options are read shortened too, as an OR on the exact names. Stated limits: `git rm -f`, `git update-ref -d`, `branch -M` / `-C`, `checkout -B` / `switch -C`, `worktree remove --force`, history rewriting, `gc --prune=<a near date>`, paths fed by `xargs`, `fd`, and a find `-exec` shell that deletes what find passes it. Measured on 81,559 real commands (5,696 the rules can touch): 78 verdicts changed, none from block to allow — 73 intended blocks (whole-tree discards, mostly of throwaway copies, as `reset --hard` already is; remote branch deletions; forced branch deletes; stash drops; find cleanups under /tmp, as `rm -rf /tmp/x` already is), 4 computed pathspecs (fail safe) and 1 text quoting `find -delete` in backticks (an existing fail-safe class)."
       ],
       "follow_up_phases": [],
       "required_live_evidence": [],

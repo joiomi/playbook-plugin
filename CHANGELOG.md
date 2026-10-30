@@ -5,6 +5,15 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 ## [Unreleased]
 
 ### Changed
+- **G4 part 2: the command guard stops the git and find forms that delete** (task 346, PLAN-PLAYBOOK-2.md 4.2; four
+  audits raised them). A whole-tree discard (`git checkout -- .`, a glob or computed pathspec, `checkout -f`,
+  `restore .`, `switch --discard-changes`), `git stash drop` / `clear`, `git branch -D`, a push that deletes the
+  remote's refs (`--mirror` in any spelling, `--delete`, `origin :main`, `--prune`, their `-c` overrides),
+  `git remote add --mirror`, `git reflog expire` / `delete` / `drop`, `git gc --prune=now`, `git prune`, and a `find`
+  that deletes under a dangerous root or the working directory (`find . -delete`, `find . -delete -name x`) unless a
+  literal name test comes first (`find . -name '*.pyc' -delete` passes). git's and rm's long options are read
+  shortened too (`reset --h`, `push --m`, `rm --rec --forc`). Measured on 81,559 real commands: 78 verdicts changed,
+  none from block to allow.
 - **G4: the command guard reads a glob outside quotes** (task 345, PLAN-PLAYBOOK-2.md 4.2; the owner's 10-27
   decision). `rm -rf "$DEST"/*` — `rm -rf /*` with `DEST` empty — blocks, as do `"foo"/*` and `~"/build"`; an escaped
   glob and `"${DEST:?}"/*` pass. The project's names (`$PWD`, `$OLDPWD`, `$CLAUDE_PROJECT_DIR`) and its `.git` / `.agent`
