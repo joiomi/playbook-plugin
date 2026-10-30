@@ -347,7 +347,7 @@ class RecordsOnlyDelta(unittest.TestCase):
         self._commit_records(d)
         r = self._close(d, env)
         self.assertIn("Task 001 done.", r.stdout, r.stdout + r.stderr)
-        self.assertIn("only the task's own records changed since the round", self._receipt(td))
+        self.assertIn("only workflow records changed since the round", self._receipt(td))
 
     def test_a_commit_that_also_touches_code_still_blocks(self):
         d, td, env = self._setup()
