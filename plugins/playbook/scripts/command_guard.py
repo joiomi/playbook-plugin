@@ -1348,6 +1348,10 @@ def _paths(args):
     return [p for p in args if not p.startswith("-")], []
 
 
+# not `_EXPANSION`: that name is the substitution scan's, defined further down
+_PATH_EXPANSION = re.compile(r"\$\{[^}]*\}|\$\(\([^)]*\)\)|\$\([^)]*\)|\$\w+|\$[@*#?$!0-9-]|`[^`]*`")
+
+
 def _wide_pathspec(p):
     """Task 346 (plan panel A5): may a pathspec reach the whole work tree, or more of it than a named path? `.` or a
     climb out, a magic pathspec (`:/`, `:(top)`, `:!x`), a glob — git's matches across `/`, so `'**'`, `'*.py'` and
@@ -1355,14 +1359,21 @@ def _wide_pathspec(p):
     `$(…)`, a project name). A named file or directory does not."""
     if not p:
         return False
-    # impl round 2, C4: bash expands a brace list and a parameter's default word first (`{f,.}`, `"${P:-.}"`)
+    # impl round 2, C4: bash expands a brace list and a parameter's default word first (`{f,.}`, `"${P:-.}"`); a nested
+    # list is not modelled (post-panel run 2, E4), and a pathspec whose expansions, left empty, give `.` is wide (E2)
+    if _nested_braces(p):
+        return True
+    bare = _PATH_EXPANSION.sub("", p)
+    if bare != p and bare and (posixpath.normpath(bare) in (".", "..") or posixpath.normpath(bare).startswith("../")):
+        return True
     alts = _brace_alternatives(p)
     if alts:
         return any(_wide_pathspec(a) for a in alts)
     alt = _param_word_target(p)
     if alt is not None and alt != p and _wide_pathspec(alt):
         return True
-    if p.startswith(":") or any(c in p for c in "*?"):    # a bracket alone narrows (`src/app/[locale]/x.tsx`)
+    # a glob read outside expansions (`${D:?}` holds a `?` that is no glob); a bracket alone narrows (`[locale]`)
+    if p.startswith(":") or any(c in bare for c in "*?"):
         return True
     n = posixpath.normpath(p)
     return n in (".", "..") or n.startswith("../") or _rm_is_dangerous(["rm", "-rf", p])
@@ -1552,8 +1563,9 @@ def _find_deletes_dangerously(args, kinds, raws):
             text = " ".join(shlex.quote(c) for c in words)
             # impl round 2, C6: find puts each path it walks in `{}`, its start point first (`-maxdepth 0 -exec git
             # restore {}` is `git restore .`), so the command is judged with `{}` as each start point too
-            # post-panel run 1, D2: each value a start point may take, the elided `.` of an empty `$D` among them
-            roots = [c for s in starts for c in _start_candidates(args[s], raws[s].startswith('"'))] or ["."]
+            # post-panel runs 1-2, D2 and E3: a computed start point may be no word at all, and find then walks `.`
+            roots = [c for s in starts for c in [args[s]] + _brace_alternatives(args[s])
+                     + (["."] if _computed_start(args[s]) or _nested_braces(args[s]) else [])] or ["."]
             for t in [text] + ([" ".join(shlex.quote(c.replace("{}", r)) for c in words) for r in roots]
                                if any("{}" in c for c in words) else []):
                 v = classify_command(t)
@@ -1578,13 +1590,14 @@ def _find_deletes_dangerously(args, kinds, raws):
         root = args[s] if s is not None else "."
         if s is not None and _rm_is_dangerous(["rm", "-rf", root], ["", "", kinds[s]], raws=["rm", "-rf", raws[s]]):
             return ("find-delete-dangerous-root", "deletes everything find walks under a root you cannot afford to lose")
-        # impl round 2, C2 and C4; post-panel run 1, D1 and D3: every value the start point may take — each brace
-        # alternative and default word, followed to a bounded depth, and the value with a leading expansion empty
-        cands = _start_candidates(root, (raws[s] if s is not None else "").startswith('"'))
+        # post-panel run 2, E1-E4: a start point the guard cannot read blocks — an expansion (other than a
+        # `${X:?…}` guard) may be empty and leave find walking `.` (`$D`, `"${a[@]}"`, `"$@"`) or a root (`"$D/"`,
+        # `"${D-x}/"`, `"./$D"`), and nested braces are not modelled; what such a start point may become is not chased
+        if s is not None and (_computed_start(root) or _nested_braces(root)):
+            return ("find-delete-dangerous-root", "a start point the guard cannot read: an expansion may be empty and "
+                    "leave find walking the working directory or the root — use `${D:?}`, or name the directory")
+        cands = [root] + _brace_alternatives(root)
         for c in cands:
-            if c != root and _rm_is_dangerous(["rm", "-rf", c]):
-                return ("find-delete-dangerous-root", "a value this start point may take is a root you cannot "
-                        "afford to lose (an empty `$D/` is `/`) — use `${D:?}`")
             n = posixpath.normpath(c)
             if n == ".":
                 return ("find-delete-dangerous-root", "deletes under the working directory, its .git and .agent "
@@ -1594,39 +1607,26 @@ def _find_deletes_dangerously(args, kinds, raws):
     return None
 
 
-def _start_candidates(value, quoted, depth=0):
-    """Post-panel run 1, D1 and D3: the values a find start point may take — itself, each brace alternative, each
-    default word, and the value with a leading parameter expansion empty (`$D/x` is `/x`, `"${D%/}/"` is `/`), each
-    followed to a bounded depth. An unquoted expansion that is the whole start point vanishes when empty, and find
-    then walks `.`; a quoted one stays as `''`, which find refuses. `${X:?…}` aborts when empty, so it adds nothing."""
-    out = [value]
-    if depth > 4:
-        return out
-    for a in _brace_alternatives(value):
-        out += _start_candidates(a, quoted, depth + 1)
-    alt = _param_word_target(value)
-    if alt is not None and alt != value:
-        out += _start_candidates(alt, quoted, depth + 1)
-    rest = _empty_leading_expansion(value)
-    if rest == "":
-        out += [] if quoted else ["."]
-    elif rest is not None:
-        out += _start_candidates(rest, quoted, depth + 1)
-    return out
+def _computed_start(value):
+    """Post-panel run 2: does a find start point hold an expansion other than a `${X:?…}` guard (which aborts when
+    empty)? Its value cannot be read, and empty it may vanish or leave a root. `${X?…}` without the colon is no guard:
+    a set but empty `X` passes through it (E1)."""
+    rest = re.sub(r"\$\{\w+(?:\[[^]]*\])?:\?[^}]*\}", "", value)
+    return "$" in rest or "`" in rest
 
 
-def _empty_leading_expansion(value):
-    """The rest of `value` after a leading `$NAME` or `${…}` that is empty when the variable is unset, or None: none
-    leads, or it is `${X:?…}` (it aborts), or a default / assign form (its word is the value: `_param_word_target`)."""
-    m = re.match(r"\$\w+", value)
-    if m and not value.startswith("${"):
-        return value[m.end():]
-    if not value.startswith("${"):
-        return None
-    j = _param_close(value, 0)
-    if j == -1 or re.match(r"\w+(?:\[[^]]*\])?:?[?=-]", value[2:j]):
-        return None
-    return value[j + 1:]
+def _nested_braces(value):
+    """Post-panel run 2, E4: a brace list inside a brace list (`{docs,{tests,.}}`), which `_brace_alternatives` does
+    not expand: refused rather than modelled."""
+    depth = 0
+    for c in value:
+        if c == "{":
+            depth += 1
+            if depth > 1:
+                return True
+        elif c == "}":
+            depth = max(depth - 1, 0)
+    return False
 
 
 # `git config`'s options as git 2.54 lists them (`git config <mode> -h`, and the modes it still takes as options):

@@ -13,8 +13,8 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   that deletes under a dangerous root or under the working directory, however narrowed (`find . -name '*.pyc'
   -delete` blocks: no name test keeps `.git` and `.agent` safe; `find src -name '*.pyc' -delete` passes). git's and
   rm's long options are read shortened too (`reset --h`, `push --m`, `rm --rec --forc`). A find start at or under
-  `.git` / `.agent`, a brace alternative or default word, and one held in a variable that may be empty count too.
-  Measured on 81,559 real commands: 100 verdicts changed, none from block to allow.
+  `.git` / `.agent`, a brace alternative, and one the guard cannot read (an expansion, nested braces) count too.
+  Measured on 81,559 real commands: 105 verdicts changed, none from block to allow.
 - **G4: the command guard reads a glob outside quotes** (task 345, PLAN-PLAYBOOK-2.md 4.2; the owner's 10-27
   decision). `rm -rf "$DEST"/*` — `rm -rf /*` with `DEST` empty — blocks, as do `"foo"/*` and `~"/build"`; an escaped
   glob and `"${DEST:?}"/*` pass. The project's names (`$PWD`, `$OLDPWD`, `$CLAUDE_PROJECT_DIR`) and its `.git` / `.agent`

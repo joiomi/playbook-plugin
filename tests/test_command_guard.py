@@ -3085,7 +3085,9 @@ class G4Part2Round2(_G4Asserts, unittest.TestCase):
         """Row 15 (C2): an empty unquoted `$D` vanishes (find walks `.`), and `"$D/"` empty is `/`."""
         self.assert_blocks("find $D -name '*.o' -delete", 'find "$D/" -delete', "find $D/ -delete",
                            'find "$D"/build -delete', "find ${D} -delete", "find $D -exec rm {} +")
-        self.assert_passes('find "$D" -name \'*.o\' -delete', 'find "${D:?}" -name \'*.o\' -delete',
+        # post-panel run 2: any computed start point blocks a deleting find (a quoted `"$D"` too)
+        self.assert_blocks('find "$D" -name \'*.o\' -delete')
+        self.assert_passes('find "${D:?}" -name \'*.o\' -delete',
                            'find "${D:?}"/build -delete', 'find "$D" -name x -print',
                            # unquoted, only `${D:?}` (it aborts when empty) passes
                            "find ${D:?} -name x -delete", "find ${D:?}/build -delete")
@@ -3102,8 +3104,8 @@ class G4Part2Round2(_G4Asserts, unittest.TestCase):
         """Row 17 (C4): bash expands `{.,build}` and `${R:-.}` before git or find run."""
         self.assert_blocks("find {.,build} -delete", 'find "${R:-.}" -type f -delete', "git checkout -- {f,.}",
                            "git restore {.,.}", 'git checkout -- "${P:-.}"', "find {src,.git} -delete")
-        self.assert_passes("find {src,build} -name '*.o' -delete", "git checkout -- {a,b}.py",
-                           'find "${R:-build}" -name \'*.o\' -delete')
+        self.assert_passes("find {src,build} -name '*.o' -delete", "git checkout -- {a,b}.py")
+        self.assert_blocks('find "${R:-build}" -name \'*.o\' -delete')   # post-panel run 2: computed
 
     def test_an_exec_command_s_inner_wrapper_and_its_placeholder(self):
         """Row 18 (C5, C6): a payload's own wrapper is resolved, and `{}` is each start point."""
@@ -3127,25 +3129,50 @@ class G4Part2PostPanel(_G4Asserts, unittest.TestCase):
         """Row 20 (D1): `"${D%/}/"` with `D` unset is `/`."""
         self.assert_blocks('find "${D%/}/" -delete', 'find "${D#x}/" -delete', "find ${D%/}/ -name x -delete",
                            'find "${D:+x}/" -delete', "find ${D%/} -delete")
-        self.assert_passes('find "${D%/}" -name x -delete', 'find "${D:?}/x" -delete', "find ${D:?}/x -delete")
+        self.assert_passes('find "${D:?}/x" -delete', "find ${D:?}/x -delete")
+        self.assert_blocks('find "${D%/}" -name x -delete')                 # post-panel run 2: computed
 
     def test_an_exec_placeholder_takes_the_elided_start_point(self):
         """Row 21 (D2): with `D` unset, `find $D …` walks `.`, so `{}` is `.`."""
         self.assert_blocks("find $D -maxdepth 0 -exec git restore {} \\;", "find $D -exec git checkout -- {} +",
                            "find ${D} -maxdepth 0 -exec git restore {} +")
-        self.assert_passes('find "$D" -maxdepth 0 -exec git restore {} \\;', "find src -exec git restore {} +")
+        self.assert_passes("find src -exec git restore {} +")
+        self.assert_blocks('find "$D" -maxdepth 0 -exec git restore {} \\;')  # post-panel run 2: `{}` takes `.`
 
     def test_nested_defaults_are_followed(self):
         """Row 22 (D3)."""
         self.assert_blocks('find "${R:-${S:-.}}" -delete', 'find "${R:-${S:-/}}" -delete',
                            'git checkout -- "${P:-${Q:-.}}"', 'find "${R:-${S:-.git}}" -delete')
-        self.assert_passes('find "${R:-${S:-build}}" -name x -delete')
+        self.assert_blocks('find "${R:-${S:-build}}" -name x -delete')     # post-panel run 2: computed
 
     def test_push_options_are_read_in_order(self):
         """Row 23 (D4): each `-o` takes the next word, so `-o -o :main` leaves `:main` a refspec."""
         self.assert_blocks("git push origin -o -o :main", "git push origin --push-option --push-option :main")
         self.assert_passes("git push -o :main origin", "git push -o x -o :y origin main")
 
+
+
+class G4Part2PostPanel2(_G4Asserts, unittest.TestCase):
+    """Task 346, the post-panel judge's run 2: E1-E4 — a class, not four holes: what a computed start point may become
+    is not modelled any more; a deleting find with one blocks."""
+
+    def test_a_computed_find_start_point_blocks(self):
+        """Row 24 (E1-E3): any expansion other than a `${X:?}` guard."""
+        self.assert_blocks('find "${D-build}/" -delete', 'find "${D?}/" -delete', 'find "./$D" -delete',
+                           'find "${dirs[@]}" -delete', 'find "$@" -delete', "find `pwd` -delete",
+                           'find "$(pwd)/x" -delete', 'find "${D:?}$E" -delete', 'find "$T" -maxdepth 1 -exec unlink {} \\;')
+        self.assert_passes('find "${D:?}/x" -delete', 'find "${D:?}" -name x -delete', 'find "$D" -name x -print')
+
+    def test_an_exec_placeholder_of_a_computed_start_point_takes_dot(self):
+        """Row 25 (E3 for -exec): `"${dirs[@]}"` may be no word, and find then walks `.`."""
+        self.assert_blocks('find "${dirs[@]}" -maxdepth 0 -exec git restore {} \\;', 'find "$@" -exec git checkout -- {} +')
+        self.assert_passes('find "${D:?}" -exec git restore {} +')
+
+    def test_nested_braces_and_an_empty_expansion_in_a_pathspec(self):
+        """Row 26 (E2, E4): `"./$D"` empty is `./`; nested braces are not modelled, so they block."""
+        self.assert_blocks("git restore {docs,{tests,.}}", "find {src,{build,.}} -delete", 'git checkout -- "./$D"',
+                           'git restore "./${D}"', "git checkout -- {a,{b,c}}")
+        self.assert_passes('git checkout -- "src/$D"', 'git checkout -- "$F"', "git checkout -- {a,b}.py")
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
