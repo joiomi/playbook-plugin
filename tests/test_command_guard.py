@@ -3088,9 +3088,9 @@ class G4Part2Round2(_G4Asserts, unittest.TestCase):
         # post-panel run 2: any computed start point blocks a deleting find (a quoted `"$D"` too)
         self.assert_blocks('find "$D" -name \'*.o\' -delete')
         self.assert_passes('find "${D:?}" -name \'*.o\' -delete',
-                           'find "${D:?}"/build -delete', 'find "$D" -name x -print',
-                           # unquoted, only `${D:?}` (it aborts when empty) passes
-                           "find ${D:?} -name x -delete", "find ${D:?}/build -delete")
+                           'find "${D:?}"/build -delete', 'find "$D" -name x -print')
+        # post-panel run 3, F1: unquoted, `${D:?}` is no guard (`D=' '` is split away), so it blocks
+        self.assert_blocks("find ${D:?} -name x -delete", "find ${D:?}/build -delete")
 
     def test_only_a_listed_rev_parse_reads_as_a_commit(self):
         """Row 16 (C3, C11): rev-parse echoes a path (`rev-parse .` prints `.`), so its options are an allow-list."""
@@ -3129,7 +3129,8 @@ class G4Part2PostPanel(_G4Asserts, unittest.TestCase):
         """Row 20 (D1): `"${D%/}/"` with `D` unset is `/`."""
         self.assert_blocks('find "${D%/}/" -delete', 'find "${D#x}/" -delete', "find ${D%/}/ -name x -delete",
                            'find "${D:+x}/" -delete', "find ${D%/} -delete")
-        self.assert_passes('find "${D:?}/x" -delete', "find ${D:?}/x -delete")
+        self.assert_passes('find "${D:?}/x" -delete')
+        self.assert_blocks("find ${D:?}/x -delete")                             # post-panel run 3, F1
         self.assert_blocks('find "${D%/}" -name x -delete')                 # post-panel run 2: computed
 
     def test_an_exec_placeholder_takes_the_elided_start_point(self):
@@ -3173,6 +3174,27 @@ class G4Part2PostPanel2(_G4Asserts, unittest.TestCase):
         self.assert_blocks("git restore {docs,{tests,.}}", "find {src,{build,.}} -delete", 'git checkout -- "./$D"',
                            'git restore "./${D}"', "git checkout -- {a,{b,c}}")
         self.assert_passes('git checkout -- "src/$D"', 'git checkout -- "$F"', "git checkout -- {a,b}.py")
+
+
+class G4Part2PostPanel3(_G4Asserts, unittest.TestCase):
+    """Task 346, the post-panel judge's run 3 (the owner's ruling, 18:02): F1-F3."""
+
+    def test_only_a_quoted_guard_is_exempt(self):
+        """Row 27 (F1): an unquoted `${D:?}` with `D=' '` is split away, and find walks `.`."""
+        self.assert_blocks("find ${D:?} -delete", "find ${D:?} -maxdepth 0 -exec git restore {} \\;",
+                           "find x/${D:?} -delete")
+        self.assert_passes('find "${D:?}" -delete', 'find "${D:?}" -maxdepth 0 -exec git restore {} \\;')
+
+    def test_more_than_one_brace_list_is_not_modelled(self):
+        """Row 28 (F2): `{src,build}/{..,cache}` yields `src/..`."""
+        self.assert_blocks("find {src,build}/{..,cache} -delete", "find {a,b}{c,d} -delete",
+                           "git restore {a,b}/{..,c}")
+        self.assert_passes("find {src,build} -name x -delete", "git checkout -- {a,b}.py")
+
+    def test_a_replacement_word_s_wildcard_is_a_glob(self):
+        """Row 29 (F3): the glob check keeps what an expansion emits, removing only a guard's `:?`."""
+        self.assert_blocks('git restore -- "${P/x/?}"', 'git checkout -- "${P/x/*}"', "git restore -- ${P//a/?}")
+        self.assert_passes('git restore "${D:?}"', 'git checkout -- "${P:-src}"', 'git restore -- "${D?}"')
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
