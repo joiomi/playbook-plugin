@@ -118,6 +118,9 @@ class Text(unittest.TestCase):
         skill = _flat(places["skills/judge/SKILL.md"])
         self.assertNotIn("(a sandboxed, blind panel that writes `judge.md`)", skill)
         self.assertIn("`judge-single.md`", skill)
+        # `panel-review <N>` alone is a plan review (review.py's default mode); an implementation needs --mode impl
+        # (the post-panel judge's run 1, codex)
+        self.assertIn("`.claude/bin/tasks panel-review <N> --mode impl`", skill)
 
     def test_s4_the_sandbox(self):
         readme = _flat(_read("README.md"))
