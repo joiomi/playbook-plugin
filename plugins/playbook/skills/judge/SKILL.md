@@ -75,9 +75,11 @@ the prompt, and what it reads — the repo, or any file it opens.
 > (`init` writes it into `.claude/settings.json`), so the `Task(...)` spawn
 > above is refused. Two sanctioned routes:
 > - **Judging a task's plan or implementation** — use the vendor-judge CLI
->   instead: `.claude/bin/tasks plan-review <N>` or `.claude/bin/tasks impl-review <N>`
->   (a sandboxed, blind panel that writes `judge.md`). This is the preferred
->   path inside a task and needs no `Task` permission.
+>   instead: `.claude/bin/tasks panel-review <N>` (a sandboxed panel of every
+>   seat in `models.json`, its rounds in `judge.md`), or one sandboxed judge with
+>   `.claude/bin/tasks plan-review <N>` / `impl-review <N>` (its review recorded
+>   in `judge-single.md`). This is the preferred path inside a task and needs no
+>   `Task` permission.
 > - **A generic one-off judgment with no task** — the user must explicitly allow
 >   `Task` (remove it from `permissions.deny`) before the `Task` spawn will run.
 

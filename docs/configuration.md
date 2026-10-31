@@ -329,7 +329,8 @@ the warning naming what was skipped.
 
 Review evidence is a record the CLI wrote: judge.md whose newest round is an impl
 round with verdict PASS, or judge-single.md's `## Single-judge impl review`
-heading. The CLI appends that heading to judge-single.md after every single-judge
+heading — the second only where the policy requires no panel for that close (an
+unclassified task needs the panel whenever `panel_required_for` names any class). The CLI appends that heading to judge-single.md after every single-judge
 impl review, also when the findings themselves go into task.md's
 `## Implementation Review` — and, since task 304, the review's text under it, every
 line quoted, so a later review that replaces task.md's block leaves each run's text on

@@ -62,7 +62,9 @@ class Text(unittest.TestCase):
         for name, text in places.items():
             with self.subTest(where=name):
                 self.assertNotIn("verify+single-judge", text)
-                self.assertRegex(text, r"reversible work( \([^)]*\))? closes on the verify alone")
+                self.assertNotIn("verify alone", text)    # the close also runs the contract's rows (impl round 2)
+                self.assertRegex(text, r"reversible work( \([^)]*\))? closes with no review")
+                self.assertIn("`tasks red` rows", text)
 
     def test_s2_the_task_gate(self):
         readme = _flat(_read("README.md"))
@@ -73,6 +75,14 @@ class Text(unittest.TestCase):
         self.assertIn("memento", readme)
         self.assertNotIn("declare a task first. The hooks enforce this.", readme)
         self.assertIn("`tasks work done` refuses", readme)     # the close's refusal, not a hook's (impl round 1)
+        # any rewording that promises the gate for code without naming the edit tools (impl round 2, sonnet)
+        self.assertNotRegex(readme, r"can't edit (?!a code file through its edit tools)[^.]{0,80}without an active task")
+        self.assertNotIn("Where a warning doesn't stick, they block", readme)
+        self.assertIn("where they see the call", readme)
+        # the freshness block holds an assertive, irreversible or unclassified close; a reversible one is told
+        # (core.py `freshness_gate_decision`; impl round 2, codex)
+        self.assertNotIn("so a change after it means another round or `--force --reason`", readme)
+        self.assertIn("a reversible one is told", readme)
         seeded = _flat(_read("plugins/playbook/scripts/CLAUDE.md.template"))
         self.assertNotIn("blocks editing a code file with no active task", seeded)
         self.assertIn("through the edit tools", seeded)
@@ -94,6 +104,7 @@ class Text(unittest.TestCase):
         }
         stale = re.compile(r"no conversation access|not your conversation|but not the conversation|"
                            r"has no access to the conversation|but no conversation|not\W+your chat|none of your chat|"
+                           r"none of your conversation|"
                            r"The judge won't see this|Only what you put in the prompt and what it reads", re.I)
         for name, text in places.items():
             with self.subTest(where=name):
@@ -103,6 +114,10 @@ class Text(unittest.TestCase):
         for named in ("prompt", "~/.claude/projects/", "the task quotes", "`panel-review --prompt`"):
             with self.subTest(named=named):
                 self.assertIn(named, judge)
+        # the judge skill's single-judge route is one judge whose record is judge-single.md (impl round 2, grok)
+        skill = _flat(places["skills/judge/SKILL.md"])
+        self.assertNotIn("(a sandboxed, blind panel that writes `judge.md`)", skill)
+        self.assertIn("`judge-single.md`", skill)
 
     def test_s4_the_sandbox(self):
         readme = _flat(_read("README.md"))
@@ -116,8 +131,13 @@ class Text(unittest.TestCase):
                          ".mcp.json", "uncontained", "~/.local/share/playbook", "/tmp"):
                 with self.subTest(part=part, name=name):
                     self.assertIn(name, text)
+        # the git part holds only with a non-setuid bubblewrap >= 0.8.0, in the summary too (impl round 2, sonnet)
+        self.assertIn("0.8.0", summary)
         arch = _flat(_read("docs/architecture.md"))
-        self.assertIn("`.claude/settings.local.json`", arch[arch.index("## The sandbox"):arch.index("## Judges")])
+        box = arch[arch.index("## The sandbox"):arch.index("## Judges")]
+        self.assertIn("`.claude/settings.local.json`", box)
+        kernel = box[box.index("What's enforced at the kernel level"):]
+        self.assertIn("~/.local/share/playbook", kernel[:kernel.index(". ")])   # impl round 2, opus, grok
 
     def test_s5_a_single_judge_as_evidence(self):
         for rel in ("plugins/playbook/scripts/CLAUDE.md.template", "plugins/playbook/skills/playbook/SKILL.md",
@@ -129,6 +149,10 @@ class Text(unittest.TestCase):
                 self.assertIn("under the seeded `panel_required_for` never a close's evidence", text)
                 self.assertIn("only where the policy requires no panel for that close", text)
                 self.assertIn("an unclassified task needs the panel whenever the list names any class", text)
+        # the evidence paragraph says the same (impl round 2, agy)
+        conf = _flat(_read("docs/configuration.md"))
+        para = conf[conf.index("Review evidence is a record the CLI wrote"):]
+        self.assertIn("only where the policy requires no panel for that close", para[:para.index("Setting `## Risk`")])
 
     def test_s6_tasks_red(self):
         readme = _flat(_read("README.md"))
@@ -204,7 +228,8 @@ class Behavior(unittest.TestCase):
         claude = self.project / ".claude"
         (claude / "hooks").mkdir(parents=True)
         (claude / "bin").mkdir()
-        targets = [claude / "settings.json", claude / "hooks" / "h.sh", claude / "bin" / "tasks"]
+        targets = [claude / "settings.json", claude / "settings.local.json", claude / "hooks" / "h.sh",
+                   claude / "bin" / "tasks", self.project / ".mcp.json"]
         for t in targets:
             t.write_text("before\n", encoding="utf-8")
         write = ("import sys\n"

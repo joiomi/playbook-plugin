@@ -104,8 +104,9 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   `--prompt` consultation is unchanged. Real judges had returned refusals, a filter block, plan-only stops and waits;
   none of them carries the run's code.
 - **The README, the CLI help and init's `_doc` say only what the code does** (task 348, DESIGN-PLAYBOOK-2.md §7 D;
-  five audits each found one of these sentences, left "for the release text"). A reversible close runs the verify
-  alone, with no review — the help, the `_doc`, `/playbook:init` and the CLI page said "verify+single-judge". The task
+  five audits each found one of these sentences, left "for the release text"). A reversible close needs no review:
+  its verify and, where the task has a test contract, its `tasks red` rows decide — the help, the `_doc`,
+  `/playbook:init` and the CLI page said "verify+single-judge". The task
   gate stops a code edit made through the edit tools, and a write through the shell passes it — the README, the
   seeded CLAUDE.md and the architecture page said the agent "can't edit code without an active task" or that the
   hook blocks it, and that the hooks block where the stop hook now leaves a memento. A judge's prompt carries the task
@@ -113,7 +114,8 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   question carries the recent chat on purpose, and the judge's sandbox hides only the project's records, so the
   transcripts under `~/.claude/projects/` stay readable — the README, the architecture and CLI pages, the judge skill
   and the plan-panel gate's note said it had "no conversation access". A sandboxed agent writes the project, its own
-  measured state, playbook's write log and a private `/tmp`; the project's `.claude/settings.json`,
+  measured state, playbook's write log and a private `/tmp` (git's metadata, hooks and settings stay read-only only
+  with a non-setuid bubblewrap 0.8.0 or newer, which the README's summary now says too); the project's `.claude/settings.json`,
   `.claude/settings.local.json`, `.claude/hooks/`, `.claude/bin/` and `.mcp.json` are among what it writes, and your
   own session outside the sandbox runs them — the README said it "can't escape the write containment even if it
   tries". Also: one judge's impl review counts as a close's review only where the policy requires no panel for that

@@ -80,7 +80,7 @@ NOTE_REWORDED = {
 # note stays verbatim. A judge's prompt holds no conversation, but it can read the transcripts on disk.
 NOTE_CORRECTED = {
     "(blind: they see the repo, not your conversation)":
-        "(blind: their prompt holds the task and the repo, none of your conversation)",
+        "(blind: their prompt holds the task and the repo, not the session that wrote them)",
 }
 
 
