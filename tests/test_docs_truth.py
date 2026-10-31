@@ -72,9 +72,14 @@ class Text(unittest.TestCase):
         self.assertIn("a write through the shell", readme)
         self.assertIn("memento", readme)
         self.assertNotIn("declare a task first. The hooks enforce this.", readme)
+        self.assertIn("`tasks work done` refuses", readme)     # the close's refusal, not a hook's (impl round 1)
         seeded = _flat(_read("plugins/playbook/scripts/CLAUDE.md.template"))
         self.assertNotIn("blocks editing a code file with no active task", seeded)
         self.assertIn("through the edit tools", seeded)
+        for name, text in (("CLAUDE.md.template", seeded), ("tasks init's CLAUDE.md", _flat(template.claude_md("X")))):
+            with self.subTest(where=name):
+                self.assertNotIn("without an active task — blocked by hook until", text)
+                self.assertIn("a shell write passes", text)
         arch = _flat(_read("docs/architecture.md"))
         self.assertNotIn("warnings don't stick — blocking does", arch)
         self.assertIn("a write through the shell passes", arch)
@@ -88,22 +93,31 @@ class Text(unittest.TestCase):
             "tasks guide": template.guide_text(),
         }
         stale = re.compile(r"no conversation access|not your conversation|but not the conversation|"
-                           r"has no access to the conversation|but no conversation", re.I)
+                           r"has no access to the conversation|but no conversation|not\W+your chat|none of your chat|"
+                           r"The judge won't see this|Only what you put in the prompt and what it reads", re.I)
         for name, text in places.items():
             with self.subTest(where=name):
                 self.assertIsNone(stale.search(_flat(text)), stale.search(_flat(text)))
         readme = _flat(places["README.md"])
-        self.assertIn("~/.claude/projects/", readme)
-        self.assertIn("prompt", readme[readme.index("**The judge**"):readme.index("**The chat log**")])
+        judge = readme[readme.index("**The judge**"):readme.index("**The chat log**")]
+        for named in ("prompt", "~/.claude/projects/", "the task quotes", "`panel-review --prompt`"):
+            with self.subTest(named=named):
+                self.assertIn(named, judge)
 
     def test_s4_the_sandbox(self):
         readme = _flat(_read("README.md"))
         self.assertNotIn("even if it tries", readme)
         self.assertNotIn("anything it shouldn't", readme)
-        for name in (".claude/settings.json", ".claude/hooks/", ".claude/bin/"):
-            with self.subTest(name=name):
-                self.assertIn(name, readme)
-        self.assertIn("uncontained", readme)
+        self.assertNotIn("its writes stay in the project", readme)
+        summary = readme[readme.index("**The sandbox**"):readme.index("**Providers")]
+        usage = readme[readme.index("The sandbox uses Linux bubblewrap"):readme.index("When you want to drive yourself")]
+        for part, text in (("summary", summary), ("usage", usage)):
+            for name in (".claude/settings.json", ".claude/settings.local.json", ".claude/hooks/", ".claude/bin/",
+                         ".mcp.json", "uncontained", "~/.local/share/playbook", "/tmp"):
+                with self.subTest(part=part, name=name):
+                    self.assertIn(name, text)
+        arch = _flat(_read("docs/architecture.md"))
+        self.assertIn("`.claude/settings.local.json`", arch[arch.index("## The sandbox"):arch.index("## Judges")])
 
     def test_s5_a_single_judge_as_evidence(self):
         for rel in ("plugins/playbook/scripts/CLAUDE.md.template", "plugins/playbook/skills/playbook/SKILL.md",
@@ -111,12 +125,22 @@ class Text(unittest.TestCase):
             text = _flat(_read(rel))
             with self.subTest(where=rel):
                 self.assertNotIn("a second opinion, never a close's evidence", text)
+                self.assertNotIn("does not list an assertive, irreversible or unclassified task's class", text)
                 self.assertIn("under the seeded `panel_required_for` never a close's evidence", text)
+                self.assertIn("only where the policy requires no panel for that close", text)
+                self.assertIn("an unclassified task needs the panel whenever the list names any class", text)
 
     def test_s6_tasks_red(self):
         readme = _flat(_read("README.md"))
         self.assertNotIn("runs each row on the code before the fix", readme)
+        self.assertNotIn("on newer code", readme)
         self.assertIn("in the project as it is", readme)
+        self.assertIn("on another tree", readme)
+        # red.py `row_state`: a later green with the same tests digest on another tree proves the row, a tree whose
+        # code did not change included (impl round 1, grok) — the guide says what the receipt reads
+        guide = _flat(template.guide_text())
+        self.assertNotIn("on newer code", guide)
+        self.assertIn("a green on another tree with the same test files", guide)
 
 
 def _bwrap_works() -> bool:
@@ -193,6 +217,78 @@ class Behavior(unittest.TestCase):
         for t in targets:
             with self.subTest(path=str(t.relative_to(self.project))):
                 self.assertEqual(t.read_text(encoding="utf-8"), "written in the sandbox\n")
+
+    @unittest.skipUnless(_bwrap_works(), "bwrap not available or not usable here")
+    def test_s4_control_a_worker_sandbox_writes_nothing_else_under_home(self):
+        # what reaches the host is the claim: a test's HOME lies under /tmp, the run's own private tmpfs, where a
+        # write may "succeed" and is gone with the run (a real HOME refuses it: evidence/probe_sandbox.out)
+        outside = self.home / "outside.txt"
+        write = ("import sys\n"
+                 "try:\n"
+                 "    open(sys.argv[1], 'w', encoding='utf-8').write('x')\n"
+                 "except OSError:\n"
+                 "    pass\n")
+        with mock.patch.dict(os.environ, {"HOME": str(self.home)}):
+            argv = sandbox.build_bwrap_argv(self.project, None, [sys.executable, "-c", write, str(outside)],
+                                            None, project_writable=True, agent="claude")
+        self._run(argv)
+        self.assertFalse(outside.exists())
+
+
+@unittest.skipUnless(_bwrap_works(), "bwrap not available or not usable here")
+class ThePromptAndTheChat(unittest.TestCase):
+    """S3 (impl round 1, codex): what a judge's prompt carries, at the process boundary — the real CLI and review path,
+    the real sandbox, the stand-in judge (`tests/_judge_stub.py`) saving the prompt it received."""
+
+    CANARY = "CANARY-348-only-in-the-chat-log"
+
+    def setUp(self):
+        from tests._judge_stub import clean_env, stub_bin, stub_home
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        base = Path(tmp.name).resolve()
+        self.p = base / "proj"
+        self.p.mkdir()
+        home, self.out = stub_home(base)
+        env = clean_env(HOME=str(home))
+        for cmd in (["git", "init", "-q"], ["git", "config", "user.email", "t@t"], ["git", "config", "user.name", "t"]):
+            subprocess.run(cmd, cwd=self.p, check=True, env=env)
+        (self.p / "README.md").write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=self.p, check=True, env=env)
+        subprocess.run(["git", "commit", "-qm", "c0"], cwd=self.p, check=True, env=env)
+        (self.p / ".agent" / "tasks").mkdir(parents=True)
+        (self.p / ".agent" / "models.json").write_text(
+            json.dumps({"panel": ["opus", "sonnet", "haiku"], "default_judge": "sonnet"}), encoding="utf-8")
+        self.env = clean_env(HOME=str(home), PATH=f"{stub_bin(base / 'bin')}{os.pathsep}{env['PATH']}",
+                             PB_STUB_DIR=str(self.out))
+        r = self.tasks("new", "light", "probe", "a probe task for the judges")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        (self.p / ".agent" / "chat_log.md").write_text(f"**[M1]** [2026-10-31 12:00:00]\n```text\n{self.CANARY}\n```\n",
+                                                       encoding="utf-8")
+
+    def tasks(self, *args):
+        from tests._judge_stub import TASKS
+        return subprocess.run([str(TASKS), *args], cwd=self.p, env=self.env, capture_output=True, text=True,
+                              timeout=600)
+
+    def prompts(self) -> "list[str]":
+        from tests._judge_stub import results
+        return results(self.out, "prompt")
+
+    def test_s3_a_task_review_prompt_holds_no_chat_log_a_consultation_does(self):
+        for review in (("impl-review", "1"), ("panel-review", "1", "--mode", "impl", "--models", "sonnet")):
+            r = self.tasks(*review)
+            self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        task_prompts = self.prompts()
+        self.assertEqual(len(task_prompts), 2, task_prompts)
+        for prompt in task_prompts:
+            self.assertNotIn(self.CANARY, prompt)
+        r = self.tasks("panel-review", "--prompt", "Is the README accurate?", "--models", "sonnet")
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        asked = self.prompts()[len(task_prompts):]
+        self.assertTrue(asked, r.stdout + r.stderr)
+        for prompt in asked:
+            self.assertIn(self.CANARY, prompt)
 
 
 if __name__ == "__main__":

@@ -42,7 +42,7 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   review. The fingerprint leaves out `.agent` only: what tests or gates write belongs in `.gitignore`.
 - **The red receipt is simple** (task 342, PLAN-PLAYBOOK-2.md 4.1 d). `tasks red` runs each `## Test contract` row in
   the project as it is now and records it with the tree it ran on and the digest of the test files, both read for each
-  row; the close passes a row whose newest red is followed by a green on newer code with the same tests (a red on code
+  row; the close passes a row whose newest red is followed by a green on another tree with the same tests (a red on code
   broken on purpose: `tasks red --mutant "<why>"`); SIGTERM or SIGHUP stops the running row. `base.json` keeps each repository's start commit and the files dirty then, by content — nothing is written
   into `.git/objects` any more (it was every untracked file); `No behavior changes:` counts code only, not Python's
   caches, and counts a start-dirty file restored since, a commit undone in the work tree, a name that is not UTF-8.
@@ -105,18 +105,21 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   none of them carries the run's code.
 - **The README, the CLI help and init's `_doc` say only what the code does** (task 348, DESIGN-PLAYBOOK-2.md §7 D;
   five audits each found one of these sentences, left "for the release text"). A reversible close runs the verify
-  alone, with no review — the help and the `_doc` said "verify+single-judge". The task gate stops a code edit made
-  through the edit tools, and a write through the shell passes it — the README said the agent "can't edit code
-  without an active task", and that the hooks block where the stop hook now leaves a memento. A judge's prompt carries
-  none of your conversation, but its sandbox hides only the project's records: the task quotes the messages it
-  captured, and the transcripts under `~/.claude/projects/` stay readable — the README, the architecture page, the
-  CLI page, the judge skill and the plan-panel gate's note said it had "no conversation access". A sandboxed agent's
-  writes stay in the project, and the project's `.claude/settings.json`, `.claude/hooks/` and `.claude/bin/` are
-  among them, run uncontained by your own session outside the sandbox — the README said it "can't escape the write
-  containment even if it tries". Also: the seeded CLAUDE.md says one judge's impl review is no close's evidence under
-  the seeded `panel_required_for` only, and the README's `tasks red` sentence describes the run in the project as it
-  is (task 342). `tests/test_docs_truth.py` fails on each sentence if it comes back, and pins the behavior each one
-  now states.
+  alone, with no review — the help, the `_doc`, `/playbook:init` and the CLI page said "verify+single-judge". The task
+  gate stops a code edit made through the edit tools, and a write through the shell passes it — the README, the
+  seeded CLAUDE.md and the architecture page said the agent "can't edit code without an active task" or that the
+  hook blocks it, and that the hooks block where the stop hook now leaves a memento. A judge's prompt carries the task
+  and the repo, not the session: the task quotes the messages it captured, a task-less `panel-review --prompt`
+  question carries the recent chat on purpose, and the judge's sandbox hides only the project's records, so the
+  transcripts under `~/.claude/projects/` stay readable — the README, the architecture and CLI pages, the judge skill
+  and the plan-panel gate's note said it had "no conversation access". A sandboxed agent writes the project, its own
+  measured state, playbook's write log and a private `/tmp`; the project's `.claude/settings.json`,
+  `.claude/settings.local.json`, `.claude/hooks/`, `.claude/bin/` and `.mcp.json` are among what it writes, and your
+  own session outside the sandbox runs them — the README said it "can't escape the write containment even if it
+  tries". Also: one judge's impl review counts as a close's review only where the policy requires no panel for that
+  close (the seeded CLAUDE.md, the playbook skill and the CLI page said "never"), and the README's `tasks red`
+  sentence describes the run in the project as it is (task 342). `tests/test_docs_truth.py` fails on each sentence if
+  it comes back, and pins the behavior each one now states, the prompt a judge receives among them.
 
 ## [1.6.9] — 2026-10-26
 

@@ -46,7 +46,7 @@ instant project context and can focus on evaluating, not exploring.
 
 ### 1. State what's being judged
 
-Write it out in the conversation for the user. The judge won't see this —
+Write it out in the conversation for the user. It won't be in the judge's prompt —
 it's for shared understanding between agent and user about what's on trial.
 
 ### 2. Write the judge prompt
@@ -68,8 +68,8 @@ Task(
 )
 ```
 
-The judge starts fresh. No conversation history. Only what you put in the prompt
-and what it reads from the repo.
+The judge starts fresh. No conversation history in its context: what you put in
+the prompt, and what it reads — the repo, or any file it opens.
 
 > **In a playbook-initialized project, `Task` is on `permissions.deny`**
 > (`init` writes it into `.claude/settings.json`), so the `Task(...)` spawn
