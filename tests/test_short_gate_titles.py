@@ -76,6 +76,19 @@ NOTE_REWORDED = {
     "Verify: run the check that proves it — paste the result on this line":
         "Verify: run the check that proves it and paste its result under this gate.",
 }
+# Task 348 (D, DESIGN-PLAYBOOK-2.md §7): a note's false claim corrected in place, old phrase -> new; the rest of the
+# note stays verbatim. A judge's prompt holds no conversation, but it can read the transcripts on disk.
+NOTE_CORRECTED = {
+    "(blind: they see the repo, not your conversation)":
+        "(blind: their prompt holds the task and the repo, none of your conversation)",
+}
+
+
+def corrected(old: str) -> str:
+    """An old gate's text as the guide holds it now: verbatim, but for `NOTE_CORRECTED`."""
+    for was, fixed in NOTE_CORRECTED.items():
+        old = old.replace(was, fixed)
+    return old
 # Task 278 (PHASE-B.md item 9a): the test-strategy gates of the full types REPLACED by the test-contract gate — not a
 # reword: what the gate asks is the guide's "Test contract" section and the `## Test contract` it fills.
 REPLACED = {
@@ -304,6 +317,9 @@ class TheGuideHoldsWhatTheTitlesSaid(unittest.TestCase):
                 elif old in plain:
                     self.assertEqual(plain[old], new)
                     self.assertNotIn(old, guide)
+                elif corrected(old) != old:
+                    self.assertIn(f"> **{new}**\n> {corrected(old)}", guide)
+                    self.assertNotIn(old, guide)
                 else:
                     self.assertIn(f"> **{new}**\n> {old}", guide)
         self.assertEqual(len(changed) - len(plain) - len(REPLACED), len(template.GATE_NOTES))
@@ -370,7 +386,7 @@ class TheGuideHoldsWhatTheTitlesSaid(unittest.TestCase):
         for old, new, guide in pairs:
             for cmd in TASKS_CMD_RE.findall(old):
                 with self.subTest(old=old[:50], cmd=cmd):
-                    self.assertTrue(f".claude/bin/tasks {cmd}" in new or f"> {old}" in guide, (cmd, new))
+                    self.assertTrue(f".claude/bin/tasks {cmd}" in new or f"> {corrected(old)}" in guide, (cmd, new))
 
 
 class TheTitlesReadAsBefore(unittest.TestCase):

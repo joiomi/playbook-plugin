@@ -2,8 +2,9 @@
 name: judge
 description: >
   Blind evaluation pattern. Agent spawns an independent judge to evaluate
-  an idea, plan, strategy, statement, or implementation. The judge sees
-  the repo but not the conversation. Verdict goes to a shared markdown file.
+  an idea, plan, strategy, statement, or implementation. The judge reads
+  the repo; its prompt carries none of the conversation. Verdict goes to a
+  shared markdown file.
 argument-hint: <what to evaluate>
 ---
 
@@ -12,8 +13,10 @@ argument-hint: <what to evaluate>
 ## What It Does
 
 Spawns a blind evaluator to judge something. The judge is a separate agent
-that can read the full repo but has no access to the conversation. It forms
-its own opinion from the artifacts alone.
+that can read the full repo and starts with none of the conversation. It forms
+its own opinion from the artifacts alone. Blindness is in its prompt, not a
+lock: it can still read files on disk, the session transcripts under
+`~/.claude/projects/` included — never point it there.
 
 **Use it to evaluate:** ideas, plans, strategies, statements, philosophies,
 implementations, architectures, test suites, decisions, tradeoffs — anything
@@ -21,7 +24,7 @@ worth a second opinion.
 
 ## Why Blind?
 
-The judge has no access to the conversation context. This prevents:
+The judge starts without the conversation context. This prevents:
 - Anchoring on the agent's framing
 - Social pressure to agree with what was discussed
 - Confirmation bias from seeing the agent's reasoning

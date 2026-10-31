@@ -844,7 +844,7 @@ GATE_NOTES = (
     ("Write task-specific check questions whose answers need evidence, not a yes or no.",
      "Wrote task-specific check questions (Bad: \"is this working?\" Good: \"Does the output include the progress counter?\" — the answer should require evidence, not just yes/no)"),
     ("Run the plan panel in the background — `.claude/bin/tasks panel-review <N>` — then read `judge.md`.",
-     "Run `.claude/bin/tasks panel-review <N>` — ALL available judges review the plan in parallel (blind: they see the repo, not your conversation). Wait for it to finish; findings land in `judge.md` (this dir), led by a PANEL VERDICT. Read judge.md, then address valid concerns by revising Work Plan gates yourself. **Justify lens:** does every work gate trace up to something in Intent/Design? Are there gates that justify nothing above them (scope creep)? Intent claims with no gate to satisfy them (gaps)? *(Fallback if no panel can run: `.claude/bin/tasks plan-review <N>` — single judge, writes into this file.)*"),
+     "Run `.claude/bin/tasks panel-review <N>` — ALL available judges review the plan in parallel (blind: their prompt holds the task and the repo, none of your conversation). Wait for it to finish; findings land in `judge.md` (this dir), led by a PANEL VERDICT. Read judge.md, then address valid concerns by revising Work Plan gates yourself. **Justify lens:** does every work gate trace up to something in Intent/Design? Are there gates that justify nothing above them (scope creep)? Intent claims with no gate to satisfy them (gaps)? *(Fallback if no panel can run: `.claude/bin/tasks plan-review <N>` — single judge, writes into this file.)*"),
     ("Triage the plan panel's findings here: accept, park or reject each one, with its reason.",
      "**Triage panel findings into this file: judges = opinion, not gospel.** For each finding, document accept (with rationale) / park (with rationale) / reject (with rationale) here under this gate. Push back where you have concrete evidence — you live with the outcomes, the reviewers don't. Verify file:line claims before applying. Where judges DISAGREE with each other, say which you believed and why — disagreement between models is signal, not noise."),
     ("Run the impl panel in the background — `.claude/bin/tasks panel-review <N> --mode impl` — then read `judge.md`.",
@@ -1189,8 +1189,8 @@ Commands:
                       (/playbook:init seeds ["assertive","irreversible"] ⇒
                       those close-gate on a PASS panel, an unclassified task is
                       held to the strictest class listed, reversible work closes
-                      on verify+single-judge; set "all" for a panel on every
-                      close).
+                      on the verify alone, with no review; set "all" for a
+                      panel on every close).
                       Stale panel evidence on a high-consequence close blocks
                       (another impl round, or --force --reason, the blunt
                       whole-policy override, whose reason is recorded).

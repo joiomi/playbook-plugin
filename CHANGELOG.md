@@ -103,6 +103,20 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
   judge.md as its own numbered lines (`F1 | Critical | settled: no | <seat>`), and the run ledger counts only those. A
   `--prompt` consultation is unchanged. Real judges had returned refusals, a filter block, plan-only stops and waits;
   none of them carries the run's code.
+- **The README, the CLI help and init's `_doc` say only what the code does** (task 348, DESIGN-PLAYBOOK-2.md §7 D;
+  five audits each found one of these sentences, left "for the release text"). A reversible close runs the verify
+  alone, with no review — the help and the `_doc` said "verify+single-judge". The task gate stops a code edit made
+  through the edit tools, and a write through the shell passes it — the README said the agent "can't edit code
+  without an active task", and that the hooks block where the stop hook now leaves a memento. A judge's prompt carries
+  none of your conversation, but its sandbox hides only the project's records: the task quotes the messages it
+  captured, and the transcripts under `~/.claude/projects/` stay readable — the README, the architecture page, the
+  CLI page, the judge skill and the plan-panel gate's note said it had "no conversation access". A sandboxed agent's
+  writes stay in the project, and the project's `.claude/settings.json`, `.claude/hooks/` and `.claude/bin/` are
+  among them, run uncontained by your own session outside the sandbox — the README said it "can't escape the write
+  containment even if it tries". Also: the seeded CLAUDE.md says one judge's impl review is no close's evidence under
+  the seeded `panel_required_for` only, and the README's `tasks red` sentence describes the run in the project as it
+  is (task 342). `tests/test_docs_truth.py` fails on each sentence if it comes back, and pins the behavior each one
+  now states.
 
 ## [1.6.9] — 2026-10-26
 
