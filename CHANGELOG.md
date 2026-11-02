@@ -13,73 +13,105 @@ variables (C, 336); the chat log keeps a second session's identical prompt (E, 3
 changed ordinary text in every task.md and chat log, is gone (A, 338); the docs say only what the code does (D, 348).
 Then the deletion (plan 4.1): the post-panel judge as close evidence, tail certification and the stop rule's close side
 (343), one review round cap of 2 (344), the stop hook's block (340), the task-folder watch (339), the state echo's line
-every 10 calls (341), the red receipt made simple (342), and the worktree check that was never released (321, 338).
-Then plan 4.2: the command guard's G4 forms (345, 346), and a judge's answer read by its form, never its words (347;
-it replaces task 320's word check, never released). The suite has ⟦N⟧ tests (6,613 at 1.6.9); CI is the same two Linux
-lanes. The guarantee ledger has 133 rows (136 at 1.6.9: three new — the review form, the SETTLED block, the hand-made task
-folder's refusal at the close — and six gone with what they described), 120 verified, and no known violation. The live gauntlet on this
-release: ⟦the rows⟧.
+every 10 calls (341), the red receipt made simple (342), and the worktree check that was never released (321, 338). Then
+plan 4.2: the command guard's G4 forms (345, 346), and a judge's answer read by its form, never its words (347; it
+replaces task 320's word check, never released). The suite has 6,032 tests (6,613 at 1.6.9: the removed mechanisms took
+theirs with them); CI is the same two Linux lanes. The guarantee ledger has 133 rows (136 at 1.6.9: three new — the
+review form, the SETTLED block, the hand-made task folder's refusal at the close — and six gone with what they
+described), 120 verified, and no known violation. The live gauntlet on this release: 18 PASS, 5 WAITING (the grok rows:
+its account is out of credit), 0 FAIL, on 23 rows (the task-folder watch's row went with it). Two rows failed in the
+first run and passed when run again: the slash commands', whose `claude` binary its updater replaced in the middle of
+the row, and the sandbox fallback's, whose judge-path clause still read exit 0 as "the judge ran" — since task 347 an
+answer outside the review form exits 1 (that run's judge wrote two-part scenarios); the clause now counts a judge that
+answered.
 
 **Upgrading:** `/playbook:upgrade`, then restart every Claude Code session: `hooks.json` changed (the task-folder
-watch's three entries are gone, task 339). Then run `/playbook:init` in each project: ⟦what 1.7.0's init changes in a
-project 1.6.9 set up, measured⟧. Options that are gone are refused as unknown: `tasks work done --stale-panel-ok` and
-`--owner-ok`, `tasks red --base` and `--drop`, `tasks prepare-merge`. Configuration keys that are no longer read:
-`review_rounds` (344), `guard_paths`, `stale_panel_requires_post_d6` and `fingerprint_exclude` (343), `red_tests` and
-`red_links` (342) — a config that still holds them works, the keys ignored and named by no warning (measured:
-`tasks doctor` on such a config says nothing of them); delete them when you next edit the file.
+watch's three entries are gone, task 339). Then run `/playbook:init` in each project: on a project 1.6.9 set up, 1.7.0's
+init rewrites six template-owned lines of CLAUDE.md (the code-edit hook's limit, work during a review, the owner
+rulings, the review rounds and the close, `work done`'s options, the "Don't" line on coding without a task), saving the
+earlier file to `.agent/backups/`, and rewrites `.claude/hooks/monitor-nudge.sh` (task 343 dropped its
+tail-certification session); nothing else in the project changes (measured). A task in flight whose rows 1.6.9's `tasks
+red` proved is not proved under 1.7.0, which does not read 1.6.9's red records: its close refuses and names the way
+through — break the code on purpose, `tasks red --mutant "<what you broke>"`, restore it, `tasks red` — and then it
+closes (measured). Options that are gone are refused as unknown: `tasks work done --stale-panel-ok` and `--owner-ok`,
+`tasks red --base` and `--drop`, `tasks prepare-merge`. Configuration keys that are no longer read: `review_rounds`
+(344), `guard_paths`, `stale_panel_requires_post_d6` and `fingerprint_exclude` (343), `red_tests` and `red_links` (342)
+— a config that still holds them works, the keys ignored and named by no warning (measured: `tasks doctor` on such a
+config says nothing of them); delete them when you next edit the file.
 
-**Measured before the release**, in temporary folders: ⟦the window from 1.6.9: 1.7.0's hooks before init, then its
-CLI and init, on a project 1.6.9 set up and used⟧.
+**Measured before the release**, in temporary folders: on a project 1.6.9's `/playbook:init` set up, with a bugfix task
+1.6.9 had activated (a v1 `base.json`) and proved with its `tasks red`, 1.7.0's hooks, before any 1.7.0 init, let a code
+edit of that task through, refused `git push --force` from a Bash and from a Monitor call and `rm -rf "$DEST"/*`, let
+`ls` through, and at the stop printed their memento and let the turn end; 1.7.0's `doctor`, `bootstrap`, `status` and
+`audit` ran clean; that task closed after the way through above; a project ruling was recorded; a bugfix proved by
+1.7.0's `tasks red` — red before the fix, green after — closed with its `numbers.json`; and an assertive task's impl
+panel of stand-in judges (no model was called) wrote its records as `F<n>` lines in judge.md and passed.
 
 **Going back** to 1.6.9 (`402dda8`): in the release clone the marketplace reads, `git -C <clone> checkout 402dda8`, then
 `claude plugin marketplace update playbook-x-marketplace` and `claude plugin update playbook@playbook-x-marketplace`,
-then restart every Claude Code session and check that `claude plugin list` says 1.6.9. ⟦what 1.6.9 does with the
-records 1.7.0 wrote, measured⟧. Before the next `/playbook:upgrade`, `git -C <clone> checkout main`.
+then restart every Claude Code session and check that `claude plugin list` says 1.6.9. Nothing is lost: measured on that
+project after 1.7.0 had written its records, 1.6.9's `doctor`, `bootstrap`, `status`, `list`, `audit`, `compact` and
+`numbers` ran clean, and its refused close kept the task's `## Test contract`, `## Red receipt` and `## Work Plan` byte
+for byte, its `red-receipt.jsonl`, `base.json` and judge.md, and the project's `.agent/rulings.md`. But 1.6.9 cannot
+read 1.7.0's red records or its `base.json`: the close of a task 1.7.0's `tasks red` proved refuses (the receipt's lines
+"cannot be read"), and so does 1.6.9's `tasks red` without `--base`; with `--base <the commit before the fix>` the row
+is "proved on an unchecked base" and the close still refuses, so close such a task with `tasks work done --force
+--reason "…"` (measured: it keeps `## Test contract` and `## Work Plan`, `red-receipt.jsonl`'s 1.7.0 lines, `base.json`
+and judge.md; 1.6.9's own `tasks red` rewrites `## Red receipt` in its format, as every run does). 1.6.9's
+`/playbook:init` puts its six CLAUDE.md lines back, and on 1.7.0 again `tasks red --check` reads the same proof, the
+line 1.6.9 appended passed over. In a throwaway HOME the plugin manager went from 1.7.0 down to 1.6.9 with these two
+commands, and back up (measured). Under 1.6.9 what 1.7.0 fixed or removed is back — among them a record that is not
+UTF-8 rewritten with U+FFFD (B), a verify that writes into the real repository from a git hook (C), the chat log
+dropping a second session's identical prompt (E), `tasks prepare-merge` (A), a panel counting a judge's text that is no
+review as a review (audit 5's G6), the command guard's G4 forms, and the stop hook's block. Before the next
+`/playbook:upgrade`, `git -C <clone> checkout main`.
 
 ### Changed
 - **G4 part 2: the command guard stops the git and find forms that delete** (task 346, PLAN-PLAYBOOK-2.md 4.2; four
-  audits raised them). A whole-tree discard (`git checkout -- .`, a glob or computed pathspec, `checkout -f`,
-  `restore .`, `switch --discard-changes`), `git stash drop` / `clear`, `git branch -D`, a push that deletes the
-  remote's refs (`--mirror` in any spelling, `--delete`, `origin :main`, `--prune`, their `-c` overrides),
-  `git remote add --mirror`, `git reflog expire` / `delete` / `drop`, `git gc --prune=now`, `git prune`, and a `find`
-  that deletes under a dangerous root or under the working directory, however narrowed (`find . -name '*.pyc'
-  -delete` blocks: no name test keeps `.git` and `.agent` safe; `find src -name '*.pyc' -delete` passes). git's and
-  rm's long options are read shortened too (`reset --h`, `push --m`, `rm --rec --forc`). A find start at or under
-  `.git` / `.agent`, a brace alternative, and one the guard cannot read (an expansion, nested braces) count too.
-  Measured on 81,559 real commands: 105 verdicts changed, none from block to allow.
-- **G4: the command guard reads a glob outside quotes** (task 345, PLAN-PLAYBOOK-2.md 4.2; the owner's 10-27
-  decision). `rm -rf "$DEST"/*` — `rm -rf /*` with `DEST` empty — blocks, as do `"foo"/*` and `~"/build"`; an escaped
-  glob and `"${DEST:?}"/*` pass. The project's names (`$PWD`, `$OLDPWD`, `$CLAUDE_PROJECT_DIR`) and its `.git` / `.agent`
-  are dangerous targets, read normalised; a subpath passes. A download a shell reads by substitution is judged per
-  segment (`true; bash <(curl …)` blocks, `bash x.sh; diff <(curl …) b` passes), and an interpreter's only when it
-  becomes the program (`python3 <(curl …)` blocks, `python3 -m json.tool <(curl …)` passes), each interpreter's
-  options read by its own grammar. Any parameter's default, assign or alternate word is read as a target it may
-  expand to, wherever it stands (`"$D"/${f:-*}`, `"${PWD:+/}"`, `"${X:-${PWD}}"`, `"./${X:-.git}"` block). A plain variable stays allowed, and the docs now say so. Measured on 81,231
-  real commands: 7 verdicts changed — 3 intended blocks, 1 false alarm gone, 3 refusals of text that quotes a dangerous
-  form (stated limits).
-- **One review round cap: 2** (task 344, PLAN-PLAYBOOK-2.md 4.1 a; DESIGN-PLAYBOOK-2.md §3.3 point 12). Before the
-  close a task gets at most 2 impl panel rounds, whatever its `## Risk`; a third only with the owner's `tasks
-  panel-review <N> --mode impl --owner-ok --reason "…"`. Gone: the caps per risk (reversible 1, assertive and
-  irreversible 2), the round more after a Critical and the `review_rounds` key. The close's block and `panel-review`
-  read the same cap, so a `## Risk` lowered after a panel no longer makes them disagree.
+  audits raised them). A whole-tree discard (`git checkout -- .`, a glob or computed pathspec, `checkout -f`, `restore
+  .`, `switch --discard-changes`), `git stash drop` / `clear`, `git branch -D`, a push that deletes the remote's refs
+  (`--mirror` in any spelling, `--delete`, `origin :main`, `--prune`, their `-c` overrides), `git remote add --mirror`,
+  `git reflog expire` / `delete` / `drop`, `git gc --prune=now`, `git prune`, and a `find` that deletes under a
+  dangerous root or under the working directory, however narrowed (`find . -name '*.pyc' -delete` blocks: no name test
+  keeps `.git` and `.agent` safe; `find src -name '*.pyc' -delete` passes). git's and rm's long options are read
+  shortened too (`reset --h`, `push --m`, `rm --rec --forc`). A find start at or under `.git` / `.agent`, a brace
+  alternative, and one the guard cannot read (an expansion, nested braces) count too. Measured on 81,559 real commands:
+  105 verdicts changed, none from block to allow.
+- **G4: the command guard reads a glob outside quotes** (task 345, PLAN-PLAYBOOK-2.md 4.2; the owner's 10-27 decision).
+  `rm -rf "$DEST"/*` — `rm -rf /*` with `DEST` empty — blocks, as do `"foo"/*` and `~"/build"`; an escaped glob and
+  `"${DEST:?}"/*` pass. The project's names (`$PWD`, `$OLDPWD`, `$CLAUDE_PROJECT_DIR`) and its `.git` / `.agent` are
+  dangerous targets, read normalised; a subpath passes. A download a shell reads by substitution is judged per segment
+  (`true; bash <(curl …)` blocks, `bash x.sh; diff <(curl …) b` passes), and an interpreter's only when it becomes the
+  program (`python3 <(curl …)` blocks, `python3 -m json.tool <(curl …)` passes), each interpreter's options read by its
+  own grammar. Any parameter's default, assign or alternate word is read as a target it may expand to, wherever it
+  stands (`"$D"/${f:-*}`, `"${PWD:+/}"`, `"${X:-${PWD}}"`, `"./${X:-.git}"` block). A plain variable stays allowed, and
+  the docs now say so. Measured on 81,231 real commands: 7 verdicts changed — 3 intended blocks, 1 false alarm gone, 3
+  refusals of text that quotes a dangerous form (stated limits).
+- **One review round cap: 2** (task 344, PLAN-PLAYBOOK-2.md 4.1 a; DESIGN-PLAYBOOK-2.md §3.3 point 12). Before the close
+  a task gets at most 2 impl panel rounds, whatever its `## Risk`; a third only with the owner's `tasks panel-review <N>
+  --mode impl --owner-ok --reason "…"`. Gone: the caps per risk (reversible 1, assertive and irreversible 2), the round
+  more after a Critical and the `review_rounds` key. The close's block and `panel-review` read the same cap, so a `##
+  Risk` lowered after a panel no longer makes them disagree.
 - **The close's review evidence is FRESH or STALE** (task 343, PLAN-PLAYBOOK-2.md 4.1 a). judge.md's newest impl round
   still describes the code — its stamp is the tree now, or only workflow records (`.agent` tasks, sessions, journal,
-  chat log, rulings) were committed since, and its tamper guard was not degraded — or it is STALE, with its cause in words (the code, a doc or the mind map changed; no
-  tree stamp; git cannot fingerprint the tree; a degraded guard). Where the policy requires the panel, a stale
-  assertive, irreversible or unclassified close blocks and names its ways out: another impl round (past the round cap, one with the owner's word) or `--force
-  --reason`. A run ledger that cannot be read makes the gate's risk `unclassified`, and the block names it.
-  `tasks work done` refuses any other option, and a `--reason` with no value. `tasks impl-review` is a plain single
-  judge — the whole task, no run cap, every run reserved so it never runs beside a panel — and refuses an option it does
-  not read. The templates put `## Pre-review` (tests, debug artifacts, the mind map) before the implementation
-  review. The fingerprint leaves out `.agent` only: what tests or gates write belongs in `.gitignore`.
+  chat log, rulings) were committed since, and its tamper guard was not degraded — or it is STALE, with its cause in
+  words (the code, a doc or the mind map changed; no tree stamp; git cannot fingerprint the tree; a degraded guard).
+  Where the policy requires the panel, a stale assertive, irreversible or unclassified close blocks and names its ways
+  out: another impl round (past the round cap, one with the owner's word) or `--force --reason`. A run ledger that
+  cannot be read makes the gate's risk `unclassified`, and the block names it. `tasks work done` refuses any other
+  option, and a `--reason` with no value. `tasks impl-review` is a plain single judge — the whole task, no run cap,
+  every run reserved so it never runs beside a panel — and refuses an option it does not read. The templates put `##
+  Pre-review` (tests, debug artifacts, the mind map) before the implementation review. The fingerprint leaves out
+  `.agent` only: what tests or gates write belongs in `.gitignore`.
 - **The red receipt is simple** (task 342, PLAN-PLAYBOOK-2.md 4.1 d). `tasks red` runs each `## Test contract` row in
   the project as it is now and records it with the tree it ran on and the digest of the test files, both read for each
   row; the close passes a row whose newest red is followed by a green on another tree with the same tests (a red on code
-  broken on purpose: `tasks red --mutant "<why>"`); SIGTERM or SIGHUP stops the running row. `base.json` keeps each repository's start commit and the files dirty then, by content — nothing is written
-  into `.git/objects` any more (it was every untracked file); `No behavior changes:` counts code only, not Python's
-  caches, and counts a start-dirty file restored since, a commit undone in the work tree, a name that is not UTF-8.
-  Limits: the close does not compare the newest green's tree with the tree it closes (`verify` runs the suite), and a
-  test edited after its row was proved keeps the proof.
+  broken on purpose: `tasks red --mutant "<why>"`); SIGTERM or SIGHUP stops the running row. `base.json` keeps each
+  repository's start commit and the files dirty then, by content — nothing is written into `.git/objects` any more (it
+  was every untracked file); `No behavior changes:` counts code only, not Python's caches, and counts a start-dirty file
+  restored since, a commit undone in the work tree, a name that is not UTF-8. Limits: the close does not compare the
+  newest green's tree with the tree it closes (`verify` runs the suite), and a test edited after its row was proved
+  keeps the proof.
 
 ### Removed
 - **The post-panel judge as close evidence, tail certification and the stop rule's close side** (task 343,
@@ -87,10 +119,10 @@ records 1.7.0 wrote, measured⟧. Before the next `/playbook:upgrade`, `git -C <
   `[PRE-EXISTING]`, the two-run cap), the tail-certification judge and its delta, `--stale-panel-ok`, `work done
   --owner-ok`, `guard_paths`, `stale_panel_requires_post_d6`, `fingerprint_exclude`, and the verdicts NO-STAMP,
   UNREADABLE, TAMPER-GUARD-DEGRADED, EXCLUDE-COVERS-CODE and SINGLE-TAMPER-DEGRADED. Kept and moved: the SETTLED block
-  (`rulings.py`), the review reservation (`review_ledger.py`), the working-state tree (`review_view.py`), the data
-  fence (`review.fenced`), the fixed copy, the tamper guard, quorum and the failed-seat rerun.
-- **`tasks red --base` and `--drop`**, the run on a copy of the task's base, the late rows' own bases, the state
-  carried between runs, a row's containment, and the `red_tests` / `red_links` keys (task 342).
+  (`rulings.py`), the review reservation (`review_ledger.py`), the working-state tree (`review_view.py`), the data fence
+  (`review.fenced`), the fixed copy, the tamper guard, quorum and the failed-seat rerun.
+- **`tasks red --base` and `--drop`**, the run on a copy of the task's base, the late rows' own bases, the state carried
+  between runs, a row's containment, and the `red_tests` / `red_links` keys (task 342).
 - **`tasks prepare-merge`** (task 338; PLAN-PLAYBOOK-2.md 4.1 c). It renumbered colliding tasks with regexes over every
   task.md and chat_log.md, so ordinary text changed too ("2-hour" became "3-hour"), and chat_log.md is git-ignored. No
   skill or command called it; `tasks merge-doctor` stays. Merging lanes comes back with the lanes.
@@ -101,26 +133,26 @@ records 1.7.0 wrote, measured⟧. Before the next `/playbook:upgrade`, `git -C <
   folder was removed or adopted; the audits' journals show no real hold of it. `tasks work done` still refuses while a
   hand-made task folder stands (ledger PB-TASK-DIR-CLOSE), now the only check, and a session's start still writes a
   lane's missing task registry. Bound: with the registry deleted, a re-enrolment takes in a hand-made folder too.
-- **The stop hook's block** (task 340, PLAN-PLAYBOOK-2.md 4.1 b; 214 of its 223 blocks were false alarms). It
-  never exits 2 now: when a turn that wrote ends with the active task's gates open, it prints a `systemMessage`
-  memento — the task, the open-gate count and the first open gate — and the turn ends. A chat reply, a blocked task,
-  a task with every gate checked and the Freehand gate get none. With the block went its one-shot valve, its eval
-  switch, its enforcement-journal `block` line and the notification exception with its three marks (`turn_end`,
-  `notif_start`, `prompt_gen`). A notification still keeps the counts, a user's prompt still resets them. Codex's
-  Stop, which runs this hook for an active task, lets the turn end too.
+- **The stop hook's block** (task 340, PLAN-PLAYBOOK-2.md 4.1 b; 214 of its 223 blocks were false alarms). It never
+  exits 2 now: when a turn that wrote ends with the active task's gates open, it prints a `systemMessage` memento — the
+  task, the open-gate count and the first open gate — and the turn ends. A chat reply, a blocked task, a task with every
+  gate checked and the Freehand gate get none. With the block went its one-shot valve, its eval switch, its
+  enforcement-journal `block` line and the notification exception with its three marks (`turn_end`, `notif_start`,
+  `prompt_gen`). A notification still keeps the counts, a user's prompt still resets them. Codex's Stop, which runs this
+  hook for an active task, lets the turn end too.
 - **The state echo's line every 10 calls and its nudges** (task 341, PLAN-PLAYBOOK-2.md 4.1 b). On the same gate the
-  echo printed "# [N] still at gate …" at every 10th call, with a question such as "💭 Is this gate done?"; it now
-  prints in full when the gate, the task or a warning changes and nothing otherwise. The eval config's `nudges` flag
-  and the template's drift line that read the reminder went with them.
+  echo printed "# [N] still at gate …" at every 10th call, with a question such as "💭 Is this gate done?"; it now prints
+  in full when the gate, the task or a warning changes and nothing otherwise. The eval config's `nudges` flag and the
+  template's drift line that read the reminder went with them.
 
 ### Fixed
 - **A task record that is not valid UTF-8 is refused, never rewritten** (task 335). Read leniently, a byte that is not
-  UTF-8 became U+FFFD at the first CLI write. Now every command that writes a task's records checks them first and
-  says `Refused:` with the byte's place, and the write primitive refuses too. A panel round whose save fails late is
-  kept whole in `judge.unsaved-<round>-<random>.md` (or printed), never dropped.
-- **The verify command runs without git's repository variables** (task 336). Started from a git hook or
-  `git rebase -x`, a verify inherited `GIT_DIR` / `GIT_INDEX_FILE`, and a suite that makes temporary repositories
-  committed into the real one. The verify runners now drop the seven variables that name where a repository is.
+  UTF-8 became U+FFFD at the first CLI write. Now every command that writes a task's records checks them first and says
+  `Refused:` with the byte's place, and the write primitive refuses too. A panel round whose save fails late is kept
+  whole in `judge.unsaved-<round>-<random>.md` (or printed), never dropped.
+- **The verify command runs without git's repository variables** (task 336). Started from a git hook or `git rebase -x`,
+  a verify inherited `GIT_DIR` / `GIT_INDEX_FILE`, and a suite that makes temporary repositories committed into the real
+  one. The verify runners now drop the seven variables that name where a repository is.
 - **The chat log keeps a second session's identical prompt** (task 337). Two sessions that sent the same text in the
   same second logged one entry. The duplicate check now reads the newest prompt entry whole, under the log's lock, and
   needs the same session too; with the session unresolved nothing is skipped.
@@ -129,31 +161,30 @@ records 1.7.0 wrote, measured⟧. Before the next `/playbook:upgrade`, `git -C <
   review run has a code the prompt names, and the answer is one block: `REVIEW <code>`, FINDING records (`severity`,
   `settled`, `where`, `scenario`, `drum`, `fix`, one field a line) or a NONE record (`read`, `checked`), `END <code>`,
   then the CAP line. Every place a record names must exist in the reviewed tree or (`base:`) the task's start commit,
-  and an impl review's NONE must read a file the task changed. A record that fails is kept as broken, for the triage;
-  an answer with no good record is no review. A panel seat that fails the form runs once more with its first answer
-  quoted, then is `SEAT FAILED`, out of the quorum; a single judge exits 1. The panel writes each seat's records into
-  judge.md as its own numbered lines (`F1 | Critical | settled: no | <seat>`), and the run ledger counts only those. A
-  `--prompt` consultation is unchanged. Real judges had returned refusals, a filter block, plan-only stops and waits;
-  none of them carries the run's code.
-- **The README, the CLI help and init's `_doc` say only what the code does** (task 348, DESIGN-PLAYBOOK-2.md §7 D;
-  five audits each found one of these sentences, left "for the release text"). A reversible close needs no review:
-  its verify and, where the task has a test contract, its `tasks red` rows decide — the help, the `_doc`,
-  `/playbook:init` and the CLI page said "verify+single-judge". The task
-  gate stops a code edit made through the edit tools, and a write through the shell passes it — the README, the
-  seeded CLAUDE.md and the architecture page said the agent "can't edit code without an active task" or that the
-  hook blocks it, and that the hooks block where the stop hook now leaves a memento. A judge's prompt carries the task
-  and the repo, not the session: the task quotes the messages it captured, a task-less `panel-review --prompt`
-  question carries the recent chat on purpose, and the judge's sandbox hides only the project's records, so the
-  transcripts under `~/.claude/projects/` stay readable — the README, the architecture and CLI pages, the judge skill
-  and the plan-panel gate's note said it had "no conversation access". A sandboxed agent writes the project, its own
-  measured state, playbook's write log and a private `/tmp` (git's metadata, hooks and settings stay read-only only
-  with a non-setuid bubblewrap 0.8.0 or newer, which the README's summary now says too); the project's `.claude/settings.json`,
-  `.claude/settings.local.json`, `.claude/hooks/`, `.claude/bin/` and `.mcp.json` are among what it writes, and your
-  own session outside the sandbox runs them — the README said it "can't escape the write containment even if it
-  tries". Also: one judge's impl review counts as a close's review only where the policy requires no panel for that
-  close (the seeded CLAUDE.md, the playbook skill and the CLI page said "never"), and the README's `tasks red`
-  sentence describes the run in the project as it is (task 342). `tests/test_docs_truth.py` fails on each sentence if
-  it comes back, and pins the behavior each one now states, the prompt a judge receives among them.
+  and an impl review's NONE must read a file the task changed. A record that fails is kept as broken, for the triage; an
+  answer with no good record is no review. A panel seat that fails the form runs once more with its first answer quoted,
+  then is `SEAT FAILED`, out of the quorum; a single judge exits 1. The panel writes each seat's records into judge.md
+  as its own numbered lines (`F1 | Critical | settled: no | <seat>`), and the run ledger counts only those. A `--prompt`
+  consultation is unchanged. Real judges had returned refusals, a filter block, plan-only stops and waits; none of them
+  carries the run's code.
+- **The README, the CLI help and init's `_doc` say only what the code does** (task 348, DESIGN-PLAYBOOK-2.md §7 D; five
+  audits each found one of these sentences, left "for the release text"). A reversible close needs no review: its verify
+  and, where the task has a test contract, its `tasks red` rows decide — the help, the `_doc`, `/playbook:init` and the
+  CLI page said "verify+single-judge". The task gate stops a code edit made through the edit tools, and a write through
+  the shell passes it — the README, the seeded CLAUDE.md and the architecture page said the agent "can't edit code
+  without an active task" or that the hook blocks it, and that the hooks block where the stop hook now leaves a memento.
+  A judge's prompt carries the task and the repo, not the session: the task quotes the messages it captured, a task-less
+  `panel-review --prompt` question carries the recent chat on purpose, and the judge's sandbox hides only the project's
+  records, so the transcripts under `~/.claude/projects/` stay readable — the README, the architecture and CLI pages,
+  the judge skill and the plan-panel gate's note said it had "no conversation access". A sandboxed agent writes the
+  project, its own measured state, playbook's write log and a private `/tmp` (git's metadata, hooks and settings stay
+  read-only only with a non-setuid bubblewrap 0.8.0 or newer, which the README's summary now says too); the project's
+  `.claude/settings.json`, `.claude/settings.local.json`, `.claude/hooks/`, `.claude/bin/` and `.mcp.json` are among
+  what it writes, and your own session outside the sandbox runs them — the README said it "can't escape the write
+  containment even if it tries". Also: one judge's impl review counts as a close's review only where the policy requires
+  no panel for that close (the seeded CLAUDE.md, the playbook skill and the CLI page said "never"), and the README's
+  `tasks red` sentence describes the run in the project as it is (task 342). `tests/test_docs_truth.py` fails on each
+  sentence if it comes back, and pins the behavior each one now states, the prompt a judge receives among them.
 
 ## [1.6.9] — 2026-10-26
 
