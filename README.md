@@ -161,4 +161,4 @@ Then restart Claude Code and continue with `/playbook:init` as described under [
 
 A later version started on macOS or Windows prints a warning at session start and carries on, unsupported.
 
-<!-- readme-audit: v1.6.9 @ 2026-10-26 -->
+<!-- readme-audit: v1.7.0 @ 2026-11-02 -->

@@ -4,6 +4,38 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 
 ## [Unreleased]
 
+## [1.7.0] — 2026-11-02
+
+**Phase 4 of PLAN-PLAYBOOK-2.md: a smaller playbook, and the design's five graves fixed** — tasks 335-348 (the owner's
+approval of the plan, R14, and of its design, R17). The five graves come first, each its own task with its red test
+first: a task record that is not UTF-8 is refused, never rewritten (B, 335); the verify runs without git's repository
+variables (C, 336); the chat log keeps a second session's identical prompt (E, 337); `tasks prepare-merge`, which
+changed ordinary text in every task.md and chat log, is gone (A, 338); the docs say only what the code does (D, 348).
+Then the deletion (plan 4.1): the post-panel judge as close evidence, tail certification and the stop rule's close side
+(343), one review round cap of 2 (344), the stop hook's block (340), the task-folder watch (339), the state echo's line
+every 10 calls (341), the red receipt made simple (342), and the worktree check that was never released (321, 338).
+Then plan 4.2: the command guard's G4 forms (345, 346), and a judge's answer read by its form, never its words (347;
+it replaces task 320's word check, never released). The suite has ⟦N⟧ tests (6,613 at 1.6.9); CI is the same two Linux
+lanes. The guarantee ledger has 133 rows (136 at 1.6.9: three new — the review form, the SETTLED block, the hand-made task
+folder's refusal at the close — and six gone with what they described), 120 verified, and no known violation. The live gauntlet on this
+release: ⟦the rows⟧.
+
+**Upgrading:** `/playbook:upgrade`, then restart every Claude Code session: `hooks.json` changed (the task-folder
+watch's three entries are gone, task 339). Then run `/playbook:init` in each project: ⟦what 1.7.0's init changes in a
+project 1.6.9 set up, measured⟧. Options that are gone are refused as unknown: `tasks work done --stale-panel-ok` and
+`--owner-ok`, `tasks red --base` and `--drop`, `tasks prepare-merge`. Configuration keys that are no longer read:
+`review_rounds` (344), `guard_paths`, `stale_panel_requires_post_d6` and `fingerprint_exclude` (343), `red_tests` and
+`red_links` (342) — a config that still holds them works, the keys ignored and named by no warning (measured:
+`tasks doctor` on such a config says nothing of them); delete them when you next edit the file.
+
+**Measured before the release**, in temporary folders: ⟦the window from 1.6.9: 1.7.0's hooks before init, then its
+CLI and init, on a project 1.6.9 set up and used⟧.
+
+**Going back** to 1.6.9 (`402dda8`): in the release clone the marketplace reads, `git -C <clone> checkout 402dda8`, then
+`claude plugin marketplace update playbook-x-marketplace` and `claude plugin update playbook@playbook-x-marketplace`,
+then restart every Claude Code session and check that `claude plugin list` says 1.6.9. ⟦what 1.6.9 does with the
+records 1.7.0 wrote, measured⟧. Before the next `/playbook:upgrade`, `git -C <clone> checkout main`.
+
 ### Changed
 - **G4 part 2: the command guard stops the git and find forms that delete** (task 346, PLAN-PLAYBOOK-2.md 4.2; four
   audits raised them). A whole-tree discard (`git checkout -- .`, a glob or computed pathspec, `checkout -f`,
@@ -33,8 +65,8 @@ Notable changes to the playbook plugin. Follows [Keep a Changelog](https://keepa
 - **The close's review evidence is FRESH or STALE** (task 343, PLAN-PLAYBOOK-2.md 4.1 a). judge.md's newest impl round
   still describes the code — its stamp is the tree now, or only workflow records (`.agent` tasks, sessions, journal,
   chat log, rulings) were committed since, and its tamper guard was not degraded — or it is STALE, with its cause in words (the code, a doc or the mind map changed; no
-  tree stamp; git cannot fingerprint the tree; a degraded guard). A stale assertive, irreversible or unclassified close
-  blocks and names its ways out: another impl round (past the round cap, one with the owner's word) or `--force
+  tree stamp; git cannot fingerprint the tree; a degraded guard). Where the policy requires the panel, a stale
+  assertive, irreversible or unclassified close blocks and names its ways out: another impl round (past the round cap, one with the owner's word) or `--force
   --reason`. A run ledger that cannot be read makes the gate's risk `unclassified`, and the block names it.
   `tasks work done` refuses any other option, and a `--reason` with no value. `tasks impl-review` is a plain single
   judge — the whole task, no run cap, every run reserved so it never runs beside a panel — and refuses an option it does
