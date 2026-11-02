@@ -688,7 +688,10 @@ class AStrayRepositoryPointerAboveTheTempDirs(unittest.TestCase):
         env = {k: v for k, v in os.environ.items() if k != "GIT_CEILING_DIRECTORIES"}
         r = subprocess.run(["git", "rev-parse", "--git-dir"], cwd=d, env=env, capture_output=True, text=True)
         self.assertNotEqual(r.returncode, 0)
-        self.assertIn("not a git repository: ", r.stderr)
+        # git up to 2.55 says "not a git repository: <gitdir>", 2.56 "gitfile does not point to a valid repository:
+        # <file>" (task 349: CI's runner moved from 2.55.0 to 2.56.0; 2.54 prints "(null)" for the path) — either way
+        # the stray file is what git found, not the plain "(or any of the parent directories)"
+        self.assertRegex(r.stderr, r"not a git repository: |gitfile does not point to a valid repository: ")
         self.assertNotIn("(or any", r.stderr)
 
     def test_a_module_run_by_the_contract_does_not_see_it(self):
