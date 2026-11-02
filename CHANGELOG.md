@@ -18,12 +18,12 @@ plan 4.2: the command guard's G4 forms (345, 346), and a judge's answer read by 
 replaces task 320's word check, never released). The suite has 6,032 tests (6,613 at 1.6.9: the removed mechanisms took
 theirs with them); CI is the same two Linux lanes. The guarantee ledger has 133 rows (136 at 1.6.9: three new — the
 review form, the SETTLED block, the hand-made task folder's refusal at the close — and six gone with what they
-described), 120 verified, and no known violation. The live gauntlet on this release: 18 PASS, 5 WAITING (the grok rows:
-its account is out of credit), 0 FAIL, on 23 rows (the task-folder watch's row went with it). Two rows failed in the
-first run and passed when run again: the slash commands', whose `claude` binary its updater replaced in the middle of
-the row, and the sandbox fallback's, whose judge-path clause still read exit 0 as "the judge ran" — since task 347 an
-answer outside the review form exits 1 (that run's judge wrote two-part scenarios); the clause now counts a judge that
-answered.
+described), 120 verified, and no known violation. The live gauntlet on this release: 18 PASS, 5 WAITING (four grok rows
+whose seat answered out of credit, HTTP 402, and the model-availability row, which waits for a seat the account is not
+entitled to), 0 FAIL, on 23 rows (the task-folder watch's row went with it). Two rows failed in the first run and passed
+when run again: the slash commands', whose `claude` binary its updater replaced in the middle of the row, and the
+sandbox fallback's, whose judge-path clause still read exit 0 as "the judge ran" — since task 347 an answer outside the
+review form exits 1 (that run's judge wrote two-part scenarios); the clause now counts a judge that answered.
 
 **Upgrading:** `/playbook:upgrade`, then restart every Claude Code session: `hooks.json` changed (the task-folder
 watch's three entries are gone, task 339). Then run `/playbook:init` in each project: on a project 1.6.9 set up, 1.7.0's
@@ -43,7 +43,7 @@ config says nothing of them); delete them when you next edit the file.
 1.6.9 had activated (a v1 `base.json`) and proved with its `tasks red`, 1.7.0's hooks, before any 1.7.0 init, let a code
 edit of that task through, refused `git push --force` from a Bash and from a Monitor call and `rm -rf "$DEST"/*`, let
 `ls` through, and at the stop printed their memento and let the turn end; 1.7.0's `doctor`, `bootstrap`, `status` and
-`audit` ran clean; that task closed after the way through above; a project ruling was recorded; a bugfix proved by
+`audit` exited 0; that task closed after the way through above; a project ruling was recorded; a bugfix proved by
 1.7.0's `tasks red` — red before the fix, green after — closed with its `numbers.json`; and an assertive task's impl
 panel of stand-in judges (no model was called) wrote its records as `F<n>` lines in judge.md and passed.
 
@@ -51,20 +51,23 @@ panel of stand-in judges (no model was called) wrote its records as `F<n>` lines
 `claude plugin marketplace update playbook-x-marketplace` and `claude plugin update playbook@playbook-x-marketplace`,
 then restart every Claude Code session and check that `claude plugin list` says 1.6.9. Nothing is lost: measured on that
 project after 1.7.0 had written its records, 1.6.9's `doctor`, `bootstrap`, `status`, `list`, `audit`, `compact` and
-`numbers` ran clean, and its refused close kept the task's `## Test contract`, `## Red receipt` and `## Work Plan` byte
+`numbers` exited 0, and its refused close kept the task's `## Test contract`, `## Red receipt` and `## Work Plan` byte
 for byte, its `red-receipt.jsonl`, `base.json` and judge.md, and the project's `.agent/rulings.md`. But 1.6.9 cannot
 read 1.7.0's red records or its `base.json`: the close of a task 1.7.0's `tasks red` proved refuses (the receipt's lines
 "cannot be read"), and so does 1.6.9's `tasks red` without `--base`; with `--base <the commit before the fix>` the row
-is "proved on an unchecked base" and the close still refuses, so close such a task with `tasks work done --force
---reason "…"` (measured: it keeps `## Test contract` and `## Work Plan`, `red-receipt.jsonl`'s 1.7.0 lines, `base.json`
-and judge.md; 1.6.9's own `tasks red` rewrites `## Red receipt` in its format, as every run does). 1.6.9's
-`/playbook:init` puts its six CLAUDE.md lines back, and on 1.7.0 again `tasks red --check` reads the same proof, the
-line 1.6.9 appended passed over. In a throwaway HOME the plugin manager went from 1.7.0 down to 1.6.9 with these two
-commands, and back up (measured). Under 1.6.9 what 1.7.0 fixed or removed is back — among them a record that is not
-UTF-8 rewritten with U+FFFD (B), a verify that writes into the real repository from a git hook (C), the chat log
-dropping a second session's identical prompt (E), `tasks prepare-merge` (A), a panel counting a judge's text that is no
-review as a review (audit 5's G6), the command guard's G4 forms, and the stop hook's block. Before the next
-`/playbook:upgrade`, `git -C <clone> checkout main`.
+is "proved on an unchecked base" and the close still refuses (that run keeps `base.json` and 1.7.0's lines of
+`red-receipt.jsonl` byte for byte, appends its own, and rewrites `## Red receipt` in its format, as every run of it
+does). So close such a task with `tasks work done --force --reason "…"`; for an irreversible or unclassified task whose
+code changed after its impl round, 1.6.9's stop rule refuses that and wants the owner's word too: `tasks work done
+--force --owner-ok --reason "…"` (both measured: the assertive task's forced close kept `## Test contract`, `## Red
+receipt` and `## Work Plan`, `red-receipt.jsonl`, `base.json` and judge.md byte for byte, and the irreversible one's
+judge.md stayed as it was). 1.6.9's `/playbook:init` puts its six CLAUDE.md lines back, and on 1.7.0 again `tasks red
+--check` reads the same proof, the line 1.6.9 appended passed over (measured). In a throwaway HOME the plugin manager
+went from 1.7.0 down to 1.6.9 with these two commands, and back up (measured). Under 1.6.9 what 1.7.0 fixed or removed
+is back — among them a record that is not UTF-8 rewritten with U+FFFD (B), a verify that writes into the real repository
+from a git hook (C), the chat log dropping a second session's identical prompt (E), `tasks prepare-merge` (A), a panel
+counting a judge's text that is no review as a review (audit 5's G6), the command guard's G4 forms, and the stop hook's
+block. Before the next `/playbook:upgrade`, `git -C <clone> checkout main`.
 
 ### Changed
 - **G4 part 2: the command guard stops the git and find forms that delete** (task 346, PLAN-PLAYBOOK-2.md 4.2; four
