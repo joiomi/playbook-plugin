@@ -107,7 +107,7 @@ for id in "${ROWS[@]}"; do
             echo "=== PB-HOOK-STATE-ECHO: a real session: the echo after each tool event, two parallel calls, a ticked gate"
             row "$id" ;;
         PB-HOOK-STOP-CLOSE)
-            echo "=== PB-HOOK-STOP-CLOSE: real sessions: the first stop blocked with gates open, the valve, a complete task let through"
+            echo "=== PB-HOOK-STOP-CLOSE: real sessions: the first stop leaves a memento with gates open, no stop held, a complete task says nothing"
             row "$id" ;;
         PB-TASK-FREEHAND)
             echo "=== PB-TASK-FREEHAND: real sessions: freehand released, its log captured, a tracked task re-arms the gates"

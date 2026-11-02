@@ -374,8 +374,12 @@ def sandbox_detection_fallback(out: Path) -> int:
                          cwd=proj, env=env, env_shown={"PATH": path_env}, timeout=600)
             said = "UNCONTAINED" in r.stderr
             if contained is False:
+                # the judge ran when it answered: since task 347 an answer outside the review form is refused with exit 1
+                # ("(FAILED — not a review: …)", the answer printed) — the judge still ran; a launch that failed prints
+                # "(FAILED — exit N)" and no answer (task 349's W3: haiku wrote two-part scenarios, every record broken)
+                answered = r.returncode == 0 or "(FAILED — not a review" in r.stdout
                 run.clause("with no bubblewrap the judge path runs the judge uncontained AND says so before it starts",
-                           r.returncode == 0 and said, f"rc={r.returncode}; warning printed: {said}; "
+                           answered and said, f"rc={r.returncode}; answered: {answered}; warning printed: {said}; "
                            f"{[x for x in r.stderr.splitlines() if 'UNCONTAINED' in x][:1]}")
             else:
                 run.clause("with a bubblewrap that cannot start, the judge's launch fails and nothing falls back "
